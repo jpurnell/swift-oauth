@@ -135,6 +135,58 @@ public actor OAuthConnection {
         return components?.url ?? configuration.authorizationEndpoint
     }
 
+    /// Starts an authorization: generates the state and PKCE pair, and builds the URL.
+    ///
+    /// Preferred over calling ``authorizationURL(state:challenge:redirectURI:)`` directly,
+    /// because it makes the two things a caller must not get wrong impossible to get wrong:
+    /// the state is generated rather than chosen, and the verifier is kept rather than sent.
+    /// A caller who assembles the URL by hand can pick a predictable state, and a predictable
+    /// state is no protection.
+    ///
+    /// - Parameter redirectURI: Where the provider sends the user back. Must match one
+    ///   registered with the provider exactly.
+    /// - Returns: The URL to open, and what to hold until the callback arrives.
+    public func beginAuthorization(redirectURI: String) -> BegunAuthorization {
+        let state = TokenGenerator.generateToken()
+        let verifier = PKCE.generateCodeVerifier()
+
+        // A verifier this function just generated is valid by construction; the throwing path
+        // exists for verifiers from elsewhere. Falling back to the verifier itself would be
+        // `plain` by accident, so an empty challenge is used instead — the provider rejects
+        // it, which is the correct outcome for a state that should be unreachable.
+        // silent: unreachable for a generated verifier, and the fallback fails closed
+        let challenge = (try? PKCE.generateCodeChallenge(verifier: verifier, method: .s256)) ?? ""
+
+        return BegunAuthorization(
+            url: authorizationURL(state: state, challenge: challenge, redirectURI: redirectURI),
+            pending: PendingAuthorization(
+                state: state, verifier: verifier, redirectURI: redirectURI))
+    }
+
+    /// Completes an authorization from the provider's callback.
+    ///
+    /// The callback is validated **before** anything is sent to the token endpoint. Exchanging
+    /// first and checking afterwards would burn the code and, worse, tell an attacker whose
+    /// forged callback it was that their code was accepted.
+    ///
+    /// - Parameters:
+    ///   - callback: The redirect URI as received, query intact.
+    ///   - pending: What ``beginAuthorization(redirectURI:)`` returned.
+    /// - Returns: The stored credential.
+    /// - Throws: ``CallbackError`` if the callback is not this flow's, otherwise
+    ///   ``ConnectionError`` or ``OAuthError``.
+    @discardableResult
+    public func completeAuthorization(
+        callback: URL,
+        pending: PendingAuthorization
+    ) async throws -> StoredCredential {
+        let code = try AuthorizationCallback.code(from: callback, matching: pending)
+        return try await exchange(
+            authorizationCode: code,
+            verifier: pending.verifier,
+            redirectURI: pending.redirectURI)
+    }
+
     /// Exchanges an authorization code for tokens, and stores them.
     ///
     /// - Parameters:
