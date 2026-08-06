@@ -1,0 +1,5 @@
+
+# v2 layout: the master plan is project-owned, not framework content.
+status:
+  guidelinesPath: "."
+  masterPlanPath: project/master_plan.md
