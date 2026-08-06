@@ -69,13 +69,49 @@ public struct ClientCredentials: Sendable, Equatable {
     }
 
     /// The environment variable holding a client identifier.
-    public static func clientIDVariable(provider: String, environment: String) -> String {
-        "\(provider.uppercased())_\(environment.uppercased())_CLIENT_ID"
+    ///
+    /// - Parameters:
+    ///   - provider: The provider identifier.
+    ///   - environment: The environment name.
+    ///   - prefix: An application name, where the unprefixed variable would be ambiguous.
+    /// - Returns: The variable name.
+    public static func clientIDVariable(
+        provider: String,
+        environment: String,
+        prefix: String = ""
+    ) -> String {
+        variableName(provider: provider, environment: environment, prefix: prefix, suffix: "CLIENT_ID")
     }
 
     /// The environment variable holding a client secret.
-    public static func clientSecretVariable(provider: String, environment: String) -> String {
-        "\(provider.uppercased())_\(environment.uppercased())_CLIENT_SECRET"
+    ///
+    /// - Parameters:
+    ///   - provider: The provider identifier.
+    ///   - environment: The environment name.
+    ///   - prefix: An application name, where the unprefixed variable would be ambiguous.
+    /// - Returns: The variable name.
+    public static func clientSecretVariable(
+        provider: String,
+        environment: String,
+        prefix: String = ""
+    ) -> String {
+        variableName(provider: provider, environment: environment, prefix: prefix, suffix: "CLIENT_SECRET")
+    }
+
+    /// Composes a variable name from its parts, omitting an absent prefix entirely.
+    ///
+    /// A blank prefix must not leave a leading underscore: `_INTUIT_SANDBOX_CLIENT_ID` is a
+    /// different variable from `INTUIT_SANDBOX_CLIENT_ID`, and nothing would ever set it.
+    private static func variableName(
+        provider: String,
+        environment: String,
+        prefix: String,
+        suffix: String
+    ) -> String {
+        let parts = [prefix, provider, environment]
+            .map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
+            .filter { !$0.isEmpty }
+        return (parts + [suffix]).joined(separator: "_")
     }
 
     /// Loads credentials from the process environment.
@@ -86,16 +122,20 @@ public struct ClientCredentials: Sendable, Equatable {
     /// - Parameters:
     ///   - provider: The provider identifier.
     ///   - environment: The environment name.
+    ///   - prefix: An application name. Supply one where several applications on a machine
+    ///     register as separate apps at the same provider — without it they share a variable
+    ///     and read each other's credentials.
     ///   - variables: Where to read from. Defaults to the process environment.
     /// - Returns: The credentials.
     /// - Throws: ``ClientCredentialError/missing(variable:)``.
     public static func fromEnvironment(
         provider: String,
         environment: String,
+        prefix: String = "",
         reading variables: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> ClientCredentials {
-        let idKey = clientIDVariable(provider: provider, environment: environment)
-        let secretKey = clientSecretVariable(provider: provider, environment: environment)
+        let idKey = clientIDVariable(provider: provider, environment: environment, prefix: prefix)
+        let secretKey = clientSecretVariable(provider: provider, environment: environment, prefix: prefix)
 
         guard let id = variables[idKey], !id.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw ClientCredentialError.missing(variable: idKey)
