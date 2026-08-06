@@ -5,17 +5,36 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — 2026-08-06
-
-First tagged release: `SwiftOAuthCore` and the client half.
+## [Unreleased]
 
 ### Added
-- **`SwiftOAuthClient`** — `OAuthConnection`, a rotation-safe token lifecycle behind one
-  method, `validAccessToken()`. Concurrent refreshes join one exchange rather than racing;
-  credentials persist before the new access token is returned; a failed write hands the
-  credential back inside the error rather than losing it
-- `OAuthClientStorage` as a protocol, with in-memory and deliberately-failing implementations
-- Credential variables namespaced by application as well as provider and environment
+- **`EncryptedFileClientStorage`** — the persistent counterpart to the in-memory store, so an
+  application need not make its user authorise again after a restart. AES-GCM over the whole
+  file, so which providers a user has connected is not readable either
+- A wrong key or a tampered file **throws** rather than reading as empty: an empty read looks
+  like a first run, and a first run invites a caller to overwrite a file it could not read
+
+## [0.3.0] — 2026-08-06
+
+### Added
+- **The authorization half of the client.** `beginAuthorization(redirectURI:)` generates the
+  state and PKCE pair; `completeAuthorization(callback:pending:)` validates the callback and
+  exchanges the code. The `state` is compared first, in constant time, and a duplicated one
+  resolves first-occurrence-wins so an appended value cannot override the real one
+- **Discovery (RFC 8414) and dynamic client registration (RFC 7591).** A client pointed at an
+  arbitrary server has no pre-registered credentials, so both are unavoidable rather than
+  conveniences
+- Discovered endpoints are **bound to the issuer's origin**, host and port. Without it a
+  fetched metadata document is an instruction to post an authorization code, a client secret
+  and a refresh token to whatever host it names
+- **A conformance test target.** The two halves do not depend on each other, so nothing
+  checked they agreed on the wire; each had passed its own suite against its own idea of the
+  format
+
+### Fixed
+- `OAuthError` declared `Codable` but used the synthesized conformance, which for an enum with
+  associated values emits `{"invalidRequest":{"_0":…}}` — valid JSON that no OAuth peer can
+  read
 
 ## [0.2.0] — 2026-08-06
 
@@ -64,6 +83,18 @@ First tagged release: `SwiftOAuthCore` and the client half.
   both wrong. Two external anchors already exist — the client half faces Intuit through
   LedgeOS, the provider half faces Claude connecting to the user's MCP servers
 
+## [0.1.0] — 2026-08-06
+
+First tagged release: `SwiftOAuthCore` and the client half.
+
+### Added
+- **`SwiftOAuthClient`** — `OAuthConnection`, a rotation-safe token lifecycle behind one
+  method, `validAccessToken()`. Concurrent refreshes join one exchange rather than racing;
+  credentials persist before the new access token is returned; a failed write hands the
+  credential back inside the error rather than losing it
+- `OAuthClientStorage` as a protocol, with in-memory and deliberately-failing implementations
+- Credential variables namespaced by application as well as provider and environment
+
 ## [0.0.1] — 2026-08-06
 
 Scaffold and design. Nothing is implemented.
@@ -98,3 +129,4 @@ extracted package, the extraction was wrong and is reverted rather than patched.
 
 [Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/jpurnell/SwiftOAuth/releases/tag/v0.0.1
+
