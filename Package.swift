@@ -34,10 +34,19 @@ let package = Package(
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .systemLibrary(
+            name: "CSQLite",
+            pkgConfig: "sqlite3",
+            providers: [
+                .brew(["sqlite3"]),
+                .apt(["libsqlite3-dev"])
+            ]
+        ),
         .target(
             name: "SwiftOAuthProvider",
             dependencies: [
                 "SwiftOAuthCore",
+                "CSQLite",
                 .product(name: "Crypto", package: "swift-crypto")
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]

@@ -5,7 +5,37 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] — 2026-08-06
+
+First tagged release: `SwiftOAuthCore` and the client half.
+
+### Added
+- **`SwiftOAuthClient`** — `OAuthConnection`, a rotation-safe token lifecycle behind one
+  method, `validAccessToken()`. Concurrent refreshes join one exchange rather than racing;
+  credentials persist before the new access token is returned; a failed write hands the
+  credential back inside the error rather than losing it
+- `OAuthClientStorage` as a protocol, with in-memory and deliberately-failing implementations
+- Credential variables namespaced by application as well as provider and environment
+
 ## [Unreleased]
+
+### Added
+- **`SwiftOAuthProvider`** — extracted from SwiftMCPServer: authorization server, HTTP
+  handler, consent page, SQLite storage. 114 tests moved with it
+- `OAuthError.standardDescription` — the RFC 6749 §5.2 meaning of a code, emitted when no
+  specific detail was supplied
+
+### Fixed
+- `OAuthError` declared `Codable` but used the *synthesized* conformance, which for an enum
+  with associated values emits `{"invalidRequest":{"_0":…}}` — valid JSON that no OAuth peer
+  can read. Now encodes `{"error":…,"error_description":…}` as RFC 6749 §5.2 requires
+
+### Changed
+- The authorization endpoint **refuses `code_challenge_method=plain`**, and metadata no
+  longer advertises it. Anything unrecognised is refused too, rather than falling through
+  to S256
+- The provider's duplicate `OAuthError` and `TokenResponse` are gone; both halves now share
+  Core's. They were ambiguous for any consumer linking both
 
 ### Added
 - **`SwiftOAuthCore`** — PKCE, token generation, `TokenResponse`, `OAuthError`, grant types.

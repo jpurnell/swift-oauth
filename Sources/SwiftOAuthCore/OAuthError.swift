@@ -71,6 +71,35 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         }
     }
 
+    /// What RFC 6749 §5.2 says this code means.
+    ///
+    /// Used when no specific detail was supplied. A bare `{"error":"invalid_grant"}` is
+    /// legal and tells the reader nothing; a server that knows the standard meaning of the
+    /// code it is emitting may as well say it. Where a caller supplies its own ``detail``
+    /// that is more specific, and wins.
+    public var standardDescription: String {
+        switch self {
+        case .invalidRequest:
+            return "The request is missing a required parameter or is otherwise malformed."
+        case .invalidClient:
+            return "Client authentication failed."
+        case .invalidGrant:
+            return "The provided authorization grant or refresh token is invalid, expired, or revoked."
+        case .unauthorizedClient:
+            return "The client is not authorized to use this grant type."
+        case .unsupportedGrantType:
+            return "The authorization server does not support the requested grant type."
+        case .invalidScope:
+            return "The requested scope is invalid, unknown, or malformed."
+        case .serverError:
+            return "The authorization server encountered an unexpected condition."
+        case .temporarilyUnavailable:
+            return "The authorization server is temporarily unable to handle the request."
+        case .accessDenied:
+            return "The resource owner or authorization server denied the request."
+        }
+    }
+
     /// Builds an error from a wire code.
     ///
     /// An unrecognised code becomes ``serverError(_:)`` carrying the original,
@@ -93,6 +122,36 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case "access_denied": self = .accessDenied(description)
         default: self = .serverError(description.map { "\(code): \($0)" } ?? code)
         }
+    }
+
+    // MARK: - Wire format
+
+    /// The keys RFC 6749 §5.2 defines for an error response.
+    private enum CodingKeys: String, CodingKey {
+        case error
+        case errorDescription = "error_description"
+    }
+
+    /// Decodes an error response.
+    ///
+    /// - Parameter decoder: The decoder.
+    /// - Throws: If the `error` field is absent.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            code: try container.decode(String.self, forKey: .error),
+            description: try container.decodeIfPresent(String.self, forKey: .errorDescription))
+    }
+
+    /// Encodes as `{"error": …, "error_description": …}`.
+    ///
+    /// Written out rather than synthesized. The compiler's conformance for an enum with
+    /// associated values emits `{"invalidRequest":{"_0":…}}` — valid JSON that no OAuth peer
+    /// can read, and which looks close enough to correct in a debugger to survive review.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(code, forKey: .error)
+        try container.encode(detail ?? standardDescription, forKey: .errorDescription)
     }
 
     /// Whether retrying the same request might succeed.
