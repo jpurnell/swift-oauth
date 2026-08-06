@@ -69,6 +69,13 @@ let package = Package(
             dependencies: ["SwiftOAuthProvider"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The two halves against each other. Neither depends on the other in production —
+        // that is the architecture — so nothing else checks they agree on the wire.
+        .testTarget(
+            name: "SwiftOAuthConformanceTests",
+            dependencies: ["SwiftOAuthCore", "SwiftOAuthClient", "SwiftOAuthProvider"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "SwiftOAuthClientTests",
             dependencies: ["SwiftOAuthClient"],
