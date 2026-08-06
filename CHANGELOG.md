@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`SwiftOAuthCore`** — PKCE, token generation, `TokenResponse`, `OAuthError`, grant types.
+  28 tests
+- PKCE verified against **RFC 7636 Appendix B's published vectors** rather than against
+  itself: a wrong derivation still round-trips internally while failing every real server
+- `plain` removed as a challenge method. Under it the challenge *is* the verifier, so an
+  attacker who intercepts the authorization request holds everything needed to redeem the
+  code — the attack PKCE exists to prevent
+- Implicit and password grants are **absent** rather than rejected, so a provider built on
+  this cannot accidentally support them and a client cannot request them
+- `TokenResponse` carries `x_refresh_token_expires_in`, which RFC 6749 does not define but
+  Intuit and others send; a client that ignores it cannot tell a lapsing connection from a
+  healthy one
+
 ### Decided
 - **SwiftMCPClient is the harness for the client half**, as SwiftMCPServer is the control for
   the provider half. They implement opposite roles of the same protocol, so once both adopt
