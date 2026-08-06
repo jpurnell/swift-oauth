@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Decided
+- **SwiftMCPClient is the harness for the client half**, as SwiftMCPServer is the control for
+  the provider half. They implement opposite roles of the same protocol, so once both adopt
+  this package the client can authorise against the provider in-process — a full
+  authorization-code exchange with PKCE, a refresh, and a rotation, offline and
+  deterministic. Better than a mock, because neither side is a stub written to agree with the
+  other
+- The weakness is recorded rather than assumed: a closed loop can be mutually conformant and
+  both wrong. Two external anchors already exist — the client half faces Intuit through
+  LedgeOS, the provider half faces Claude connecting to the user's MCP servers
+
 ## [0.0.1] — 2026-08-06
 
 Scaffold and design. Nothing is implemented.
