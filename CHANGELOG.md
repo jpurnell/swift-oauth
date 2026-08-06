@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.1] — 2026-08-06
+
+Scaffold and design. Nothing is implemented.
+
 ### Added
 - Project scaffold: three targets — `SwiftOAuthCore`, `SwiftOAuthProvider`,
   `SwiftOAuthClient` — with neither half depending on the other
@@ -34,3 +38,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so that
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
+
+[Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/jpurnell/SwiftOAuth/releases/tag/v0.0.1
