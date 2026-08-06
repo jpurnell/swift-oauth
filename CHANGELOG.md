@@ -17,7 +17,9 @@ First tagged release: `SwiftOAuthCore` and the client half.
 - `OAuthClientStorage` as a protocol, with in-memory and deliberately-failing implementations
 - Credential variables namespaced by application as well as provider and environment
 
-## [Unreleased]
+## [0.2.0] — 2026-08-06
+
+`SwiftOAuthProvider`, extracted from SwiftMCPServer.
 
 ### Added
 - **`SwiftOAuthProvider`** — extracted from SwiftMCPServer: authorization server, HTTP

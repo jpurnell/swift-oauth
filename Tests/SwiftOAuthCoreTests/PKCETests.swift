@@ -95,6 +95,22 @@ struct PKCEVerifierTests {
     ///
     /// Seeded, so a collision is reproducible rather than a CI curiosity that
     /// never appears again locally.
+    /// Distinct verifiers must derive distinct challenges. The published-vector test pins
+    /// one input to one output, which a derivation that truncated the digest badly could
+    /// still satisfy while colliding everywhere else — and a colliding challenge means a
+    /// verifier that was never issued redeems the code.
+    @Test("Distinct verifiers derive distinct challenges")
+    func distinctVerifiersDeriveDistinctChallenges() throws {
+        var seen: Set<String> = []
+        var generator = SeededGenerator(seed: 0x5EED_C0DE)
+        for _ in 0..<256 {
+            let verifier = PKCE.generateCodeVerifier(using: &generator)
+            let challenge = try PKCE.generateCodeChallenge(verifier: verifier, method: .s256)
+            #expect(seen.insert(challenge).inserted,
+                    "two verifiers derived the same challenge")
+        }
+    }
+
     @Test("Generated verifiers differ")
     func verifiersAreDistinct() {
         var rng = SeededGenerator(seed: 20_260_806)
