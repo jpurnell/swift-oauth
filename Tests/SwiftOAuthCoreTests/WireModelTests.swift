@@ -160,12 +160,27 @@ struct GrantTypeTests {
     /// OAuth 2.1 removes implicit and password. Modelling the omission as
     /// absence rather than a rejected case means a provider built on this cannot
     /// accidentally support them.
-    @Test("Only the two safe grants exist")
-    func onlySafeGrants() {
-        #expect(Set(GrantType.allCases) == [.authorizationCode, .refreshToken])
+    @Test("The grants OAuth 2.1 removes stay unconstructible")
+    func removedGrantsAbsent() {
         #expect(GrantType(rawValue: "password") == nil, "the password grant is constructible")
         #expect(GrantType(rawValue: "implicit") == nil)
-        #expect(GrantType(rawValue: "client_credentials") == nil)
+    }
+
+    /// `client_credentials` is a different case from those two and was previously
+    /// lumped in with them. OAuth 2.1 keeps it — it is the standard grant for
+    /// machine-to-machine access, and a client consuming a third-party API often
+    /// has no other option. Excluding it did not make anything safer; it made this
+    /// package unable to talk to providers like eBay's Browse API at all.
+    ///
+    /// Safety is preserved where it actually matters: ``OAuthServer`` dispatches on
+    /// the raw wire string with a rejecting `default`, so a provider built on this
+    /// still cannot issue client-credentials tokens. See ``ProviderRejectsClientCredentials``.
+    @Test("client_credentials is available to the client half")
+    func clientCredentialsAvailable() {
+        #expect(GrantType(rawValue: "client_credentials") == .clientCredentials)
+        #expect(GrantType.clientCredentials.rawValue == "client_credentials")
+        #expect(Set(GrantType.allCases)
+            == [.authorizationCode, .refreshToken, .clientCredentials])
     }
 
     @Test("Only the code response type exists")

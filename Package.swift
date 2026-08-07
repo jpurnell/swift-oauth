@@ -13,8 +13,14 @@ import PackageDescription
 // links client code.
 let package = Package(
     name: "SwiftOAuth",
+    // The client half is Foundation and Crypto only, so it runs anywhere Swift
+    // does — including in an iOS app consuming a third-party API. The provider
+    // half needs a server and SQLite, and is not expected to be built for iOS,
+    // but nothing in the manifest needs to say so: a target is only compiled
+    // when something depends on it.
     platforms: [
-        .macOS(.v14)
+        .macOS(.v14),
+        .iOS(.v17)
     ],
     products: [
         .library(name: "SwiftOAuthCore", targets: ["SwiftOAuthCore"]),

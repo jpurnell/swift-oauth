@@ -2,8 +2,8 @@ import Foundation
 
 /// The grant types this package supports.
 ///
-/// Two, deliberately. RFC 6749 defines four; OAuth 2.1 removes two of them, and
-/// they are absent here rather than merely discouraged:
+/// Two of RFC 6749's four are absent here rather than merely discouraged,
+/// because OAuth 2.1 removes them:
 ///
 /// - **Implicit** (`response_type=token`) returns an access token in a redirect
 ///   fragment, where it lands in browser history and referrer headers. The
@@ -11,9 +11,25 @@ import Foundation
 /// - **Resource owner password credentials** requires the user to hand their
 ///   password to the client, which is the arrangement OAuth exists to avoid.
 ///
-/// Modelling the omission as *absence* rather than a rejected case means a
+/// Modelling those omissions as *absence* rather than rejected cases means a
 /// provider built on this cannot accidentally support them, and a client cannot
 /// request them.
+///
+/// ## Why client credentials is present
+///
+/// ``clientCredentials`` was once excluded alongside those two. That conflated
+/// two different things. OAuth 2.1 keeps the client-credentials grant — it is
+/// the standard way one machine authenticates to another, with no resource owner
+/// because there genuinely is no user in the interaction. Excluding it did not
+/// make anything safer; it made this package unable to consume a large class of
+/// third-party APIs at all, since many offer no alternative.
+///
+/// The safety concern it appeared to address is real but lives elsewhere: a
+/// *provider* issuing client-credentials tokens would grant access with no user
+/// involved. That is prevented where it should be —
+/// `OAuthServer.handleTokenRequest(_:)` dispatches on the raw wire string and
+/// rejects any grant it does not implement — not by making the value
+/// unconstructible for clients that legitimately need to request it.
 public enum GrantType: String, Codable, Sendable, Equatable, CaseIterable {
 
     /// Exchange an authorization code for tokens. RFC 6749 §4.1.
@@ -24,6 +40,13 @@ public enum GrantType: String, Codable, Sendable, Equatable, CaseIterable {
 
     /// Exchange a refresh token for a new access token. RFC 6749 §6.
     case refreshToken = "refresh_token"
+
+    /// Authenticate as the client itself, with no resource owner. RFC 6749 §4.4.
+    ///
+    /// For machine-to-machine access where no user is involved and none should
+    /// be. **Client-side only**: this package's provider does not issue these,
+    /// and requesting one from an `OAuthServer` returns `unsupported_grant_type`.
+    case clientCredentials = "client_credentials"
 }
 
 /// The response types this package supports.

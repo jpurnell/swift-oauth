@@ -1064,3 +1064,60 @@ extension OAuthServerTests {
         )
     }
 }
+
+/// The invariant that made excluding `client_credentials` from ``GrantType``
+/// look necessary — and which survives without it.
+///
+/// A client-credentials token has no resource owner and no consent step. A
+/// provider issuing one would hand out access with no user involved, which is
+/// the arrangement OAuth exists to make deliberate. Making the grant
+/// unconstructible looked like it prevented that, but the protection never came
+/// from the enum: ``OAuthServer/handleTokenRequest(_:)`` dispatches on the raw
+/// wire string and rejects anything it does not implement. These tests pin that,
+/// so the client half can request the grant from third parties while the
+/// provider half still refuses to issue it.
+@Suite("Provider refuses client credentials")
+struct ProviderRejectsClientCredentials {
+
+    @Test("A client_credentials token request is rejected")
+    func rejectsClientCredentialsGrant() async throws {
+        let server = try await OAuthServerTests.makeTestServer()
+        do {
+            let client = try await server.registerClient(ClientRegistrationRequest(
+                clientName: "CC Test",
+                redirectUris: ["http://localhost/callback"],
+                grantTypes: ["authorization_code", "refresh_token"]
+            ))
+            let request = TokenRequest(
+                grantType: GrantType.clientCredentials.rawValue,
+                code: nil, redirectUri: nil,
+                clientId: client.clientId, clientSecret: client.clientSecret,
+                codeVerifier: nil, refreshToken: nil
+            )
+            await #expect(throws: OAuthError.unsupportedGrantType(nil)) {
+                _ = try await server.handleTokenRequest(request)
+            }
+        }
+    }
+
+    /// Still true of the grants OAuth 2.1 removed, which remain unconstructible.
+    @Test("Removed grants are rejected too", arguments: ["password", "implicit"])
+    func rejectsRemovedGrants(grant: String) async throws {
+        let server = try await OAuthServerTests.makeTestServer()
+        do {
+            let client = try await server.registerClient(ClientRegistrationRequest(
+                clientName: "Removed Test",
+                redirectUris: ["http://localhost/callback"],
+                grantTypes: ["authorization_code"]
+            ))
+            let request = TokenRequest(
+                grantType: grant, code: nil, redirectUri: nil,
+                clientId: client.clientId, clientSecret: client.clientSecret,
+                codeVerifier: nil, refreshToken: nil
+            )
+            await #expect(throws: OAuthError.unsupportedGrantType(nil)) {
+                _ = try await server.handleTokenRequest(request)
+            }
+        }
+    }
+}

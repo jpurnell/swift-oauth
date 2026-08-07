@@ -5,9 +5,21 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0]
 
 ### Added
+- **`GrantType.clientCredentials`** — RFC 6749 §4.4, the standard grant for
+  machine-to-machine access. Previously excluded alongside the two grants OAuth 2.1
+  removes, which conflated two different things: implicit and password are unsafe,
+  while client credentials is simply user-less by design. Excluding it made the client
+  half unable to consume a large class of third-party APIs that offer no alternative.
+  **Client-side only** — `OAuthServer` dispatches on the raw wire string and still
+  returns `unsupported_grant_type`, now pinned by `ProviderRejectsClientCredentials`.
+- **iOS support** — the package declares `.iOS(.v17)` alongside macOS. The client half
+  depends only on Foundation and Crypto, so it runs wherever Swift does; the provider
+  half is simply never built for iOS because nothing there depends on it.
+
+### Added (previously unreleased)
 - **`EncryptedFileClientStorage`** — the persistent counterpart to the in-memory store, so an
   application need not make its user authorise again after a restart. AES-GCM over the whole
   file, so which providers a user has connected is not readable either
