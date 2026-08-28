@@ -95,8 +95,8 @@ actor StubTransport: TokenTransport {
 ///
 /// Waiting for a token to expire in real time would make the suite slow and, worse,
 /// timing-dependent: passing on an idle machine and failing on a loaded one.
+// Justification: mutable `instant` is guarded by `lock`; no other state exists.
 final class TestClock: @unchecked Sendable {
-    // Justification: mutable `instant` is guarded by `lock`; no other state exists.
     private let lock = NSLock()
     private var instant: Date
 

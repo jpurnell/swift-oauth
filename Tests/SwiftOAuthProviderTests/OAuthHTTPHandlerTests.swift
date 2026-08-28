@@ -39,7 +39,7 @@ struct OAuthHTTPHandlerTests {
 
             let response = await handler.handleMetadataRequest()
 
-            let data = response.body.data(using: .utf8)!
+            let data = Data(response.body.utf8)
             let metadata = try JSONDecoder().decode(ServerMetadata.self, from: data)
 
             #expect(metadata.issuer == "https://example.com")
@@ -73,7 +73,7 @@ struct OAuthHTTPHandlerTests {
 
             let response = await handler.handleProtectedResourceMetadata()
 
-            let data = response.body.data(using: .utf8)!
+            let data = Data(response.body.utf8)
             let metadata = try JSONDecoder().decode(ProtectedResourceMetadata.self, from: data)
 
             #expect(metadata.resource == "https://example.com")
@@ -152,7 +152,7 @@ struct OAuthHTTPHandlerTests {
             }
             """
             let regResponse = await handler.handleRegistrationRequest(body: regBody)
-            let regData = regResponse.body.data(using: .utf8)!
+            let regData = Data(regResponse.body.utf8)
             let client = try JSONDecoder().decode(ClientRegistrationResponse.self, from: regData)
 
             // Make authorization request
@@ -223,8 +223,9 @@ struct OAuthHTTPHandlerTests {
             }
             """
             let regResponse = await handler.handleRegistrationRequest(body: regBody)
-            let regData = regResponse.body.data(using: .utf8)!
+            let regData = Data(regResponse.body.utf8)
             let client = try JSONDecoder().decode(ClientRegistrationResponse.self, from: regData)
+            let clientSecret = try #require(client.clientSecret)
 
             // Get authorization code with PKCE
             let verifier = PKCE.generateCodeVerifier()
@@ -240,7 +241,7 @@ struct OAuthHTTPHandlerTests {
 
             // Get consent page
             let consentResponse = await handler.handleAuthorizationRequest(queryParams: authParams)
-            let csrfToken = OAuthHTTPHandlerTests.extractCSRFToken(from: consentResponse.body)!
+            let csrfToken = try #require(OAuthHTTPHandlerTests.extractCSRFToken(from: consentResponse.body))
 
             // Submit consent
             let consentParams: [String: String] = [
@@ -253,8 +254,8 @@ struct OAuthHTTPHandlerTests {
             ]
 
             let authResponse = await handler.handleConsentSubmission(formParams: consentParams)
-            let location = authResponse.headers["Location"]!
-            let code = extractCodeFromRedirect(location)!
+            let location = try #require(authResponse.headers["Location"])
+            let code = try #require(extractCodeFromRedirect(location))
 
             // Exchange code for tokens (URL-encode values)
             let tokenBody = buildFormBody([
@@ -262,7 +263,7 @@ struct OAuthHTTPHandlerTests {
                 "code": code,
                 "redirect_uri": "http://localhost/callback",
                 "client_id": client.clientId,
-                "client_secret": client.clientSecret!,
+                "client_secret": clientSecret,
                 "code_verifier": verifier
             ])
 
@@ -320,8 +321,9 @@ struct OAuthHTTPHandlerTests {
             }
             """
             let regResponse = await handler.handleRegistrationRequest(body: regBody)
-            let regData = regResponse.body.data(using: .utf8)!
+            let regData = Data(regResponse.body.utf8)
             let client = try JSONDecoder().decode(ClientRegistrationResponse.self, from: regData)
+            let clientSecret = try #require(client.clientSecret)
 
             let verifier = PKCE.generateCodeVerifier()
             let challenge = try PKCE.generateCodeChallenge(verifier: verifier, method: .s256)
@@ -334,7 +336,7 @@ struct OAuthHTTPHandlerTests {
                 "code_challenge": challenge,
                 "code_challenge_method": "S256"
             ])
-            let csrfToken = OAuthHTTPHandlerTests.extractCSRFToken(from: consentResponse.body)!
+            let csrfToken = try #require(OAuthHTTPHandlerTests.extractCSRFToken(from: consentResponse.body))
 
             // Submit consent
             let authResponse = await handler.handleConsentSubmission(formParams: [
@@ -345,27 +347,29 @@ struct OAuthHTTPHandlerTests {
                 "code_challenge": challenge,
                 "code_challenge_method": "S256"
             ])
-            let code = extractCodeFromRedirect(authResponse.headers["Location"]!)!
+            let redirectLocation = try #require(authResponse.headers["Location"])
+            let code = try #require(extractCodeFromRedirect(redirectLocation))
 
             let initialTokenBody = buildFormBody([
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": "http://localhost/callback",
                 "client_id": client.clientId,
-                "client_secret": client.clientSecret!,
+                "client_secret": clientSecret,
                 "code_verifier": verifier
             ])
 
             let initialTokenResponse = await handler.handleTokenRequest(body: initialTokenBody, authHeader: nil)
-            let initialData = initialTokenResponse.body.data(using: .utf8)!
+            let initialData = Data(initialTokenResponse.body.utf8)
             let initialTokens = try JSONDecoder().decode(TokenResponse.self, from: initialData)
+            let refreshToken = try #require(initialTokens.refreshToken)
 
             // Refresh
             let refreshBody = buildFormBody([
                 "grant_type": "refresh_token",
-                "refresh_token": initialTokens.refreshToken!,
+                "refresh_token": refreshToken,
                 "client_id": client.clientId,
-                "client_secret": client.clientSecret!
+                "client_secret": clientSecret
             ])
 
             let refreshResponse = await handler.handleTokenRequest(body: refreshBody, authHeader: nil)
@@ -393,8 +397,9 @@ struct OAuthHTTPHandlerTests {
             }
             """
             let regResponse = await handler.handleRegistrationRequest(body: regBody)
-            let regData = regResponse.body.data(using: .utf8)!
+            let regData = Data(regResponse.body.utf8)
             let client = try JSONDecoder().decode(ClientRegistrationResponse.self, from: regData)
+            let clientSecret = try #require(client.clientSecret)
 
             let verifier = PKCE.generateCodeVerifier()
             let challenge = try PKCE.generateCodeChallenge(verifier: verifier, method: .s256)
@@ -408,7 +413,7 @@ struct OAuthHTTPHandlerTests {
                 "code_challenge_method": "S256",
                 "scope": "mcp:tools"
             ])
-            let csrfToken = OAuthHTTPHandlerTests.extractCSRFToken(from: consentResponse.body)!
+            let csrfToken = try #require(OAuthHTTPHandlerTests.extractCSRFToken(from: consentResponse.body))
 
             // Submit consent
             let authResponse = await handler.handleConsentSubmission(formParams: [
@@ -420,19 +425,20 @@ struct OAuthHTTPHandlerTests {
                 "code_challenge_method": "S256",
                 "scope": "mcp:tools"
             ])
-            let code = extractCodeFromRedirect(authResponse.headers["Location"]!)!
+            let redirectLocation = try #require(authResponse.headers["Location"])
+            let code = try #require(extractCodeFromRedirect(redirectLocation))
 
             let tokenBody = buildFormBody([
                 "grant_type": "authorization_code",
                 "code": code,
                 "redirect_uri": "http://localhost/callback",
                 "client_id": client.clientId,
-                "client_secret": client.clientSecret!,
+                "client_secret": clientSecret,
                 "code_verifier": verifier
             ])
 
             let tokenResponse = await handler.handleTokenRequest(body: tokenBody, authHeader: nil)
-            let tokenData = tokenResponse.body.data(using: .utf8)!
+            let tokenData = Data(tokenResponse.body.utf8)
             let tokens = try JSONDecoder().decode(TokenResponse.self, from: tokenData)
 
             // Validate the token

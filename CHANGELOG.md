@@ -24,12 +24,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inline would have buried what the examples are about — what the server *does*
   with a request, not how one is parsed off the wire.
 
+- **Every force unwrap in the test suite is now `try #require`.** Twenty-five
+  `safety` errors, all in `Tests/`. The note that recorded them argued that a force
+  unwrap in a test is often deliberate — a nil there should fail loudly — and under
+  XCTest that would be right. Under swift-testing with `--parallel` it is not: a trap
+  takes down the entire runner, so one nil fails all four targets and reports a stack
+  frame instead of an assertion. `rules/test_driven_development.md` says exactly this,
+  and the suite had already decided — 23 `try #require` calls across six files.
+  `OAuthHTTPHandlerTests.swift` was simply the file that never got converted. So this
+  was not a style decision left open; it was a conversion left unfinished.
+
+  Ten of the twenty-five were `String.data(using: .utf8)!`, which cannot return nil for
+  any Swift string. Those became `Data(_:utf8)` — non-optional, and one less line that
+  reads like a risk is being taken where none is.
+
+- **`TestClock`'s `@unchecked Sendable` justification now sits where the auditor looks
+  for it**, directly above the declaration rather than as the first line of the type
+  body. The reasoning was recorded from the start; only its placement was wrong.
+
 ### Known
-- `--check all` reports 25 errors and 22 warnings from `[safety]`, **every one in
-  `Tests/` and none in `Sources/`**: force unwraps, hardcoded test tokens, and
-  `http://` URLs in fixtures. A force unwrap in a test is frequently deliberate —
-  a nil there should fail loudly — so clearing these is a decision about test
-  style, not a defect sweep, and it has not been made.
+- Clearing `[safety]` let the run reach the 39 checkers behind it, and two errors were
+  waiting there — `[concurrency]` (fixed above) and `[doc-lint]`. Neither was new; both
+  were unreachable while `[safety]` stopped the run. The old note's "25 errors and 22
+  warnings" was the count at the stop, not the count in the package, and 4 of those 22
+  warnings were `[consistency]` rather than `[safety]`.
+- `[doc-lint]` fails because no target owns a `.docc` catalogue, so it examined nothing
+  and says so rather than passing vacuously. The package has depended on
+  `swift-docc-plugin` since before this, so the intent to publish documentation is not
+  in question — the catalogues are what is missing, and what goes in them is a writing
+  decision per library, not a gate fix.
+- `[safety]` reports 18 warnings, every one a false positive on a test fixture, and six
+  of them inverted: the `http://` endpoints in `DiscoveryTests` and the
+  `http://evil.com/callback` in `OAuthServerTests` and `OAuthConsentTests` are the
+  *inputs* to tests asserting that such URLs are refused. Taking the checker's advice
+  would make each of those tests assert the opposite of what it exists to prove. The
+  rest match on name and shape rather than substance: a `credentials` local built by
+  interpolating a secret generated moments earlier, `FileManager` under
+  `temporaryDirectory` with a UUID in the path, and eight fixture strings whose
+  variable is called `token`. The fix belongs in the checker's scope — `[safety]`
+  should not apply insecure-transport and hardcoded-secret rules to `Tests/` — so
+  these stay red rather than being suppressed or written around.
 
 ## [0.4.0]
 

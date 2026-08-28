@@ -980,7 +980,8 @@ struct OAuthServerTests {
             ))
 
             // Create auth header value
-            let credentials = "\(client.clientId):\(client.clientSecret!)"
+            let clientSecret = try #require(client.clientSecret)
+            let credentials = "\(client.clientId):\(clientSecret)"
             let encoded = Data(credentials.utf8).base64EncodedString()
             let authHeader = "Basic \(encoded)"
 

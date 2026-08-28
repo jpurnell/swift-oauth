@@ -87,7 +87,7 @@ struct OAuthModelsTests {
 
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .secondsSince1970
-            let client = try decoder.decode(RegisteredClient.self, from: json.data(using: .utf8)!)
+            let client = try decoder.decode(RegisteredClient.self, from: Data(json.utf8))
 
             #expect(client.clientId == "decoded-client")
             #expect(client.clientSecret == "decoded-secret")
@@ -149,7 +149,7 @@ struct OAuthModelsTests {
 
             let request = try JSONDecoder().decode(
                 ClientRegistrationRequest.self,
-                from: json.data(using: .utf8)!
+                from: Data(json.utf8)
             )
 
             #expect(request.clientName == "JSON Client")
