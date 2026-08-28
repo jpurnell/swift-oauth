@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-28
+
 ### Added
 - **A DocC catalogue for each library.** The package has depended on
   `swift-docc-plugin` since before any of this and `master_plan.md` commits to "DocC on
@@ -248,7 +250,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.1.0...v0.2.0
