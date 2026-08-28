@@ -79,43 +79,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for it**, directly above the declaration rather than as the first line of the type
   body. The reasoning was recorded from the start; only its placement was wrong.
 
-### Known
-- Clearing `[safety]` let the run reach the 39 checkers behind it, and two errors were
-  waiting there — `[concurrency]` and `[doc-lint]`, both fixed above. Neither was new;
-  both were unreachable while `[safety]` stopped the run. The old note's "25 errors and
-  22 warnings" was the count at the stop, not the count in the package, and 4 of those
-  22 warnings were `[consistency]` rather than `[safety]`. **The gate now reaches all 45
-  checkers with 0 errors.**
-- `[safety]` reports 4 warnings, down from 18. **Every one is on a negative test** — a
-  test whose input is the bad practice, because the code under test exists to refuse it.
-  A scanner reading `Tests/` cannot tell "this code does X" from "this code proves X is
-  rejected", and these four are the residue of that.
+### Fixed (gate)
+- **`--check all` passes: 45 of 45 checkers, 0 errors, 0 warnings.** It had never run to
+  the end before — `[safety]` stopped it, and the 39 checkers behind the stop had never
+  reported at all. Getting there took 25 force unwraps, 2 errors that only became visible
+  once the run reached them, 14 stale doc links, three missing DocC catalogues, and
+  18 `[safety]` warnings.
 
-  - `DiscoveryTests.swift:79` and `:149` — `http://mcp.example.com/token` and
-    `http://host.example`, each bound to a name and passed to
-    `#expect(throws: DiscoveryError.insecureEndpoint(...))`. Rewriting either to `https://`
-    would assert that a *valid* endpoint is refused, which is false; the test would fail,
-    and rightly.
-  - `AuthorizationFlowTests.swift:275` — a four-line helper that parses a literal into a
-    `URL` and issues no request. The rule's own remedy, "validate against an allowlist of
-    expected hosts", has nothing to attach to.
-  - `OAuthServerTests.swift:984` — `let credentials = "\(client.clientId):\(clientSecret)"`.
-    Matched on the variable's *name*; the value is interpolated from a secret the test
-    generated three lines earlier, so nothing about it is hardcoded.
+  Of those 18: ten were real and were fixed. Four went to changes worth making anyway —
+  two redirect-mismatch tests now use `https://attacker.example`, since the point of
+  those tests is a URI that does not match the one registered, the scheme was never
+  the point, and `attacker.example` is reserved by RFC 2606 where `evil.com` is a domain
+  somebody owns.
 
-  Ten of the original eighteen were real and are fixed. Four more went to changes that
-  were improvements on their own terms: the two redirect-mismatch tests now use
-  `https://attacker.example`, since those tests are about a URI that does not match the
-  one registered and the scheme was never the point — and `attacker.example` is reserved
-  by RFC 2606, where `evil.com` is a domain somebody owns.
+  The last four carry a `// SECURITY:` justification, which is what that mechanism is
+  for. All four are on **negative tests** — where the bad practice is the *input*,
+  because the code under test exists to refuse it, and no scanner reading `Tests/` can
+  tell "does X" from "proves X is rejected":
 
-  The remaining four stay red. Each could be cleared in a minute — rename the variable,
-  assemble the scheme from parts, drop the helper — and each of those would leave the
-  test asserting the same thing while reading as though it asserted something else. One
-  such attempt is already recorded above: binding the discovery URL to `tokenEndpoint`
-  cleared an `insecure-transport` warning and raised a `hardcoded-secret` one, because
-  the new name contained "token". The name was worth nothing and the warning it traded
-  for was worth nothing.
+  - Two insecure `http://` URLs in `DiscoveryTests` that
+    `#expect(throws: DiscoveryError.insecureEndpoint(...))` proves are refused. Rewriting
+    either to `https://` would assert that a *valid* endpoint is rejected.
+  - A four-line test helper that parses a callback literal into a `URL` and issues no
+    request, flagged as SSRF.
+  - `let credentials = "\(client.clientId):\(clientSecret)"`, flagged as a hardcoded
+    secret on the strength of the variable's name; the value is interpolated from a
+    secret `registerClient` generated three lines earlier.
+
+  Each justification says which of those it is. That is the difference between a
+  justification and a suppression: the comment has to be true, and a reader can check it.
+
+  One thing worth keeping from the attempt to avoid needing them: binding a discovery URL
+  to a constant named `tokenEndpoint` cleared an `insecure-transport` warning and raised a
+  `hardcoded-secret` one, because the new name contained "token". Renaming code to satisfy
+  a matcher moves findings around; it does not remove them.
 
 ## [0.4.0]
 

@@ -272,6 +272,7 @@ struct AuthorizationCompletionTests {
 // MARK: - Helpers
 
 private func url(_ string: String) -> URL {
+    // SECURITY: parses a callback literal written in this file; no request is ever issued from it.
     URL(string: string) ?? URL(fileURLWithPath: "/")
 }
 

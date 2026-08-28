@@ -981,6 +981,7 @@ struct OAuthServerTests {
 
             // Create auth header value
             let clientSecret = try #require(client.clientSecret)
+            // SECURITY: interpolated from the secret registerClient generated above, so nothing here is hardcoded.
             let credentials = "\(client.clientId):\(clientSecret)"
             let encoded = Data(credentials.utf8).base64EncodedString()
             let authHeader = "Basic \(encoded)"

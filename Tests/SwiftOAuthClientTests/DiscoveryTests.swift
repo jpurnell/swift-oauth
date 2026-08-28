@@ -76,6 +76,7 @@ struct DiscoveryValidationTests {
     /// Every secret in the protocol crosses these endpoints.
     @Test("A non-HTTPS endpoint is refused")
     func insecureEndpointRefused() {
+        // SECURITY: the insecure endpoint under test — rewriting it to https would assert that a valid endpoint is refused.
         let endpoint = "http://mcp.example.com/token"
         #expect(throws: DiscoveryError.insecureEndpoint(endpoint)) {
             try metadata(tokenEndpoint: endpoint)
@@ -146,6 +147,7 @@ struct DiscoveryURLTests {
     /// Discovery itself must not be talked out of TLS.
     @Test("A non-HTTPS issuer is refused")
     func insecureIssuerRefused() {
+        // SECURITY: the insecure issuer under test — rewriting it to https would assert that a valid issuer is refused.
         let issuer = "http://host.example"
         #expect(throws: DiscoveryError.insecureEndpoint(issuer)) {
             try AuthorizationServerMetadata.discoveryURL(issuer: issuer)
