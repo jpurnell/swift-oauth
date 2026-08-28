@@ -97,7 +97,7 @@ public struct StoredCredential: Sendable, Equatable, Codable {
     ///   - response: What the token endpoint returned.
     ///   - received: When it arrived — expiries are durations on the wire, so only the
     ///     caller knows what they are relative to.
-    ///   - replacing: The refresh token this response replaced, if any.
+    ///   - previous: The refresh token this response replaced, if any.
     /// - Returns: The credential, or `nil` if the response carried no refresh token.
     ///   A response without one cannot be kept alive, and storing it would promise a
     ///   connection that will silently stop working within the hour.

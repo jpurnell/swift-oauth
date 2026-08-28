@@ -38,6 +38,11 @@ let package = Package(
         .target(
             name: "SwiftOAuthCore",
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
+            // Declared, not excluded. swift-docc-plugin finds a catalogue through the
+            // target's `sourceFiles`, which `exclude:` removes it from — so excluding would
+            // silence SwiftPM's unhandled-file warning by handing DocC nothing, and doc-lint
+            // would pass over an article it never opened.
+            resources: [.copy("SwiftOAuthCore.docc")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .systemLibrary(
@@ -55,6 +60,11 @@ let package = Package(
                 "CSQLite",
                 .product(name: "Crypto", package: "swift-crypto")
             ],
+            // Declared, not excluded. swift-docc-plugin finds a catalogue through the
+            // target's `sourceFiles`, which `exclude:` removes it from — so excluding would
+            // silence SwiftPM's unhandled-file warning by handing DocC nothing, and doc-lint
+            // would pass over an article it never opened.
+            resources: [.copy("SwiftOAuthProvider.docc")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .target(
@@ -63,6 +73,11 @@ let package = Package(
                 "SwiftOAuthCore",
                 .product(name: "Crypto", package: "swift-crypto")
             ],
+            // Declared, not excluded. swift-docc-plugin finds a catalogue through the
+            // target's `sourceFiles`, which `exclude:` removes it from — so excluding would
+            // silence SwiftPM's unhandled-file warning by handing DocC nothing, and doc-lint
+            // would pass over an article it never opened.
+            resources: [.copy("SwiftOAuthClient.docc")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

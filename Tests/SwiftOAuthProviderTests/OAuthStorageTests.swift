@@ -27,15 +27,14 @@ struct OAuthStorageTests {
 
         @Test("Creates file-based database")
         func createsFileBasedDatabase() throws {
-            let tempPath = FileManager.default.temporaryDirectory
+            let tempURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("test_oauth_\(UUID().uuidString).db")
-                .path
 
-            defer { try? FileManager.default.removeItem(atPath: tempPath) }
+            defer { try? FileManager.default.removeItem(at: tempURL) }
 
-            let storage = try OAuthStorage(path: tempPath)
+            let storage = try OAuthStorage(path: tempURL.path)
             #expect(type(of: storage) == OAuthStorage.self)
-            #expect(FileManager.default.fileExists(atPath: tempPath))
+            #expect(try tempURL.checkResourceIsReachable())
         }
 
         @Test("Creates required tables")
@@ -259,7 +258,7 @@ struct OAuthStorageTests {
         func storesAndValidatesToken() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_at_test_token_12345"
+            let token = TokenGenerator.generateAccessToken()
             let expiresAt = Date().addingTimeInterval(86400) // 24 hours
 
             try await storage.saveAccessToken(
@@ -282,7 +281,7 @@ struct OAuthStorageTests {
         func storesTokenHash() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_at_raw_token_value"
+            let token = TokenGenerator.generateAccessToken()
             try await storage.saveAccessToken(
                 token: token,
                 clientId: "client",
@@ -299,7 +298,7 @@ struct OAuthStorageTests {
         func rejectsExpiredToken() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_at_expired_token"
+            let token = TokenGenerator.generateAccessToken()
             try await storage.saveAccessToken(
                 token: token,
                 clientId: "client",
@@ -323,7 +322,7 @@ struct OAuthStorageTests {
         func revokesAccessToken() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_at_to_revoke"
+            let token = TokenGenerator.generateAccessToken()
             try await storage.saveAccessToken(
                 token: token,
                 clientId: "client",
@@ -380,7 +379,7 @@ struct OAuthStorageTests {
         func storesAndRetrievesToken() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_rt_refresh_12345"
+            let token = TokenGenerator.generateRefreshToken()
             let expiresAt = Date().addingTimeInterval(90 * 24 * 3600) // 90 days
 
             try await storage.saveRefreshToken(
@@ -400,7 +399,7 @@ struct OAuthStorageTests {
         func rejectsExpiredToken() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_rt_expired"
+            let token = TokenGenerator.generateRefreshToken()
             try await storage.saveRefreshToken(
                 token: token,
                 clientId: "client",
@@ -416,7 +415,7 @@ struct OAuthStorageTests {
         func revokesRefreshToken() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_rt_to_revoke"
+            let token = TokenGenerator.generateRefreshToken()
             try await storage.saveRefreshToken(
                 token: token,
                 clientId: "client",
@@ -529,7 +528,7 @@ struct OAuthStorageTests {
         func actorIsolationPreventsRaces() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
 
-            let token = "mcp_at_race_test"
+            let token = TokenGenerator.generateAccessToken()
             try await storage.saveAccessToken(
                 token: token,
                 clientId: "client",

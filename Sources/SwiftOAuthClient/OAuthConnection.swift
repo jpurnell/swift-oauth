@@ -110,7 +110,7 @@ public actor OAuthConnection {
     ///   - state: An opaque value returned on the callback. Generate it unpredictably and
     ///     check it there — it is what prevents an attacker completing a flow the user did
     ///     not start.
-    ///   - challenge: A PKCE challenge. Keep its verifier; it is needed at ``exchange(authorizationCode:verifier:)``.
+    ///   - challenge: A PKCE challenge. Keep its verifier; it is needed at ``exchange(authorizationCode:verifier:redirectURI:)``.
     ///   - redirectURI: Where the provider sends the user back. Must match one registered
     ///     with the provider exactly.
     /// - Returns: The URL to open.
@@ -174,7 +174,7 @@ public actor OAuthConnection {
     ///   - pending: What ``beginAuthorization(redirectURI:)`` returned.
     /// - Returns: The stored credential.
     /// - Throws: ``CallbackError`` if the callback is not this flow's, otherwise
-    ///   ``ConnectionError`` or ``OAuthError``.
+    ///   ``ConnectionError`` or `OAuthError`.
     @discardableResult
     public func completeAuthorization(
         callback: URL,
@@ -194,7 +194,7 @@ public actor OAuthConnection {
     ///   - verifier: The PKCE verifier matching the challenge sent earlier.
     ///   - redirectURI: The same value sent to the authorization endpoint.
     /// - Returns: The stored credential.
-    /// - Throws: ``ConnectionError`` or ``OAuthError``.
+    /// - Throws: ``ConnectionError`` or `OAuthError`.
     @discardableResult
     public func exchange(
         authorizationCode: String,
@@ -226,7 +226,7 @@ public actor OAuthConnection {
     /// The whole interface for a caller. Expiry, rotation and persistence do not surface.
     ///
     /// - Returns: A token safe to present on an API call.
-    /// - Throws: ``ConnectionError`` or ``OAuthError``.
+    /// - Throws: ``ConnectionError`` or `OAuthError`.
     public func validAccessToken() async throws -> String {
         guard let stored = try await storage.credential(for: connection) else {
             throw ConnectionError.notConnected

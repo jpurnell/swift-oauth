@@ -61,7 +61,7 @@ public struct ClientCredentials: Sendable, Equatable {
     /// The client secret. **A credential.** Never logged, never committed.
     public let clientSecret: String
 
-    /// Creates credentials. Prefer ``fromEnvironment(provider:environment:reading:)``.
+    /// Creates credentials. Prefer ``fromEnvironment(provider:environment:prefix:reading:)``.
     public init(environment: String, clientID: String, clientSecret: String) {
         self.environment = environment
         self.clientID = clientID

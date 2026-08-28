@@ -17,7 +17,7 @@ public protocol TokenTransport: Sendable {
     ///   - credentials: Used for client authentication.
     ///   - method: How the credentials should be presented.
     /// - Returns: The provider's token response.
-    /// - Throws: ``OAuthError`` for anything the provider rejected, or a transport error.
+    /// - Throws: `OAuthError` for anything the provider rejected, or a transport error.
     func exchange(
         endpoint: URL,
         parameters: [String: String],
@@ -46,7 +46,7 @@ public struct URLSessionTokenTransport: TokenTransport {
     ///   - credentials: Used for client authentication.
     ///   - method: How the credentials should be presented.
     /// - Returns: The provider's token response.
-    /// - Throws: ``OAuthError`` for anything the provider rejected, or a transport error.
+    /// - Throws: `OAuthError` for anything the provider rejected, or a transport error.
     public func exchange(
         endpoint: URL,
         parameters: [String: String],

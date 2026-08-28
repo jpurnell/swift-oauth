@@ -7,7 +7,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **A DocC catalogue for each library.** The package has depended on
+  `swift-docc-plugin` since before any of this and `master_plan.md` commits to "DocC on
+  public types", but no target owned a catalogue, so `doc-lint` had nothing to examine
+  and said so rather than passing vacuously.
+
+  Each landing page says what the module is *for* and groups its symbols under headings
+  that name the job rather than the kind — "Authorizing", "Persisting what comes back",
+  "What the server refuses" — because a topic list sorted by `struct`/`enum`/`protocol`
+  tells a reader what the compiler already told them.
+
+  The catalogues are declared as `resources: [.copy(...)]`, not `exclude:`.
+  `swift-docc-plugin` locates a catalogue through the target's `sourceFiles`, which
+  `exclude:` removes it from — so excluding would have silenced SwiftPM's unhandled-file
+  warning by handing DocC nothing, and `doc-lint` would then have gone green over an
+  article it never opened.
+
 ### Fixed
+- **Fourteen broken documentation links**, invisible until `doc-lint` had a catalogue to
+  run against. Five were `` ``OAuthError`` `` and one `` ``ClientAuthenticationMethod`` ``
+  written as symbol links from `SwiftOAuthClient` to types that live in
+  `SwiftOAuthCore` — DocC resolves per module, so a link across one silently resolves to
+  nothing. Those are now plain code spans, which say the same thing and claim less. The
+  rest were stale: `exchange(authorizationCode:verifier:)` and
+  `fromEnvironment(provider:environment:reading:)` had both grown a parameter since the
+  sentences pointing at them were written, and a `- Parameters:` entry documented
+  `replacing`, the argument label, where DocC wants `previous`, the name.
+
+- **Storage tests generate their tokens instead of imitating them.** Eight fixtures were
+  hand-written strings shaped like the real thing — `"mcp_at_test_token_12345"` against
+  `TokenGenerator.generateAccessToken()`'s `mcp_at_` + 32 bytes. They now call the
+  generator, so the storage layer is exercised against the token shape it will actually
+  be given, and the fixture cannot drift from the format if it changes.
+
+- **`createsFileBasedDatabase` uses the URL-native `FileManager` API.** `atPath:` takes a
+  path string that has already lost what the `URL` knew about itself; `removeItem(at:)`
+  and `checkResourceIsReachable()` do not.
+
 - **Every `## Usage` example compiles.** Nine `doc-comment-code` errors, surfaced
   when that checker briefly entered the default set upstream. They had been wrong
   for as long as they existed.
@@ -44,26 +81,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known
 - Clearing `[safety]` let the run reach the 39 checkers behind it, and two errors were
-  waiting there — `[concurrency]` (fixed above) and `[doc-lint]`. Neither was new; both
-  were unreachable while `[safety]` stopped the run. The old note's "25 errors and 22
-  warnings" was the count at the stop, not the count in the package, and 4 of those 22
-  warnings were `[consistency]` rather than `[safety]`.
-- `[doc-lint]` fails because no target owns a `.docc` catalogue, so it examined nothing
-  and says so rather than passing vacuously. The package has depended on
-  `swift-docc-plugin` since before this, so the intent to publish documentation is not
-  in question — the catalogues are what is missing, and what goes in them is a writing
-  decision per library, not a gate fix.
-- `[safety]` reports 18 warnings, every one a false positive on a test fixture, and six
-  of them inverted: the `http://` endpoints in `DiscoveryTests` and the
-  `http://evil.com/callback` in `OAuthServerTests` and `OAuthConsentTests` are the
-  *inputs* to tests asserting that such URLs are refused. Taking the checker's advice
-  would make each of those tests assert the opposite of what it exists to prove. The
-  rest match on name and shape rather than substance: a `credentials` local built by
-  interpolating a secret generated moments earlier, `FileManager` under
-  `temporaryDirectory` with a UUID in the path, and eight fixture strings whose
-  variable is called `token`. The fix belongs in the checker's scope — `[safety]`
-  should not apply insecure-transport and hardcoded-secret rules to `Tests/` — so
-  these stay red rather than being suppressed or written around.
+  waiting there — `[concurrency]` and `[doc-lint]`, both fixed above. Neither was new;
+  both were unreachable while `[safety]` stopped the run. The old note's "25 errors and
+  22 warnings" was the count at the stop, not the count in the package, and 4 of those
+  22 warnings were `[consistency]` rather than `[safety]`. **The gate now reaches all 45
+  checkers with 0 errors.**
+- `[safety]` reports 8 warnings, down from 18. The ten that went were real: fixture
+  tokens that should have come from the generator, and `atPath:` where a URL was already
+  in hand. The eight that remain have no honest fix inside this package:
+  - Six `insecure-transport`, and they are inverted — the `http://mcp.example.com/token`
+    and `http://host.example` in `DiscoveryTests` are the *inputs* to
+    `#expect(throws: DiscoveryError.insecureEndpoint(...))`, and the
+    `http://evil.com/callback` in `OAuthServerTests` and `OAuthConsentTests` is the
+    unregistered URI a redirect-mismatch test exists to have refused. Taking the
+    checker's advice would make each of those tests assert the opposite of what it
+    proves. Note the rule already exempts `localhost` via `allowedHTTPHosts`, which is
+    why the many `http://localhost/callback` fixtures are silent: the principle is
+    established, the reserved-for-documentation names of RFC 2606 are simply not on the
+    list.
+  - One `ssrf` on a four-line test helper that parses a literal into a `URL` and makes no
+    request.
+  - One `hardcoded-secret` on a `credentials` local that interpolates a client secret
+    generated three lines earlier — matched on the variable's name, not on a literal.
+
+  These stay red. Renaming the variable, assembling the scheme from parts, or adding an
+  exemption comment would each clear the warning without changing anything true about the
+  code, which is the failure mode the gate exists to prevent.
 
 ## [0.4.0]
 

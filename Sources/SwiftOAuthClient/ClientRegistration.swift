@@ -102,7 +102,7 @@ public struct ClientRegistrationResponse: Codable, Sendable, Equatable {
     ///
     /// - Parameter environment: A label for these credentials.
     /// - Returns: The credentials. A public client gets an empty secret, and the
-    ///   authentication method it must then use is ``ClientAuthenticationMethod/none``.
+    ///   authentication method it must then use is `ClientAuthenticationMethod.none`.
     public func credentials(environment: String) -> ClientCredentials {
         ClientCredentials(
             environment: environment,
