@@ -283,7 +283,7 @@ struct OAuthServerTests {
             let authRequest = AuthorizationRequest(
                 responseType: "code",
                 clientId: client.clientId,
-                redirectUri: "http://evil.com/callback", // Wrong URI
+                redirectUri: "https://attacker.example/callback", // Wrong URI
                 scope: nil,
                 state: nil,
                 codeChallenge: nil,

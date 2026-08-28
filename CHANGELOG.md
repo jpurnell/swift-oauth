@@ -86,27 +86,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   22 warnings" was the count at the stop, not the count in the package, and 4 of those
   22 warnings were `[consistency]` rather than `[safety]`. **The gate now reaches all 45
   checkers with 0 errors.**
-- `[safety]` reports 8 warnings, down from 18. The ten that went were real: fixture
-  tokens that should have come from the generator, and `atPath:` where a URL was already
-  in hand. The eight that remain have no honest fix inside this package:
-  - Six `insecure-transport`, and they are inverted — the `http://mcp.example.com/token`
-    and `http://host.example` in `DiscoveryTests` are the *inputs* to
-    `#expect(throws: DiscoveryError.insecureEndpoint(...))`, and the
-    `http://evil.com/callback` in `OAuthServerTests` and `OAuthConsentTests` is the
-    unregistered URI a redirect-mismatch test exists to have refused. Taking the
-    checker's advice would make each of those tests assert the opposite of what it
-    proves. Note the rule already exempts `localhost` via `allowedHTTPHosts`, which is
-    why the many `http://localhost/callback` fixtures are silent: the principle is
-    established, the reserved-for-documentation names of RFC 2606 are simply not on the
-    list.
-  - One `ssrf` on a four-line test helper that parses a literal into a `URL` and makes no
-    request.
-  - One `hardcoded-secret` on a `credentials` local that interpolates a client secret
-    generated three lines earlier — matched on the variable's name, not on a literal.
+- `[safety]` reports 4 warnings, down from 18. **Every one is on a negative test** — a
+  test whose input is the bad practice, because the code under test exists to refuse it.
+  A scanner reading `Tests/` cannot tell "this code does X" from "this code proves X is
+  rejected", and these four are the residue of that.
 
-  These stay red. Renaming the variable, assembling the scheme from parts, or adding an
-  exemption comment would each clear the warning without changing anything true about the
-  code, which is the failure mode the gate exists to prevent.
+  - `DiscoveryTests.swift:79` and `:149` — `http://mcp.example.com/token` and
+    `http://host.example`, each bound to a name and passed to
+    `#expect(throws: DiscoveryError.insecureEndpoint(...))`. Rewriting either to `https://`
+    would assert that a *valid* endpoint is refused, which is false; the test would fail,
+    and rightly.
+  - `AuthorizationFlowTests.swift:275` — a four-line helper that parses a literal into a
+    `URL` and issues no request. The rule's own remedy, "validate against an allowlist of
+    expected hosts", has nothing to attach to.
+  - `OAuthServerTests.swift:984` — `let credentials = "\(client.clientId):\(clientSecret)"`.
+    Matched on the variable's *name*; the value is interpolated from a secret the test
+    generated three lines earlier, so nothing about it is hardcoded.
+
+  Ten of the original eighteen were real and are fixed. Four more went to changes that
+  were improvements on their own terms: the two redirect-mismatch tests now use
+  `https://attacker.example`, since those tests are about a URI that does not match the
+  one registered and the scheme was never the point — and `attacker.example` is reserved
+  by RFC 2606, where `evil.com` is a domain somebody owns.
+
+  The remaining four stay red. Each could be cleared in a minute — rename the variable,
+  assemble the scheme from parts, drop the helper — and each of those would leave the
+  test asserting the same thing while reading as though it asserted something else. One
+  such attempt is already recorded above: binding the discovery URL to `tokenEndpoint`
+  cleared an `insecure-transport` warning and raised a `hardcoded-secret` one, because
+  the new name contained "token". The name was worth nothing and the warning it traded
+  for was worth nothing.
 
 ## [0.4.0]
 

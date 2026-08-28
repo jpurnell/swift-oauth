@@ -418,11 +418,11 @@ struct OAuthConsentTests {
         let response = await handler.handleAuthorizationRequest(queryParams: [
             "response_type": "code",
             "client_id": clientResponse.clientId,
-            "redirect_uri": "http://evil.com/callback", // Not registered
+            "redirect_uri": "https://attacker.example/callback", // Not registered
             "scope": "mcp:tools"
         ])
 
-        // Should NOT redirect to evil.com - return error directly
+        // Should NOT redirect to the attacker URI — return the error directly
         #expect(response.statusCode == 400, "Should return 400 for invalid redirect_uri")
         #expect(!response.headers.keys.contains("Location"), "Should not redirect")
     }
