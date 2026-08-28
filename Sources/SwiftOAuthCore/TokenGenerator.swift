@@ -29,7 +29,10 @@ import Crypto
 /// // Hash for storage
 /// let hash = TokenGenerator.sha256Hash(accessToken)
 ///
-/// // Timing-safe validation
+/// // Timing-safe validation: `provided` came in on the request, `stored` is
+/// // what the database holds. Comparing with == would leak the match position.
+/// let provided = accessToken
+/// let stored = accessToken
 /// let isValid = TokenGenerator.timingSafeCompare(provided, stored)
 /// ```
 ///

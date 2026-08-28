@@ -17,20 +17,28 @@ import SwiftOAuthCore
 /// ## Example
 ///
 /// ```swift
-/// let storage = try OAuthStorage(path: "~/.businessmath-mcp/oauth.db")
-/// let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com")
+/// // The three request values arrive from the wire; this shows what the server
+/// // does with them, not how they are parsed.
+/// func serve(
+///     request: ClientRegistrationRequest,
+///     authRequest: AuthorizationRequest,
+///     tokenRequest: TokenRequest
+/// ) async throws {
+///     let storage = try OAuthStorage(path: "~/.businessmath-mcp/oauth.db")
+///     let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com")
 ///
-/// // Get server metadata
-/// let metadata = await server.getMetadata()
+///     // Get server metadata
+///     let metadata = await server.getMetadata()
 ///
-/// // Register a client
-/// let client = try await server.registerClient(request)
+///     // Register a client
+///     let client = try await server.registerClient(request)
 ///
-/// // Handle authorization
-/// let authResponse = try await server.handleAuthorizationRequest(authRequest)
+///     // Handle authorization
+///     let authResponse = try await server.handleAuthorizationRequest(authRequest)
 ///
-/// // Exchange code for tokens
-/// let tokens = try await server.handleTokenRequest(tokenRequest)
+///     // Exchange code for tokens
+///     let tokens = try await server.handleTokenRequest(tokenRequest)
+/// }
 /// ```
 public actor OAuthServer {
 

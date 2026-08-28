@@ -24,15 +24,17 @@ import Crypto
 /// ## Example
 ///
 /// ```swift
-/// let storage = try OAuthStorage(path: "~/.businessmath-mcp/oauth.db")
+/// func persist(client: RegisteredClient, token: String) async throws {
+///     let storage = try OAuthStorage(path: "~/.businessmath-mcp/oauth.db")
 ///
-/// // Store a client
-/// try await storage.saveClient(client)
+///     // Store a client
+///     try await storage.saveClient(client)
 ///
-/// // Validate a token
-/// let result = try await storage.validateAccessToken(token: token)
-/// if result.isValid {
-///     // Token is valid
+///     // Validate a token
+///     let result = try await storage.validateAccessToken(token: token)
+///     if result.isValid {
+///         // Token is valid
+///     }
 /// }
 /// ```
 public actor OAuthStorage {

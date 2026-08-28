@@ -25,7 +25,10 @@ import Crypto
 /// let challenge = try PKCE.generateCodeChallenge(verifier: verifier, method: .s256)
 /// // Store verifier securely, send challenge with auth request
 ///
-/// // Server side - token request
+/// // Server side - token request. The verifier arrives from the client; the
+/// // challenge is the one stored when the authorization request was made.
+/// let receivedVerifier = verifier
+/// let storedChallenge = challenge
 /// let isValid = try PKCE.verifyCodeChallenge(
 ///     verifier: receivedVerifier,
 ///     challenge: storedChallenge,
