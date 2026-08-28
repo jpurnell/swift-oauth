@@ -5,6 +5,32 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Every `## Usage` example compiles.** Nine `doc-comment-code` errors, surfaced
+  when that checker briefly entered the default set upstream. They had been wrong
+  for as long as they existed.
+
+  `PKCE` and `TokenGenerator` referred to values a server receives —
+  `receivedVerifier`, `storedChallenge`, `provided` — without saying where they
+  come from. Each is now bound to the value generated earlier in the same fence,
+  which also makes the round trip visible: the verifier the client kept is the one
+  the server checks against the challenge it stored.
+
+  `OAuthServer` and `OAuthStorage` now take their request objects and client as
+  function parameters rather than conjuring them. Constructing a
+  `ClientRegistrationRequest`, an `AuthorizationRequest` and a `TokenRequest`
+  inline would have buried what the examples are about — what the server *does*
+  with a request, not how one is parsed off the wire.
+
+### Known
+- `--check all` reports 25 errors and 22 warnings from `[safety]`, **every one in
+  `Tests/` and none in `Sources/`**: force unwraps, hardcoded test tokens, and
+  `http://` URLs in fixtures. A force unwrap in a test is frequently deliberate —
+  a nil there should fail loudly — so clearing these is a decision about test
+  style, not a defect sweep, and it has not been made.
+
 ## [0.4.0]
 
 ### Added
