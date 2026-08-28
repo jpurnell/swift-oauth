@@ -114,7 +114,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `hardcoded-secret` one, because the new name contained "token". Renaming code to satisfy
   a matcher moves findings around; it does not remove them.
 
-## [0.4.0]
+## [0.4.0] — 2026-08-06
 
 ### Added
 - **`GrantType.clientCredentials`** — RFC 6749 §4.4, the standard grant for
@@ -248,6 +248,10 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/jpurnell/SwiftOAuth/releases/tag/v0.0.1
 

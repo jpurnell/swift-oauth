@@ -47,7 +47,15 @@ problem, which is what stops each caller reinventing them slightly differently.
 
 ## Status
 
-Scaffolded. See [`project/master_plan.md`](project/master_plan.md) for what is built and
+Built and adopted. Both halves ship, and `project/master_plan.md` records the three
+adoptions that exercised them: LedgeOS on the client half, SwiftMCPServer and
+SwiftMCPClient on the provider half. 232 tests; the quality gate runs 45 checkers with no
+errors and no warnings.
+
+RFC 8707 resource indicators are the known gap — required by MCP's 2025-06-18 revision to
+bind an access token to a specific server, and additive when a consumer needs it.
+
+See [`project/master_plan.md`](project/master_plan.md) for what is built and
 [`project/plans/proposals/SwiftOAuthDesign.md`](project/plans/proposals/SwiftOAuthDesign.md)
 for the design.
 
