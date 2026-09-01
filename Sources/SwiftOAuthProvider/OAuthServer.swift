@@ -136,7 +136,8 @@ public actor OAuthServer {
             redirectUris: request.redirectUris,
             grantTypes: request.grantTypes,
             tokenEndpointAuthMethod: request.tokenEndpointAuthMethod,
-            registrationDate: Date()
+            registrationDate: Date(),
+            applicationType: request.applicationType
         )
 
         try await storage.saveClient(client)
@@ -147,7 +148,8 @@ public actor OAuthServer {
             clientName: request.clientName,
             redirectUris: request.redirectUris,
             grantTypes: request.grantTypes,
-            tokenEndpointAuthMethod: request.tokenEndpointAuthMethod
+            tokenEndpointAuthMethod: request.tokenEndpointAuthMethod,
+            applicationType: request.applicationType
         )
     }
 
@@ -217,7 +219,8 @@ public actor OAuthServer {
 
         return AuthorizationResponse(
             code: code,
-            state: request.state
+            state: request.state,
+            issuer: issuer
         )
     }
 
@@ -589,6 +592,12 @@ public struct ClientRegistrationResponse: Codable, Sendable {
     public let grantTypes: [String]
     /// Token endpoint authentication method for this client
     public let tokenEndpointAuthMethod: String
+    /// The kind of application this client registered as.
+    ///
+    /// Echoed back so the client can confirm the server recorded what it declared, which is the
+    /// point of MCP `2026-07-28` requiring the field: a silent disagreement here is exactly the
+    /// redirect-URI conflict it guards against.
+    public let applicationType: ApplicationType
 
     private enum CodingKeys: String, CodingKey {
         case clientId = "client_id"
@@ -597,6 +606,7 @@ public struct ClientRegistrationResponse: Codable, Sendable {
         case redirectUris = "redirect_uris"
         case grantTypes = "grant_types"
         case tokenEndpointAuthMethod = "token_endpoint_auth_method"
+        case applicationType = "application_type"
     }
 }
 
@@ -647,11 +657,18 @@ public struct AuthorizationResponse: Sendable {
     public let code: String
     /// The state parameter echoed back from the request
     public let state: String?
+    /// The identifier of the authorization server that issued this code.
+    ///
+    /// Required by RFC 9207 and by MCP `2026-07-28`. A client must validate it against the
+    /// issuer it recorded before redeeming the code: without it, a code issued by one
+    /// authorization server can be replayed against another the client also trusts.
+    public let issuer: String?
 
     /// Creates a new authorization response
-    public init(code: String, state: String?) {
+    public init(code: String, state: String?, issuer: String? = nil) {
         self.code = code
         self.state = state
+        self.issuer = issuer
     }
 }
 
