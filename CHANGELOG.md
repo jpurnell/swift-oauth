@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-09-01
+
+### Added
+- **`OAuthConnection.refreshedAccessToken()` — refresh now, whatever the clock says.**
+  `validAccessToken()` refreshes on expiry, which handles every case it can see. It cannot
+  see the provider deciding a still-valid-looking token is no longer honoured: a revoked
+  grant, a drifted clock, a dynamic client registration that expired underneath the
+  credential it issued (RFC 7591 `client_secret_expires_at`). In all of those the only
+  evidence is a `401` from an API call, and the only recovery is an exchange the local clock
+  says is unnecessary.
+
+  Requested by SwiftMCPClient, which cannot recover from a rejected token without it — a
+  transport that refreshes only on predicted expiry has no answer to a server that refuses
+  a token the clock says is fine.
+
+  It joins a refresh already in flight rather than starting a second, including an ordinary
+  one, because racing an exchange invalidates the token that exchange is about to return.
+  A refusal arrives as `ConnectionError.reauthorizationRequired(hadPreviousToken:)`, which
+  is the distinction a caller acts on: a revoked grant and a lost rotation need opposite
+  responses. Deliberately **not** a routine call — against a rotating provider, forcing a
+  refresh on a healthy connection spends a rotation for a token no better than the one held.
+
+  Seven tests, written first.
+
 ## [Unreleased]
 
 ## [0.5.0] — 2026-08-28

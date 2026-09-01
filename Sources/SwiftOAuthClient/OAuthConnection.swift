@@ -237,6 +237,37 @@ public actor OAuthConnection {
         return try await refreshed(from: stored).accessToken
     }
 
+    /// An access token obtained by refreshing now, whatever the clock says.
+    ///
+    /// ``validAccessToken()`` refreshes on expiry, which is right for the case it can see. This
+    /// is for the case it cannot: the *provider* has stopped honouring a token that still looks
+    /// valid here — a revoked grant, a drifted clock, a dynamic client registration that
+    /// expired underneath the credential it issued. The only evidence is a `401` from an API
+    /// call, and the only recovery is an exchange the local clock says is unnecessary.
+    ///
+    /// **Not a routine call.** Against a provider that rotates, every refresh invalidates the
+    /// token it replaces, so forcing one on a healthy connection spends a rotation to obtain a
+    /// token no better than the one already held. Call it when a request has been refused, not
+    /// before sending one.
+    ///
+    /// Joins a refresh already under way rather than starting a second — including an ordinary
+    /// one. That exchange is already producing a fresh token, and racing it would invalidate
+    /// the token it is about to return. The consequence worth knowing: a `401` that arrives
+    /// during someone else's refresh is answered with that refresh's result, which in the rare
+    /// case where it began before the rejection may be the token that was just refused. The
+    /// caller sees a second failure rather than a wrong success.
+    ///
+    /// - Returns: A freshly issued access token.
+    /// - Throws: ``ConnectionError/notConnected`` if nothing is stored,
+    ///   ``ConnectionError/reauthorizationRequired(hadPreviousToken:)`` if the provider refused
+    ///   the refresh token, or `OAuthError` for anything else it said.
+    public func refreshedAccessToken() async throws -> String {
+        guard let stored = try await storage.credential(for: connection) else {
+            throw ConnectionError.notConnected
+        }
+        return try await refreshed(from: stored).accessToken
+    }
+
     /// The stored credential, if any. For inspection — a caller wanting a token should use
     /// ``validAccessToken()``.
     public func currentCredential() async throws -> StoredCredential? {
