@@ -18,3 +18,9 @@ DerivedData/
 #*#
 .#*
 *~
+
+# Planning docs — master plan, proposals, session summaries. Kept on disk and out of the
+# repository: this is a published library, and the plans behind it are working notes rather
+# than part of what is being published. They were stripped from history when this repository
+# became the public one, so nothing here re-adds them by accident.
+project/
