@@ -8,6 +8,14 @@ public enum ClientIDMetadataError: Error, Sendable, Equatable {
     case noRedirectUris
     /// The identifier was not an https URL.
     case notHTTPS(String)
+    /// The host is private, loopback or link-local, and must not be fetched from.
+    case restrictedAddress(String)
+    /// The response redirected. Redirects are not followed for metadata documents.
+    case redirected(from: String, to: String)
+    /// The response was not `200 OK`.
+    case unexpectedStatus(Int)
+    /// The document exceeded the byte cap.
+    case documentTooLarge(Int)
 }
 
 /// A client's metadata, published by the client at its own https URL.
