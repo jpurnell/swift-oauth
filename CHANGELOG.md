@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — `feat/mcp-2026-07-28`
+
+Authorization changes required by MCP `2026-07-28`. On a local branch; nothing is published.
+
+### Added
+- **RFC 9207 issuer identification.** `AuthorizationResponse` carries the issuer that produced
+  the code. A client validates it against the issuer it recorded before redeeming: without it, a
+  code issued by one authorization server can be replayed against another the client also trusts.
+- **`application_type` in Dynamic Client Registration**, `web` or `native`, defaulting to `web`
+  per RFC 7591. Recorded on the client and echoed in the registration response, so a client can
+  confirm the server stored what it declared — a silent disagreement is the redirect-URI conflict
+  the field exists to prevent.
+- **`ClientIDMetadataDocument`**, which MCP `2026-07-28` prefers over DCR. A client *is* an https
+  URL and publishes its metadata there. The self-reference check — the document's `client_id`
+  must equal the URL it was fetched from — is load-bearing: without it any host could publish a
+  document claiming to be someone else's client. A metadata-document client is public by
+  construction and registers with `token_endpoint_auth_method` `none`.
+
+  **Model and validation only.** Fetching the document over the network is deliberately not
+  included: it needs an injectable transport and an SSRF-safe fetch policy (https only, no
+  cross-origin redirects, no private or loopback addresses, size cap, timeout). The document
+  decides *who a client is*, so a permissive fetch is an authentication bypass rather than a
+  performance question, and it deserves its own change with its own adversarial tests.
+
+### Fixed
+- **`RegisteredClient` decodes records written before `application_type` existed.** The
+  synthesized decoder made the new field required, which would have made every client already
+  persisted in SQLite undecodable — the store would have lost every registration it held. An
+  existing `OAuthModelsTests` decode caught it.
+
 ## [0.6.0] — 2026-09-01
 
 ### Added
