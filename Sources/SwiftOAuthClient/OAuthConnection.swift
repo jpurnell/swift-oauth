@@ -132,6 +132,12 @@ public actor OAuthConnection {
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: PKCE.ChallengeMethod.s256.rawValue)
         ]
+        // RFC 8707. Appended rather than always present: a server that does not implement
+        // resource indicators may reject an unexpected empty parameter, and a client with no
+        // resource configured has nothing to say.
+        if let resource = configuration.resourceParameter {
+            components?.queryItems?.append(URLQueryItem(name: "resource", value: resource))
+        }
         return components?.url ?? configuration.authorizationEndpoint
     }
 
@@ -201,14 +207,22 @@ public actor OAuthConnection {
         verifier: String,
         redirectURI: String
     ) async throws -> StoredCredential {
+        var parameters = [
+            "grant_type": GrantType.authorizationCode.rawValue,
+            "code": authorizationCode,
+            "redirect_uri": redirectURI,
+            "code_verifier": verifier
+        ]
+        // RFC 8707 §2 requires the resource on the token request as well as the authorization
+        // request: the first says what to consent to, the second is what actually asks for the
+        // audience.
+        if let resource = configuration.resourceParameter {
+            parameters["resource"] = resource
+        }
+
         let response = try await transport.exchange(
             endpoint: configuration.tokenEndpoint,
-            parameters: [
-                "grant_type": GrantType.authorizationCode.rawValue,
-                "code": authorizationCode,
-                "redirect_uri": redirectURI,
-                "code_verifier": verifier
-            ],
+            parameters: parameters,
             credentials: credentials,
             method: configuration.authenticationMethod)
 
@@ -307,12 +321,20 @@ public actor OAuthConnection {
         }
 
         let task = Task<StoredCredential, Error> { [configuration, credentials, transport, now] in
+            var parameters = [
+                "grant_type": GrantType.refreshToken.rawValue,
+                "refresh_token": stored.refreshToken
+            ]
+            // Carried on the refresh too. A token refreshed without it can come back audienced
+            // to something else — or to nothing — which surfaces as `invalid_audience` at the
+            // resource, long after the sign-in that would explain it.
+            if let resource = configuration.resourceParameter {
+                parameters["resource"] = resource
+            }
+
             let response = try await transport.exchange(
                 endpoint: configuration.tokenEndpoint,
-                parameters: [
-                    "grant_type": GrantType.refreshToken.rawValue,
-                    "refresh_token": stored.refreshToken
-                ],
+                parameters: parameters,
                 credentials: credentials,
                 method: configuration.authenticationMethod)
 

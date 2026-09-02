@@ -25,6 +25,25 @@ public struct ProviderConfiguration: Sendable, Equatable {
     /// How the client authenticates at the token endpoint.
     public let authenticationMethod: ClientAuthenticationMethod
 
+    /// The API a token from this provider is *for* — RFC 8707's resource indicator.
+    ///
+    /// Without it a token is audience-less. An authorization server protecting several
+    /// resources issues something all of them accept, so a token obtained for one service can
+    /// be replayed against another; naming the resource is what lets the server bind an
+    /// audience, and what lets a resource reject a token minted for somewhere else.
+    ///
+    /// MCP's 2025-06-18 revision **requires** clients to send this, as the canonical URI of
+    /// the MCP server.
+    ///
+    /// Normalised on the way in: RFC 8707 §2 requires an absolute URI with no fragment, and a
+    /// fragment is a client-side concept the server never sees — leaving one on makes two
+    /// clients asking for the same audience look like they asked for different ones.
+    ///
+    /// One resource, not several. RFC 8707 permits the parameter to repeat; token requests
+    /// here carry form parameters as a dictionary, which cannot express a repeated key, and
+    /// the case needing several has no consumer yet.
+    public let resource: URL?
+
     /// Creates a provider configuration.
     public init(
         identifier: String,
@@ -32,7 +51,8 @@ public struct ProviderConfiguration: Sendable, Equatable {
         tokenEndpoint: URL,
         revocationEndpoint: URL? = nil,
         scope: String,
-        authenticationMethod: ClientAuthenticationMethod = .clientSecretBasic
+        authenticationMethod: ClientAuthenticationMethod = .clientSecretBasic,
+        resource: URL? = nil
     ) {
         self.identifier = identifier
         self.authorizationEndpoint = authorizationEndpoint
@@ -40,6 +60,30 @@ public struct ProviderConfiguration: Sendable, Equatable {
         self.revocationEndpoint = revocationEndpoint
         self.scope = scope
         self.authenticationMethod = authenticationMethod
+        self.resource = Self.canonical(resource)
+    }
+
+    /// The form RFC 8707 §2 requires: absolute, and without a fragment.
+    ///
+    /// - Parameter resource: The resource as configured.
+    /// - Returns: The canonical URI, or `nil` if there was none or it is not absolute.
+    private static func canonical(_ resource: URL?) -> URL? {
+        guard let resource,
+              var components = URLComponents(url: resource, resolvingAgainstBaseURL: false),
+              components.scheme != nil else {
+            return nil
+        }
+        components.fragment = nil
+        return components.url
+    }
+
+    /// The resource indicator as a request parameter, when there is one.
+    ///
+    /// A single place so the authorization request, the code exchange and the refresh cannot
+    /// disagree about it — RFC 8707 requires it on all three, and a token refreshed without it
+    /// can come back audienced to something else long after the sign-in that would explain it.
+    var resourceParameter: String? {
+        resource?.absoluteString
     }
 }
 

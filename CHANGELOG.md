@@ -29,6 +29,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Seven tests, written first.
 
+## Unreleased — RFC 8707
+
+Sits below the `feat/mcp-2026-07-28` section above because it landed on that branch. No
+version is claimed: 0.7.0 was tagged in error against a feature branch and the tag removed.
+
+### Added
+- **RFC 8707 resource indicators.** `ProviderConfiguration.resource` names the API a token is
+  *for*, and it is sent on the authorization request, the code exchange, and every refresh —
+  §2 requires all three, and a token refreshed without it can come back audienced to something
+  else, surfacing as `invalid_audience` at the resource long after the sign-in that would
+  explain it.
+
+  Without this a token is audience-less: an authorization server protecting several resources
+  issues something all of them accept, so a token obtained for one service can be replayed
+  against another.
+
+  **MCP's 2025-06-18 revision requires clients to send it**, naming the canonical URI of the
+  MCP server — so until now every MCP client built on this package was non-conformant with the
+  revision it was otherwise implementing. `master_plan.md` had recorded the gap since the
+  package was extracted.
+
+  The value is normalised on the way in: RFC 8707 §2 requires an absolute URI with no fragment,
+  and a fragment is a client-side concept the server never sees. A query string is kept, being
+  part of what identifies the resource. One resource rather than several — the RFC permits the
+  parameter to repeat, and token requests here carry form parameters as a dictionary, which
+  cannot express a repeated key.
+
+  Additive: a defaulted initialiser parameter, `nil` reproducing today's behaviour exactly.
+  Six tests, written first.
+
 ## [Unreleased]
 
 ## [0.5.0] — 2026-08-28
