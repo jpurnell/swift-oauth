@@ -1,4 +1,10 @@
 import Foundation
+#if canImport(FoundationNetworking)
+// `URLSession` and `URLRequest` live here on Linux rather than in Foundation. Without this the
+// whole file fails to compile there, which is how this package was Linux-broken while every
+// macOS build stayed green.
+import FoundationNetworking
+#endif
 import SwiftOAuthCore
 
 /// Carries a token request to a provider and brings back its answer.
@@ -27,7 +33,11 @@ public protocol TokenTransport: Sendable {
 }
 
 /// A transport over `URLSession`.
-public struct URLSessionTokenTransport: TokenTransport {
+/// `URLSession` is thread-safe and documented as such, but corelibs-foundation does not mark
+/// it `Sendable` — so the stored property passes the check on Apple platforms and fails on
+/// Linux alone. The value is immutable and never mutated after init.
+// Justification: URLSession is thread-safe; the stored session is immutable after init.
+public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
 
     private let session: URLSession
 

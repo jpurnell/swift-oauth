@@ -29,6 +29,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Seven tests, written first.
 
+## Unreleased — Linux support
+
+### Fixed
+- **This package did not compile on Linux at all.** Two files, and neither failure could show
+  up on a Mac: `TokenTransport` uses `URLSession` and `URLRequest`, which live in
+  `FoundationNetworking` rather than `Foundation` there; and `EncryptedFileClientStorage` logs
+  through `os.Logger`, which is Apple-only, with the import guarded and every call site not.
+
+  `URLSessionTokenTransport` is now `@unchecked Sendable`: `URLSession` is thread-safe and
+  documented as such, but corelibs-foundation does not mark it `Sendable`, so the stored
+  property passed on Apple platforms and failed on Linux alone.
+
+  Found by SwiftMCPClient's CI, which had been **disabled at the repository level since
+  2026-07-04** and was re-enabled 2026-09-01. Eighty-six errors, all of them here and none in
+  the client.
+
+  Logging on Linux is absent rather than replaced. What a caller acts on is the thrown error,
+  which is identical everywhere; only the operator's breadcrumb is missing, and four lines did
+  not justify a logging dependency.
+
 ## Unreleased — RFC 8707
 
 Sits below the `feat/mcp-2026-07-28` section above because it landed on that branch. No

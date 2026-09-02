@@ -55,8 +55,10 @@ public actor EncryptedFileClientStorage: OAuthClientStorage {
     /// "could not write" and can do nothing with a `CocoaError` code. But a reason has to
     /// survive somewhere, or an operator debugging a store that will not open has nothing at
     /// all. Errors only — nothing here logs a credential.
+    #if canImport(os)
     private static let logger = Logger(
         subsystem: "com.swiftoauth.client", category: "EncryptedFileClientStorage")
+    #endif
 
     private let url: URL
     private let key: SymmetricKey
@@ -142,8 +144,10 @@ public actor EncryptedFileClientStorage: OAuthClientStorage {
             // Distinct from "could not be opened", which throws — an unreadable file must not
             // be mistaken for a first run. Logged at debug because it is also the answer to
             // "why am I being asked to sign in again": the file was not there.
+            #if canImport(os)
             Self.logger.debug(
                 "no credential file yet; treating as first run: \(String(describing: error), privacy: .public)")
+            #endif
             cache = [:]
             return [:]
         } catch {
@@ -158,8 +162,10 @@ public actor EncryptedFileClientStorage: OAuthClientStorage {
             // A wrong key and a tampered file arrive here identically, and both must throw.
             // Returning empty would look like a first run and invite a caller to overwrite a
             // file it could not read.
+            #if canImport(os)
             Self.logger.error(
                 "credential file could not be opened with this key: \(String(describing: error), privacy: .public)")
+            #endif
             throw StorageError.cannotDecrypt
         }
 
@@ -169,8 +175,10 @@ public actor EncryptedFileClientStorage: OAuthClientStorage {
             cache = credentials
             return credentials
         } catch {
+            #if canImport(os)
             Self.logger.error(
                 "credential file decrypted but did not decode: \(String(describing: error), privacy: .public)")
+            #endif
             throw StorageError.unreadable
         }
     }
@@ -199,8 +207,10 @@ public actor EncryptedFileClientStorage: OAuthClientStorage {
             // Every failure here is the same to a caller: nothing durable was written, and
             // after a rotation that costs the connection unless they retry. The reason is
             // logged because "could not write" alone leaves an operator nothing to go on.
+            #if canImport(os)
             Self.logger.error(
                 "credentials could not be written: \(String(describing: error), privacy: .public)")
+            #endif
             throw StorageError.cannotWrite
         }
 
