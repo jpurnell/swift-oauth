@@ -11,7 +11,7 @@ import SwiftOAuthCore
 /// ## Topics
 ///
 /// ### Creating Clients
-/// - ``init(clientId:clientSecret:clientName:redirectUris:grantTypes:tokenEndpointAuthMethod:registrationDate:)``
+/// - ``init(clientId:clientSecret:clientName:redirectUris:grantTypes:tokenEndpointAuthMethod:registrationDate:applicationType:)``
 ///
 /// ### Client Properties
 /// - ``clientId``
@@ -58,6 +58,12 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
     /// When this client was registered
     public let registrationDate: Date
 
+    /// The kind of application this client is.
+    ///
+    /// Recorded at registration so redirect-URI validation can distinguish a native client from
+    /// a web one, which is the conflict MCP `2026-07-28` requires clients to declare against.
+    public let applicationType: ApplicationType
+
     /// Creates a new registered client
     /// - Parameters:
     ///   - clientId: Unique identifier for the client
@@ -67,6 +73,9 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
     ///   - grantTypes: Authorized grant types
     ///   - tokenEndpointAuthMethod: Token endpoint auth method
     ///   - registrationDate: Registration timestamp
+    ///   - applicationType: Whether the client is a web or native application. Defaults to
+    ///     ``ApplicationType/web`` per RFC 7591, which is also the correct reading of a record
+    ///     written before this field existed.
     public init(
         clientId: String,
         clientSecret: String?,
@@ -74,7 +83,8 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         redirectUris: [String],
         grantTypes: [String],
         tokenEndpointAuthMethod: String,
-        registrationDate: Date
+        registrationDate: Date,
+        applicationType: ApplicationType = .web
     ) {
         self.clientId = clientId
         self.clientSecret = clientSecret
@@ -83,6 +93,7 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         self.grantTypes = grantTypes
         self.tokenEndpointAuthMethod = tokenEndpointAuthMethod
         self.registrationDate = registrationDate
+        self.applicationType = applicationType
     }
 
     // MARK: - Codable
@@ -95,7 +106,42 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         case grantTypes = "grant_types"
         case tokenEndpointAuthMethod = "token_endpoint_auth_method"
         case registrationDate = "registration_date"
+        case applicationType = "application_type"
     }
+
+    /// Decodes a registered client, defaulting `application_type` when it is absent.
+    ///
+    /// The field was added for MCP `2026-07-28`. Every client registered before then is already
+    /// persisted without it, so requiring it would make those records undecodable — the store
+    /// would lose every client it had. RFC 7591 makes `web` the default, which is also the
+    /// correct reading of a record written when the field did not exist.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        clientId = try container.decode(String.self, forKey: .clientId)
+        clientSecret = try container.decodeIfPresent(String.self, forKey: .clientSecret)
+        clientName = try container.decode(String.self, forKey: .clientName)
+        redirectUris = try container.decode([String].self, forKey: .redirectUris)
+        grantTypes = try container.decode([String].self, forKey: .grantTypes)
+        tokenEndpointAuthMethod = try container.decode(
+            String.self, forKey: .tokenEndpointAuthMethod)
+        registrationDate = try container.decode(Date.self, forKey: .registrationDate)
+        applicationType =
+            try container.decodeIfPresent(ApplicationType.self, forKey: .applicationType) ?? .web
+    }
+}
+
+// MARK: - ApplicationType
+
+/// The kind of application registering as an OAuth client.
+///
+/// MCP `2026-07-28` requires clients to declare this during Dynamic Client Registration, to
+/// avoid the OpenID Connect redirect-URI conflicts that arise when a native and a web client
+/// register the same URI. RFC 7591 defines `web` as the default when the field is omitted.
+public enum ApplicationType: String, Codable, Sendable, Equatable {
+    /// A client whose redirect URIs are https URLs it controls.
+    case web
+    /// A client installed on a device, using a custom scheme or loopback redirect.
+    case native
 }
 
 // MARK: - ClientRegistrationRequest
@@ -132,6 +178,13 @@ public struct ClientRegistrationRequest: Codable, Sendable, Equatable {
     /// Requested scope (optional)
     public let scope: String?
 
+    /// The kind of application registering.
+    ///
+    /// Required by MCP `2026-07-28`. Defaults to ``ApplicationType/web`` per RFC 7591 when a
+    /// client omits it — not to `nil`, which would leave the redirect-URI conflict this field
+    /// exists to prevent unresolved.
+    public let applicationType: ApplicationType
+
     /// Creates a client registration request
     /// - Parameters:
     ///   - clientName: Human-readable name for the client
@@ -139,18 +192,22 @@ public struct ClientRegistrationRequest: Codable, Sendable, Equatable {
     ///   - grantTypes: Requested grant types
     ///   - tokenEndpointAuthMethod: Token endpoint auth method
     ///   - scope: Requested scope
+    ///   - applicationType: Whether the client is a web or native application. Required by MCP
+    ///     `2026-07-28`; defaults to ``ApplicationType/web`` per RFC 7591 when omitted.
     public init(
         clientName: String,
         redirectUris: [String],
         grantTypes: [String] = ["authorization_code"],
         tokenEndpointAuthMethod: String = "client_secret_basic",
-        scope: String? = nil
+        scope: String? = nil,
+        applicationType: ApplicationType = .web
     ) {
         self.clientName = clientName
         self.redirectUris = redirectUris
         self.grantTypes = grantTypes
         self.tokenEndpointAuthMethod = tokenEndpointAuthMethod
         self.scope = scope
+        self.applicationType = applicationType
     }
 
     // MARK: - Codable
@@ -161,6 +218,7 @@ public struct ClientRegistrationRequest: Codable, Sendable, Equatable {
         case grantTypes = "grant_types"
         case tokenEndpointAuthMethod = "token_endpoint_auth_method"
         case scope
+        case applicationType = "application_type"
     }
 
     /// Decodes a client registration request from the given decoder
@@ -171,6 +229,8 @@ public struct ClientRegistrationRequest: Codable, Sendable, Equatable {
         self.grantTypes = try container.decodeIfPresent([String].self, forKey: .grantTypes) ?? ["authorization_code"]
         self.tokenEndpointAuthMethod = try container.decodeIfPresent(String.self, forKey: .tokenEndpointAuthMethod) ?? "client_secret_basic"
         self.scope = try container.decodeIfPresent(String.self, forKey: .scope)
+        self.applicationType =
+            try container.decodeIfPresent(ApplicationType.self, forKey: .applicationType) ?? .web
     }
 }
 

@@ -5,6 +5,49 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-09-02
+
+Authorization changes required by MCP `2026-07-28`.
+
+### Added
+- **RFC 9207 issuer identification.** `AuthorizationResponse` carries the issuer that produced
+  the code. A client validates it against the issuer it recorded before redeeming: without it, a
+  code issued by one authorization server can be replayed against another the client also trusts.
+- **`application_type` in Dynamic Client Registration**, `web` or `native`, defaulting to `web`
+  per RFC 7591. Recorded on the client and echoed in the registration response, so a client can
+  confirm the server stored what it declared — a silent disagreement is the redirect-URI conflict
+  the field exists to prevent.
+- **`ClientIDMetadataDocument`**, which MCP `2026-07-28` prefers over DCR. A client *is* an https
+  URL and publishes its metadata there. The self-reference check — the document's `client_id`
+  must equal the URL it was fetched from — is load-bearing: without it any host could publish a
+  document claiming to be someone else's client. A metadata-document client is public by
+  construction and registers with `token_endpoint_auth_method` `none`.
+
+- **Fetching a metadata document, with an SSRF-safe policy.** The fetch is an authentication
+  control, not plumbing: the document decides *who a client is*, so a permissive fetch lets an
+  attacker point the authorization server at a document of their choosing, or at an internal
+  address it can reach and they cannot.
+
+  https only, refused **before any request is made** — a test asserts the transport was never
+  called for a rejected scheme. The identifier is validated as `URLComponents` and only then
+  turned into a `URL`, so an uncleared identifier never becomes fetchable. Redirects are not
+  followed and the transport is documented as forbidden from following them, because that
+  decision must live in one place. Private, loopback and link-local addresses are refused,
+  `169.254.169.254` among them. A 64KB cap bounds the read. The self-reference check still
+  applies after fetching.
+
+  Twelve adversarial cases, written before the implementation existed; the happy path is one of
+  them. **Known limitation, documented on the type:** host checks apply to the URL, so a
+  hostname that *resolves* to a private address is not caught. Closing DNS rebinding needs
+  resolve-check-pin-and-connect, so a deployment treating untrusted identifiers as reachable
+  should also restrict egress at the network layer.
+
+### Fixed
+- **`RegisteredClient` decodes records written before `application_type` existed.** The
+  synthesized decoder made the new field required, which would have made every client already
+  persisted in SQLite undecodable — the store would have lost every registration it held. An
+  existing `OAuthModelsTests` decode caught it.
+
 ## [0.7.0] — 2026-09-01
 
 ### Fixed
