@@ -99,8 +99,9 @@ public actor OAuthStorage {
     /// Raised whenever the shape of a table changes. Version 1 added `access_tokens.audience`
     /// for RFC 8707; version 2 added `device_codes` for RFC 8628; version 3 added
     /// `pushed_requests` for RFC 9126; version 4 added `access_tokens.key_thumbprint` and
-    /// `dpop_proofs` for RFC 9449.
-    public static let currentSchemaVersion = 4
+    /// `dpop_proofs` for RFC 9449; version 5 added `access_tokens.certificate_thumbprint`
+    /// for RFC 8705.
+    public static let currentSchemaVersion = 5
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -287,6 +288,20 @@ public actor OAuthStorage {
             try executeStatic(
                 db: db,
                 sql: "CREATE INDEX IF NOT EXISTS idx_dpop_proofs_expires ON dpop_proofs(expires_at)")
+        }
+
+        // Version 5: RFC 8705 — the certificate a token is bound to.
+        //
+        // A second column rather than a reuse of `key_thumbprint`: the two are different
+        // identifiers of different things — a JWK thumbprint of a key the client generated,
+        // against a SHA-256 of a certificate someone issued — and a single column would make
+        // "which kind of binding is this" a question the schema could not answer.
+        if version < 5 && targetVersion >= 5 {
+            if try !columnExists(db: db, table: "access_tokens", column: "certificate_thumbprint") {
+                try executeStatic(
+                    db: db,
+                    sql: "ALTER TABLE access_tokens ADD COLUMN certificate_thumbprint TEXT")
+            }
         }
 
         if version < targetVersion {
@@ -590,15 +605,16 @@ public actor OAuthStorage {
         scope: String?,
         expiresAt: Date,
         audience: URL? = nil,
-        keyThumbprint: String? = nil
+        keyThumbprint: String? = nil,
+        certificateThumbprint: String? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO access_tokens
             (token_hash, client_id, scope, expires_at, created_at, revoked, audience,
-             key_thumbprint)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+             key_thumbprint, certificate_thumbprint)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
         """, parameters: [
             tokenHash,
             clientId,
@@ -606,7 +622,8 @@ public actor OAuthStorage {
             expiresAt.timeIntervalSince1970,
             Date().timeIntervalSince1970,
             audience?.absoluteString as Any,
-            keyThumbprint as Any
+            keyThumbprint as Any,
+            certificateThumbprint as Any
         ])
     }
 
@@ -618,7 +635,8 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked, audience, key_thumbprint
+            SELECT client_id, scope, expires_at, revoked, audience, key_thumbprint,
+                   certificate_thumbprint
             FROM access_tokens
             WHERE token_hash = ?
         """
@@ -653,8 +671,10 @@ public actor OAuthStorage {
         }
 
         let thumbprint = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+        let certificate = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
         return .valid(TokenValidationResult.ValidatedToken(
-            clientId: clientId, scope: scope, audience: audience, keyThumbprint: thumbprint))
+            clientId: clientId, scope: scope, audience: audience,
+            keyThumbprint: thumbprint, certificateThumbprint: certificate))
     }
 
     /// Everything RFC 7662 reports about an access token.

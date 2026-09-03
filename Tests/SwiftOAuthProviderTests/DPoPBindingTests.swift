@@ -178,3 +178,67 @@ struct BoundTokenSchemeTests {
         #expect(reason.contains("DPoP"), "the reason should name the scheme to use")
     }
 }
+
+/// Certificate-bound tokens on the provider — RFC 8705 §3.
+///
+/// The mTLS counterpart to the DPoP binding. Both record which key a token belongs to; they
+/// differ only in what identifies the key. A token may carry one or neither — never both, since
+/// a client proves possession one way per connection.
+@Suite("RFC 8705 — certificate-bound tokens")
+struct CertificateBoundTokenTests {
+
+    private func makeHandler() async throws -> (OAuthHTTPHandler, OAuthStorage) {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(
+            storage: storage, issuer: "https://mcp.example.com",
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
+        return (await OAuthHTTPHandler(server: server), storage)
+    }
+
+    /// A token issued against a certificate records its thumbprint.
+    @Test("An issued token records the certificate it is bound to")
+    func tokenRecordsItsCertificate() async throws {
+        let (_, storage) = try await makeHandler()
+        let thumbprint = CertificateBinding.thumbprint(ofDER: Data([0xAA, 0xBB]))
+
+        try await storage.saveAccessToken(
+            token: "cert-bound", clientId: "c1", scope: "read",
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            certificateThumbprint: thumbprint)
+
+        let result = try await storage.validateAccessToken(token: "cert-bound")
+        guard case .valid(let token) = result else {
+            Issue.record("expected a valid token, got \(result)")
+            return
+        }
+        #expect(token.certificateThumbprint == thumbprint)
+    }
+
+    /// A certificate-bound token is refused at the bearer entry point, for the same reason a
+    /// DPoP-bound one is: accepting it there accepts it without checking the certificate, and
+    /// the binding is silently gone.
+    @Test("A certificate-bound token is refused as a bearer token")
+    func certificateBoundTokenIsNotABearerToken() async throws {
+        let (handler, storage) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "cert-bearer", clientId: "c1", scope: nil,
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            certificateThumbprint: CertificateBinding.thumbprint(ofDER: Data([0xAA])))
+
+        let result = await handler.validateBearerToken(authHeader: "Bearer cert-bearer")
+
+        #expect(!result.isValid,
+                "a certificate-bound token validated as a bearer token; the binding was lost")
+    }
+
+    /// An unbound token is unaffected, or every existing consumer breaks.
+    @Test("An unbound token is still a valid bearer token")
+    func unboundTokenUnaffected() async throws {
+        let (handler, storage) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "ordinary", clientId: "c1", scope: nil,
+            expiresAt: Date().addingTimeInterval(3600), audience: nil)
+
+        #expect(await handler.validateBearerToken(authHeader: "Bearer ordinary").isValid)
+    }
+}

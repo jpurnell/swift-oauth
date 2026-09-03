@@ -429,10 +429,20 @@ public struct OAuthHTTPHandler: Sendable {
             // Every consumer with a `Bearer` path would otherwise have to know that bound
             // tokens exist and write this check themselves, and the consumer who has not read
             // the DPoP notes is exactly the one it protects.
-            if case .valid(let validated) = result, validated.keyThumbprint != nil {
-                return .invalid(
-                    reason: "This token is bound to a key and must be presented with the DPoP "
-                        + "scheme, with a proof — not as a bearer token.")
+            if case .valid(let validated) = result {
+                if validated.keyThumbprint != nil {
+                    return .invalid(
+                        reason: "This token is bound to a key and must be presented with the "
+                            + "DPoP scheme, with a proof — not as a bearer token.")
+                }
+                if validated.certificateThumbprint != nil {
+                    // RFC 8705 §3: the same failure with a different key. Accepting it here
+                    // accepts it without the certificate being checked, and the binding is
+                    // gone with nothing to show for it.
+                    return .invalid(
+                        reason: "This token is bound to a client certificate and is only valid "
+                            + "on a mutually-authenticated connection presenting it.")
+                }
             }
             return result
         } catch {

@@ -276,17 +276,30 @@ public enum TokenValidationResult: Sendable, Equatable {
         /// no longer sufficient, which is the entire point of binding it.
         public let keyThumbprint: String?
 
+        /// The thumbprint of the certificate it is bound to — RFC 8705 `cnf.x5t#S256`.
+        ///
+        /// `nil` for a token that is not certificate-bound. A token carries this or
+        /// ``keyThumbprint`` or neither, never both: a client proves possession one way per
+        /// connection.
+        ///
+        /// This property is the first test of the decision made in 0.12.0 to carry a struct
+        /// rather than a widening list of associated values — it arrives without breaking a
+        /// single `case .valid(let token)` anywhere.
+        public let certificateThumbprint: String?
+
         /// Creates a validated token.
         public init(
             clientId: String,
             scope: String? = nil,
             audience: URL? = nil,
-            keyThumbprint: String? = nil
+            keyThumbprint: String? = nil,
+            certificateThumbprint: String? = nil
         ) {
             self.clientId = clientId
             self.scope = scope
             self.audience = audience
             self.keyThumbprint = keyThumbprint
+            self.certificateThumbprint = certificateThumbprint
         }
     }
 
