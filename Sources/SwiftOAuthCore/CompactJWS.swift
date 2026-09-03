@@ -41,13 +41,36 @@ public enum CompactJWS {
     ///   - key: The signing key.
     /// - Returns: The compact serialization, `header.payload.signature`.
     /// - Throws: If the signature could not be produced.
-    public static func sign(payload: Data, using key: P256.Signing.PrivateKey) throws -> String {
-        let header = Data(#"{"alg":"ES256","typ":"JWT"}"#.utf8)
+    public static func sign(
+        payload: Data,
+        using key: P256.Signing.PrivateKey,
+        header headerJSON: Data? = nil
+    ) throws -> String {
+        // Defaulted rather than always fixed: DPoP needs `typ: dpop+jwt` and the public key in
+        // the header, and RFC 9101 needs the plain one. The `alg` is still not a choice — a
+        // caller supplying a header does not get to change the algorithm, because `verify`
+        // accepts only ES256 regardless of what the header claims.
+        let header = headerJSON ?? Data(#"{"alg":"ES256","typ":"JWT"}"#.utf8)
         let signingInput = "\(base64URL(header)).\(base64URL(payload))"
         // `rawRepresentation` is the 64-byte r‖s pair JWS specifies. The DER encoding, which
         // is the other property on this type, is not what goes on the wire here.
         let signature = try key.signature(for: Data(signingInput.utf8))
         return "\(signingInput).\(base64URL(signature.rawRepresentation))"
+    }
+
+    /// The header of a compact JWS, without verifying anything.
+    ///
+    /// Needed by DPoP, whose verifying key is *inside* the header — so it has to be read before
+    /// there is a key to check the signature with. That inversion is the reason this is
+    /// separate and named for what it does: an untrusted read. Nothing here may be acted on
+    /// until ``verify(_:using:)`` has succeeded with the key it yields.
+    ///
+    /// - Parameter token: The compact serialization.
+    /// - Returns: The decoded header bytes, or `nil` if the token is not three parts.
+    public static func unverifiedHeader(_ token: String) -> Data? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        return decodeBase64URL(String(parts[0]))
     }
 
     /// Verifies a compact JWS and returns its payload.
