@@ -200,8 +200,12 @@ struct GrantTypeTests {
 
     @Test("Client authentication methods cover the registered set")
     func authMethods() {
+        // Pinned deliberately, so a new method is a decision rather than an accident. The two
+        // mTLS methods joined in 0.13.0 — RFC 8705, where a client is authenticated by the
+        // certificate it presents in the handshake rather than by a secret it sends.
         #expect(Set(ClientAuthenticationMethod.allCases)
-                == [.clientSecretBasic, .clientSecretPost, .none])
+                == [.clientSecretBasic, .clientSecretPost, .none,
+                    .tlsClientAuth, .selfSignedTLSClientAuth])
         #expect(ClientAuthenticationMethod.clientSecretBasic.rawValue == "client_secret_basic")
     }
 }

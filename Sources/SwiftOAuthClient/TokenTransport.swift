@@ -81,6 +81,17 @@ public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
             body["client_secret"] = credentials.clientSecret
         case .none:
             body["client_id"] = credentials.clientID
+        case .tlsClientAuth, .selfSignedTLSClientAuth:
+            // RFC 8705 §2: the client is identified by `client_id` and authenticated by the
+            // certificate it presented in the TLS handshake. No secret is sent, and sending
+            // one would be a second, weaker credential travelling alongside a strong one.
+            //
+            // This transport cannot present a client certificate — `URLSession` on Linux has
+            // no way to answer a client-certificate challenge, which the group E spike
+            // established. A request assembled here with an mTLS method will therefore be
+            // rejected by the server as unauthenticated. Use the NIO-backed transport, which
+            // exists for exactly this.
+            body["client_id"] = credentials.clientID
         }
 
         request.httpBody = Data(Self.formEncode(body).utf8)

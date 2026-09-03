@@ -83,4 +83,32 @@ public enum ClientAuthenticationMethod: String, Codable, Sendable, Equatable, Ca
     /// For public clients — native and browser applications — which cannot keep
     /// a secret. PKCE is what protects these, which is why it is not optional.
     case none
+
+    /// The client authenticates by presenting an X.509 certificate in the TLS handshake, and
+    /// the authorization server checks it against a certificate authority — RFC 8705 §2.1.
+    ///
+    /// There is no secret to send, which is the point: nothing is transmitted that could be
+    /// captured and replayed, because possession is proven by completing the handshake.
+    case tlsClientAuth = "tls_client_auth"
+
+    /// The same, with a self-signed certificate the client registered in advance —
+    /// RFC 8705 §2.2.
+    ///
+    /// For deployments with no certificate authority. The trust comes from the certificate
+    /// having been registered, not from a chain.
+    case selfSignedTLSClientAuth = "self_signed_tls_client_auth"
+
+    /// Whether this method transmits a client secret.
+    ///
+    /// The mTLS methods and ``none`` do not. Worth asking rather than inferring from the case:
+    /// a caller assembling a request needs to know whether to include credentials, and the
+    /// answer for a *new* method is not something existing code can guess.
+    public var sendsSecret: Bool {
+        switch self {
+        case .clientSecretBasic, .clientSecretPost:
+            return true
+        case .none, .tlsClientAuth, .selfSignedTLSClientAuth:
+            return false
+        }
+    }
 }
