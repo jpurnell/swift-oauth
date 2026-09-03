@@ -6,6 +6,18 @@ consistency:
   defaultRiskTier: 3
 
 # v2 layout: the master plan is project-owned, not framework content.
+#
+# KNOWN LIMITATION, and it is the checker's rather than this configuration's: `project/` is
+# gitignored, so the plan is present here and absent from every clone — and the checker's
+# response to an absent plan is to skip the audit and report `PASSED (0ms)`. In CI or on a
+# colleague's machine that is indistinguishable from an audit that ran and found nothing.
+#
+# Removing this setting does not help: the checker then falls back to a default path and
+# reports the same false pass about a different missing file. So the setting stays, because it
+# at least makes the audit work where the plan exists. It found a real gap that way —
+# `SwiftOAuthProvider` at 3902 lines — which no clone would ever have surfaced.
+#
+# The fix belongs in quality-gate: a skipped check should not report as a passed one.
 status:
   guidelinesPath: "."
   masterPlanPath: project/master_plan.md
