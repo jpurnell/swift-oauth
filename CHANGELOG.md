@@ -7,6 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.8.0] — 2026-09-03
 
+### Breaking, and it affects you even if you never touch resource indicators
+
+**`TokenValidationResult.valid` gains a third associated value, `audience: URL?`.** Every
+exhaustive pattern match on it must add a binding:
+
+```swift
+if case .valid(let clientId, let scope) = result        // before
+if case .valid(let clientId, let scope, _) = result     // after
+```
+
+Seven sites across two packages so far — four here, three in SwiftMCPServer — none in
+production sources, all in tests. Mechanical, but not nothing, and it hits consumers who have
+no interest in RFC 8707 at all, which is why it leads.
+
+Taken before 1.0 deliberately: after 1.0 it costs a major version.
+
+### Also breaking: your database is migrated on first open
+There was no migration mechanism before this release, so this is the first one. It is additive
+and idempotent, and reopening an already-migrated database is tested — but it changes data you
+own, on disk, and you should know before taking the bump. `:memory:` users are unaffected.
+
+---
+
 The RFC 8707 provider half. The client has sent `resource` since 0.7.0 and no server built on
 this package read it — the asymmetry this release exists to close.
 
@@ -64,8 +87,9 @@ round trip later than it needs to. Closing it means carrying an audience on the 
 code, which is a second schema change and its own release.
 
 ### Migration
-A server already serving correct protected-resource metadata needs no configuration — the
-policy defaults to its own issuer. Clients must send `resource`; on this package's client that
+Raise the bound, update any `case .valid(_, _)` patterns to `case .valid(_, _, _)`, and let the
+database migrate on first open. That is the whole of it for a server already serving correct
+protected-resource metadata — the policy defaults to its own issuer. Clients must send `resource`; on this package's client that
 is `ProviderConfiguration.resource`, shipped in 0.7.0. A client that sends nothing is refused
 with a description naming the value to send.
 
