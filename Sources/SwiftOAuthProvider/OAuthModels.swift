@@ -238,17 +238,57 @@ public struct ClientRegistrationRequest: Codable, Sendable, Equatable {
 
 /// Result of validating an access token
 public enum TokenValidationResult: Sendable, Equatable {
-    /// Token is valid, with the client it was issued to, its scope, and the audience it was
-    /// bound to.
+    /// Token is valid. What is known about it travels in ``ValidatedToken``.
     ///
-    /// `audience` is RFC 8707's resource indicator: the API this token is *for*. `nil` means
-    /// the token is not bound to one — either the server permits that, or the token predates
-    /// audiences being recorded. A resource server checking its own identifier against this is
-    /// what stops a token minted elsewhere from being accepted here.
-    case valid(clientId: String, scope: String?, audience: URL?)
+    /// A single payload rather than a growing list of associated values, deliberately. This
+    /// case has been widened twice — 0.8.0 added the audience, 0.12.0 the key binding — and
+    /// each time it was a source break for every exhaustive `case .valid(a, b)` in every
+    /// consumer, including ones with no interest in the feature that caused it. Seven sites
+    /// across two packages paid for the first.
+    ///
+    /// Adding a property to a struct breaks nobody. This is the last time this case changes
+    /// shape, and pre-1.0 is the only cheap moment to make it stop.
+    case valid(ValidatedToken)
 
     /// Token is invalid with reason
     case invalid(reason: String)
+
+    /// Everything a resource server needs to decide whether to honour a token.
+    ///
+    /// Grows by adding properties, which is source-compatible: a pattern match binds the whole
+    /// value, so a consumer that does not care about a new field never sees it arrive.
+    public struct ValidatedToken: Sendable, Equatable {
+
+        /// The client the token was issued to.
+        public let clientId: String
+
+        /// The scopes it carries.
+        public let scope: String?
+
+        /// The resource it is for — RFC 8707. `nil` means it is bound to none, so a resource
+        /// server that protects several APIs cannot tell which one it was minted for.
+        public let audience: URL?
+
+        /// The thumbprint of the key it is bound to — RFC 9449 `cnf.jkt`.
+        ///
+        /// `nil` for an ordinary bearer token. When present, the token is only valid from a
+        /// request carrying a DPoP proof by that same key: possession of the token alone is
+        /// no longer sufficient, which is the entire point of binding it.
+        public let keyThumbprint: String?
+
+        /// Creates a validated token.
+        public init(
+            clientId: String,
+            scope: String? = nil,
+            audience: URL? = nil,
+            keyThumbprint: String? = nil
+        ) {
+            self.clientId = clientId
+            self.scope = scope
+            self.audience = audience
+            self.keyThumbprint = keyThumbprint
+        }
+    }
 
     /// Convenience property to check if token is valid
     public var isValid: Bool {

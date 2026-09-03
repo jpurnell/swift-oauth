@@ -450,9 +450,9 @@ struct OAuthHTTPHandlerTests {
             let result = await handler.validateBearerToken(authHeader: "Bearer \(tokens.accessToken)")
 
             #expect(result.isValid)
-            if case .valid(let clientId, let scope, _) = result {
-                #expect(clientId == client.clientId)
-                #expect(scope == "mcp:tools")
+            if case .valid(let token) = result {
+                #expect(token.clientId == client.clientId)
+                #expect(token.scope == "mcp:tools")
             }
         }
 

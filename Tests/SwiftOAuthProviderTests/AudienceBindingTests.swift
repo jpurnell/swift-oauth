@@ -30,11 +30,11 @@ struct AudienceBindingTests {
             expiresAt: Date().addingTimeInterval(3600), audience: api)
 
         let result = try await storage.validateAccessToken(token: "tok-1")
-        guard case .valid(_, _, let audience) = result else {
+        guard case .valid(let token) = result else {
             Issue.record("expected a valid token, got \(result)")
             return
         }
-        #expect(audience == api)
+        #expect(token.audience == api)
     }
 
     /// A token issued without one reports none, rather than reporting something invented.
@@ -47,11 +47,11 @@ struct AudienceBindingTests {
             expiresAt: Date().addingTimeInterval(3600), audience: nil)
 
         let result = try await storage.validateAccessToken(token: "tok-2")
-        guard case .valid(_, _, let audience) = result else {
+        guard case .valid(let token) = result else {
             Issue.record("expected a valid token, got \(result)")
             return
         }
-        #expect(audience == nil)
+        #expect(token.audience == nil)
     }
 
     /// A database created before this column existed must gain it.
@@ -84,12 +84,12 @@ struct AudienceBindingTests {
             expiresAt: Date().addingTimeInterval(3600), audience: api)
 
         let result = try await migrated.validateAccessToken(token: "tok-migrated")
-        guard case .valid(let clientId, _, let audience) = result else {
+        guard case .valid(let token) = result else {
             Issue.record("the migrated database could not store an audience: \(result)")
             return
         }
-        #expect(clientId == "client-1")
-        #expect(audience == api)
+        #expect(token.clientId == "client-1")
+        #expect(token.audience == api)
     }
 
     /// Running the migration twice is not an error.

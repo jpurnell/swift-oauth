@@ -1,0 +1,110 @@
+import Foundation
+import Crypto
+import Testing
+@testable import SwiftOAuthCore
+@testable import SwiftOAuthProvider
+
+/// Binding a token to a key, and refusing a replayed proof — RFC 9449 §6 and §11.1.
+///
+/// The proof type in core establishes that a request was signed by whoever holds a key. That is
+/// only half of DPoP. The other half is here: the issued token records *which* key, so a
+/// resource server can refuse a token presented by anyone else — and the server remembers which
+/// proofs it has seen, so one cannot be used twice.
+@Suite("RFC 9449 — token binding and replay")
+struct DPoPBindingTests {
+
+    private func makeServer() async throws -> (OAuthServer, OAuthStorage) {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(
+            storage: storage, issuer: "https://mcp.example.com",
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
+        return (server, storage)
+    }
+
+    /// A token issued against a proof records that key's thumbprint.
+    @Test("An issued token records the key it is bound to")
+    func tokenRecordsItsBinding() async throws {
+        let (_, storage) = try await makeServer()
+
+        try await storage.saveAccessToken(
+            token: "bound-token", clientId: "c1", scope: "read",
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            keyThumbprint: "thumb-abc")
+
+        let result = try await storage.validateAccessToken(token: "bound-token")
+        guard case .valid(let token) = result else {
+            Issue.record("expected a valid token, got \(result)")
+            return
+        }
+        #expect(token.keyThumbprint == "thumb-abc")
+    }
+
+    /// A token issued without one reports none — a plain bearer token, unchanged.
+    @Test("An unbound token reports no thumbprint")
+    func unboundTokenReportsNothing() async throws {
+        let (_, storage) = try await makeServer()
+
+        try await storage.saveAccessToken(
+            token: "plain-token", clientId: "c1", scope: nil,
+            expiresAt: Date().addingTimeInterval(3600), audience: nil)
+
+        let result = try await storage.validateAccessToken(token: "plain-token")
+        guard case .valid(let token) = result else {
+            Issue.record("expected a valid token, got \(result)")
+            return
+        }
+        #expect(token.keyThumbprint == nil)
+    }
+
+    /// A proof identifier is accepted once.
+    @Test("A jti is accepted the first time")
+    func firstUseOfAJTIIsAccepted() async throws {
+        let (_, storage) = try await makeServer()
+
+        let accepted = try await storage.claimProofIdentifier(
+            "jti-1", expiresAt: Date().addingTimeInterval(300))
+
+        #expect(accepted)
+    }
+
+    /// And refused the second time. This is the whole of replay protection: without it a proof
+    /// observed in transit is usable again by whoever saw it, for as long as it stays fresh.
+    @Test("A replayed jti is refused")
+    func replayedJTIIsRefused() async throws {
+        let (_, storage) = try await makeServer()
+        let expiry = Date().addingTimeInterval(300)
+
+        #expect(try await storage.claimProofIdentifier("jti-2", expiresAt: expiry))
+        #expect(try await storage.claimProofIdentifier("jti-2", expiresAt: expiry) == false,
+                "a proof was accepted twice")
+    }
+
+    /// Two different proofs do not collide.
+    @Test("Distinct identifiers are independent")
+    func distinctIdentifiersAreIndependent() async throws {
+        let (_, storage) = try await makeServer()
+        let expiry = Date().addingTimeInterval(300)
+
+        #expect(try await storage.claimProofIdentifier("jti-a", expiresAt: expiry))
+        #expect(try await storage.claimProofIdentifier("jti-b", expiresAt: expiry))
+    }
+
+    /// The record only has to outlive the proof's freshness window.
+    ///
+    /// A store that kept every identifier forever would grow without bound; one that forgets
+    /// too early re-opens the replay window. Expiry is what makes the table finite, so it is
+    /// asserted rather than assumed.
+    @Test("Expired identifiers are swept")
+    func expiredIdentifiersAreSwept() async throws {
+        let (_, storage) = try await makeServer()
+
+        _ = try await storage.claimProofIdentifier(
+            "jti-old", expiresAt: Date().addingTimeInterval(-60))
+        let removed = try await storage.sweepExpiredProofIdentifiers()
+
+        #expect(removed >= 1)
+        // Sweeping does not re-open a live proof to replay: this one was already dead.
+        #expect(try await storage.claimProofIdentifier(
+            "jti-old", expiresAt: Date().addingTimeInterval(300)))
+    }
+}

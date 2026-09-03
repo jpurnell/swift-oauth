@@ -129,10 +129,10 @@ struct ResourceIndicatorCrossHalfTests {
             expiresAt: Date().addingTimeInterval(3600), audience: identifier)
 
         let result = try await storage.validateAccessToken(token: "cross-half-token")
-        guard case .valid(_, _, let audience) = result else {
+        guard case .valid(let token) = result else {
             Issue.record("expected a valid token, got \(result)")
             return
         }
-        #expect(audience == identifier)
+        #expect(token.audience == identifier)
     }
 }

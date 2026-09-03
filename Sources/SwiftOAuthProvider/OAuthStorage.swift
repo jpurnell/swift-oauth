@@ -98,8 +98,9 @@ public actor OAuthStorage {
     ///
     /// Raised whenever the shape of a table changes. Version 1 added `access_tokens.audience`
     /// for RFC 8707; version 2 added `device_codes` for RFC 8628; version 3 added
-    /// `pushed_requests` for RFC 9126.
-    public static let currentSchemaVersion = 3
+    /// `pushed_requests` for RFC 9126; version 4 added `access_tokens.key_thumbprint` and
+    /// `dpop_proofs` for RFC 9449.
+    public static let currentSchemaVersion = 4
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -266,6 +267,26 @@ public actor OAuthStorage {
             try executeStatic(
                 db: db,
                 sql: "CREATE INDEX IF NOT EXISTS idx_pushed_requests_expires ON pushed_requests(expires_at)")
+        }
+
+        // Version 4: RFC 9449 — the key a token is bound to, and the proofs already seen.
+        if version < 4 && targetVersion >= 4 {
+            if try !columnExists(db: db, table: "access_tokens", column: "key_thumbprint") {
+                try executeStatic(
+                    db: db, sql: "ALTER TABLE access_tokens ADD COLUMN key_thumbprint TEXT")
+            }
+            // One row per proof, kept only until the proof could no longer be fresh. Keeping
+            // them forever would grow without bound; forgetting too early re-opens the replay
+            // window. The expiry is what makes the table finite.
+            try executeStatic(db: db, sql: """
+                CREATE TABLE IF NOT EXISTS dpop_proofs (
+                    jti TEXT PRIMARY KEY,
+                    expires_at REAL NOT NULL
+                )
+            """)
+            try executeStatic(
+                db: db,
+                sql: "CREATE INDEX IF NOT EXISTS idx_dpop_proofs_expires ON dpop_proofs(expires_at)")
         }
 
         if version < targetVersion {
@@ -568,21 +589,24 @@ public actor OAuthStorage {
         clientId: String,
         scope: String?,
         expiresAt: Date,
-        audience: URL? = nil
+        audience: URL? = nil,
+        keyThumbprint: String? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO access_tokens
-            (token_hash, client_id, scope, expires_at, created_at, revoked, audience)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
+            (token_hash, client_id, scope, expires_at, created_at, revoked, audience,
+             key_thumbprint)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
         """, parameters: [
             tokenHash,
             clientId,
             scope as Any,
             expiresAt.timeIntervalSince1970,
             Date().timeIntervalSince1970,
-            audience?.absoluteString as Any
+            audience?.absoluteString as Any,
+            keyThumbprint as Any
         ])
     }
 
@@ -594,7 +618,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked, audience
+            SELECT client_id, scope, expires_at, revoked, audience, key_thumbprint
             FROM access_tokens
             WHERE token_hash = ?
         """
@@ -628,7 +652,9 @@ public actor OAuthStorage {
             return .invalid(reason: "Token expired")
         }
 
-        return .valid(clientId: clientId, scope: scope, audience: audience)
+        let thumbprint = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+        return .valid(TokenValidationResult.ValidatedToken(
+            clientId: clientId, scope: scope, audience: audience, keyThumbprint: thumbprint))
     }
 
     /// Everything RFC 7662 reports about an access token.
@@ -840,6 +866,47 @@ public actor OAuthStorage {
             parameters: [hash])
 
         return request
+    }
+
+    /// Records a proof identifier, refusing one already seen — RFC 9449 §11.1.
+    ///
+    /// This is the whole of replay protection, and it is the half the proof type cannot do:
+    /// verifying a signature says the holder of a key made this proof, and says nothing about
+    /// whether they made it a moment ago or an hour ago and it has been in a log since.
+    ///
+    /// The insert is what decides, not a preceding read. `INSERT` on a primary key either
+    /// succeeds or violates the constraint, atomically — a check-then-insert would let two
+    /// concurrent requests both find the identifier absent and both proceed, which is exactly
+    /// the replay this exists to stop.
+    ///
+    /// - Parameters:
+    ///   - identifier: The proof's `jti`.
+    ///   - expiresAt: When the record may be swept — no earlier than the proof stops being
+    ///     fresh, or the window re-opens.
+    /// - Returns: `true` if this identifier had not been seen.
+    public func claimProofIdentifier(_ identifier: String, expiresAt: Date) throws -> Bool {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "INSERT OR IGNORE INTO dpop_proofs (jti, expires_at) VALUES (?, ?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, identifier, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 2, expiresAt.timeIntervalSince1970)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw OAuthStorageError.databaseError("Failed to record the proof identifier")
+        }
+        return sqlite3_changes(db) > 0
+    }
+
+    /// Removes proof identifiers that can no longer be replayed.
+    ///
+    /// - Returns: How many were removed.
+    public func sweepExpiredProofIdentifiers() throws -> Int {
+        try execute(
+            "DELETE FROM dpop_proofs WHERE expires_at <= ?",
+            parameters: [Date().timeIntervalSince1970])
+        return Int(sqlite3_changes(db))
     }
 
     /// Revokes an access token

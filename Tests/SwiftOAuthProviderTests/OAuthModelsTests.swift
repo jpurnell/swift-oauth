@@ -235,14 +235,11 @@ struct OAuthModelsTests {
         @Test("Valid result contains client and scope")
         func validResultContainsInfo() {
             let result = TokenValidationResult.valid(
-                clientId: "client-123",
-                scope: "mcp:tools",
-                audience: nil
-            )
+                .init(clientId: "client-123", scope: "mcp:tools"))
 
-            if case .valid(let clientId, let scope, _) = result {
-                #expect(clientId == "client-123")
-                #expect(scope == "mcp:tools")
+            if case .valid(let token) = result {
+                #expect(token.clientId == "client-123")
+                #expect(token.scope == "mcp:tools")
             } else {
                 Issue.record("Expected valid result")
             }
@@ -261,7 +258,7 @@ struct OAuthModelsTests {
 
         @Test("Provides isValid convenience property")
         func providesIsValidProperty() {
-            let valid = TokenValidationResult.valid(clientId: "c", scope: nil, audience: nil)
+            let valid = TokenValidationResult.valid(.init(clientId: "c"))
             let invalid = TokenValidationResult.invalid(reason: "bad")
 
             #expect(valid.isValid == true)
