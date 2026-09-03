@@ -409,6 +409,12 @@ public struct OAuthHTTPHandler: Sendable {
             statusCode = 401
         case .invalidRequest, .invalidScope:
             statusCode = 400
+        case .invalidTarget:
+            // 400, alongside the other "your request was wrong" codes. RFC 8707 §2 names the
+            // error but not a status, and the resource being unknown is a fact about the
+            // request rather than about authentication — a 401 would invite a retry with new
+            // credentials that cannot help.
+            statusCode = 400
         case .invalidGrant, .unauthorizedClient, .unsupportedGrantType:
             statusCode = 400
         case .serverError:

@@ -1,0 +1,83 @@
+import Foundation
+import SwiftOAuthCore
+
+/// Which resources this server issues tokens for, and what to do about a request naming one.
+///
+/// RFC 8707 exists because a bearer token is accepted by whoever receives it. Without an
+/// audience, a token minted for one API is a token that works at every API trusting the same
+/// authorization server — so a compromised or merely careless resource server can replay what
+/// it was handed somewhere it was never meant to reach.
+///
+/// The client half of this package has sent `resource` since 0.7.0. This is the half that
+/// reads it. Until now a server built here accepted the parameter and ignored it, which is the
+/// worst of the three possible states: a client and a server from the same package could talk
+/// to each other, one naming an audience and the other discarding it, and nothing anywhere
+/// would say so.
+///
+/// ## Strict by default
+///
+/// A request naming no resource asks for a token good everywhere, and ``init(known:allowsUnspecified:)``
+/// refuses it unless told otherwise. The permissive setting is correct for a server whose
+/// tokens are already single-audience — but it is the dangerous one to get by accident, so it
+/// is the one you have to ask for.
+public struct ResourceIndicatorPolicy: Sendable, Hashable {
+
+    /// The resources this server will issue tokens for. Anything else is `invalid_target`.
+    public let known: Set<URL>
+
+    /// Whether a request naming no resource is acceptable.
+    ///
+    /// `false` — the default — for a server protecting more than one API, where a token
+    /// without an audience is a token good at all of them. `true` for one whose tokens are
+    /// already single-audience and have nothing to disambiguate.
+    public let allowsUnspecified: Bool
+
+    /// Creates a policy.
+    ///
+    /// - Parameters:
+    ///   - known: The resources this server issues tokens for.
+    ///   - allowsUnspecified: Whether to accept a request naming no resource. Defaults to
+    ///     `false`, so the permissive behaviour is chosen rather than inherited.
+    public init(known: Set<URL>, allowsUnspecified: Bool = false) {
+        self.known = known
+        self.allowsUnspecified = allowsUnspecified
+    }
+
+    /// The audience to bind into a token, for the resources a request named.
+    ///
+    /// - Parameter requested: Every `resource` parameter on the request, in order. RFC 8707 §2
+    ///   permits the parameter to repeat.
+    /// - Returns: The audience to bind, or `nil` when the request named none and the policy
+    ///   permits that.
+    /// - Throws: `OAuthError.invalidTarget` when a resource is unknown, when several
+    ///   distinct resources were named, or when none was named and the policy is strict.
+    public func audience(for requested: [URL]) throws -> URL? {
+        // Repetition of one resource is a client quirk, not a second request — RFC 8707 does
+        // not forbid it, and reading it as ambiguity would refuse a request that named exactly
+        // one thing.
+        let distinct = Set(requested)
+
+        guard let resource = distinct.first else {
+            guard allowsUnspecified else {
+                throw OAuthError.invalidTarget(
+                    "This server requires a resource indicator naming the API the token is for.")
+            }
+            return nil
+        }
+
+        // RFC 8707 §2.2: a server that cannot issue one token covering every resource named
+        // rejects the request. Narrowing to the first silently would issue a token for an
+        // audience the client never asked for on its own, and the client would not be told.
+        guard distinct.count == 1 else {
+            throw OAuthError.invalidTarget(
+                "A token can be issued for one resource; the request named \(distinct.count).")
+        }
+
+        guard known.contains(resource) else {
+            throw OAuthError.invalidTarget(
+                "This server does not issue tokens for \(resource.absoluteString).")
+        }
+
+        return resource
+    }
+}

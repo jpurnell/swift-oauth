@@ -45,6 +45,13 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
     /// The resource owner or server denied the request.
     case accessDenied(String?)
 
+    /// The requested resource is not one this server issues tokens for — RFC 8707 §2.
+    ///
+    /// Distinct from ``invalidScope(_:)`` on purpose. A scope names *what* may be done; a
+    /// resource names *where*. A client told its scope was wrong will retry with different
+    /// scopes and fail again, having never been told the audience was the problem.
+    case invalidTarget(String?)
+
     /// The wire value, per RFC 6749 §5.2.
     public var code: String {
         switch self {
@@ -57,6 +64,7 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case .serverError: return "server_error"
         case .temporarilyUnavailable: return "temporarily_unavailable"
         case .accessDenied: return "access_denied"
+        case .invalidTarget: return "invalid_target"
         }
     }
 
@@ -66,7 +74,7 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case .invalidRequest(let d), .invalidClient(let d), .invalidGrant(let d),
              .unauthorizedClient(let d), .unsupportedGrantType(let d),
              .invalidScope(let d), .serverError(let d),
-             .temporarilyUnavailable(let d), .accessDenied(let d):
+             .temporarilyUnavailable(let d), .accessDenied(let d), .invalidTarget(let d):
             return d
         }
     }
@@ -89,6 +97,8 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
             return "The client is not authorized to use this grant type."
         case .unsupportedGrantType:
             return "The authorization server does not support the requested grant type."
+        case .invalidTarget:
+            return "The requested resource is not one this server issues tokens for."
         case .invalidScope:
             return "The requested scope is invalid, unknown, or malformed."
         case .serverError:
@@ -120,6 +130,7 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case "server_error": self = .serverError(description)
         case "temporarily_unavailable": self = .temporarilyUnavailable(description)
         case "access_denied": self = .accessDenied(description)
+        case "invalid_target": self = .invalidTarget(description)
         default: self = .serverError(description.map { "\(code): \($0)" } ?? code)
         }
     }
