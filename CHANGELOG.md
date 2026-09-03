@@ -5,6 +5,55 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] — 2026-09-03
+
+RFC 8705 — mutual TLS client authentication and certificate-bound tokens.
+
+### Compatibility
+
+**No source break.** New types, new methods, one new property on `ValidatedToken` — and that
+property is the first test of 0.12.0's decision to carry a struct rather than a widening list of
+associated values. It arrived without a single `case .valid(let token)` needing to change. Under
+the old shape this would have been the third arity break in five releases.
+
+**Two enums gained cases**, which is a source break only for an exhaustive `switch` over them
+with no `default`: `ClientAuthenticationMethod` gains `tlsClientAuth` and
+`selfSignedTLSClientAuth`. The compiler will point at any site that needs an arm.
+
+**Your database migrates to schema version 5 on first open** — one nullable column,
+`access_tokens.certificate_thumbprint`. A server issuing no certificate-bound tokens gets a
+column of nulls.
+
+**Coming from 0.7.x–0.12.x?** Read those entries too. There is no route here except through
+0.8.0's client refusals and the breaks in 0.10.0 and 0.12.0.
+
+### Added
+- **`SwiftOAuthMTLS`**, a new product and target. `MTLSTokenTransport` presents a client
+  certificate through NIOSSL, because `URLSessionTokenTransport` cannot: corelibs-foundation's
+  `URLCredential` has no identity-based initialiser and its source states there is no
+  `SecIdentity` support. `NSURLAuthenticationMethodClientCertificate` *is* declared there, so
+  code referencing it compiles and the challenge can be matched — but no credential can be
+  constructed to answer it. The name is present and the capability is not.
+
+  **What the separate target buys, stated precisely:** SwiftPM resolves every package-level
+  dependency regardless, so the AsyncHTTPClient download is taken by everyone. What it avoids is
+  *linking* NIO into a binary that never uses it, and compiling it on every build of the other
+  targets. Worth having, and not the same as isolation.
+
+- **`ClientAuthenticationMethod.tlsClientAuth` / `.selfSignedTLSClientAuth`**, plus a
+  `sendsSecret` property. Neither mTLS method transmits a secret — that is the point, since
+  nothing is sent that could be captured. `sendsSecret` is asked rather than inferred from the
+  case, because code written before a method existed cannot guess the answer for it.
+
+- **`CertificateBinding`** — `x5t#S256` computation and comparison. **An absent binding is not
+  satisfied by anything.** Treating `nil` as "no requirement" would make every ordinary bearer
+  token appear certificate-confirmed, so a caller checking this before honouring a request would
+  accept unbound tokens as though they had passed a check they never took.
+
+- **Certificate-bound tokens on the provider**, and `validateBearerToken` refuses them for the
+  same reason it refuses DPoP-bound ones: accepting one there accepts it without the certificate
+  being checked.
+
 ## [0.12.0] — 2026-09-03
 
 RFC 9449 — DPoP. A token that only works for the client holding its key.
