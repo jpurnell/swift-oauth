@@ -111,11 +111,16 @@ extension AuthorizationServerMetadata {
     /// - Parameters:
     ///   - identifier: A short name for this provider, used in ``ConnectionID``.
     ///   - scope: The scopes to request. Defaults to everything the server advertises.
+    ///   - resource: The resource indicator to send — RFC 8707. This is the `resource` field of
+    ///     the protected-resource metadata a client reads to learn which API it is asking for.
+    ///     Without it a client that discovered the identifier still sends nothing, and a server
+    ///     with a strict resource policy refuses it.
     /// - Returns: A configuration.
     /// - Throws: ``DiscoveryError``.
     public func configuration(
         identifier: String,
-        scope: String? = nil
+        scope: String? = nil,
+        resource: URL? = nil
     ) throws -> ProviderConfiguration {
         guard let methods = codeChallengeMethodsSupported,
               methods.contains(PKCE.ChallengeMethod.s256.rawValue) else {
@@ -128,7 +133,8 @@ extension AuthorizationServerMetadata {
             authorizationEndpoint: try Self.endpoint(authorizationEndpoint, within: origin),
             tokenEndpoint: try Self.endpoint(tokenEndpoint, within: origin),
             revocationEndpoint: try revocationEndpoint.map { try Self.endpoint($0, within: origin) },
-            scope: scope ?? (scopesSupported ?? []).joined(separator: " "))
+            scope: scope ?? (scopesSupported ?? []).joined(separator: " "),
+            resource: resource)
     }
 
     /// The registration endpoint as a validated URL, if the server offers one.

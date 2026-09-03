@@ -171,3 +171,42 @@ private func metadata(
         scopesSupported: ["mcp:tools", "mcp:resources"],
         revocationEndpoint: "https://mcp.example.com/revoke")
 }
+
+/// Carrying the resource identifier from discovery into the configuration.
+///
+/// A client learns which resource to name by reading the server's RFC 9728 metadata. That value
+/// then has to reach ``ProviderConfiguration/resource``, or the client discovers the identifier
+/// and sends nothing — which is what happened: `configuration(identifier:scope:)` had no way to
+/// accept it, so every consumer built a configuration with `resource: nil` no matter what
+/// discovery had found.
+@Suite("Discovery — carrying the resource indicator")
+struct DiscoveryResourceTests {
+
+    private func metadata() -> AuthorizationServerMetadata {
+        AuthorizationServerMetadata(
+            issuer: "https://auth.example.com",
+            authorizationEndpoint: "https://auth.example.com/authorize",
+            tokenEndpoint: "https://auth.example.com/token",
+            codeChallengeMethodsSupported: ["S256"])
+    }
+
+    @Test("A discovered resource identifier reaches the configuration")
+    func resourceReachesConfiguration() throws {
+        // SECURITY: a literal written in this test; nothing is fetched from it.
+        let identifier = try #require(URL(string: "https://api.example.com"))
+
+        let configuration = try metadata().configuration(
+            identifier: "auth", scope: "read", resource: identifier)
+
+        #expect(configuration.resource == identifier)
+    }
+
+    /// Omitting it stays legal — not every server publishes one, and a client that cannot find
+    /// an identifier should still be able to build a configuration.
+    @Test("A configuration without a resource is still valid")
+    func absentResourceIsAllowed() throws {
+        let configuration = try metadata().configuration(identifier: "auth", scope: "read")
+
+        #expect(configuration.resource == nil)
+    }
+}
