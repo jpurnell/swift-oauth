@@ -1,4 +1,5 @@
 import Foundation
+import CSQLite
 import Testing
 @testable import SwiftOAuthCore
 @testable import SwiftOAuthProvider
@@ -214,5 +215,95 @@ struct ResourceParsingTests {
     @Test("No resource parameter yields nothing")
     func absentResourceYieldsNothing() async throws {
         #expect(OAuthHTTPHandler.formValues(for: "resource", in: "grant_type=x").isEmpty)
+    }
+}
+
+/// Whether data written before a migration survives it.
+///
+/// The other migration tests prove the column arrives and that writes naming it then succeed.
+/// They do not prove that rows already in the table are still there afterwards, and that is the
+/// half that matters most: a migration which quietly discarded existing tokens would look
+/// perfect to every test that starts from an empty database.
+///
+/// It could not be tested through this package's API, because every write names the current
+/// columns — there is no way to ask it for a row in the old shape. So the row is planted with
+/// raw SQL, which is the only honest way to produce the state a deployed installation is
+/// actually in.
+///
+/// This exists because a consumer pointed out that its own green suite could not have caught a
+/// migration defect — every one of its storage tests starts from `:memory:`, which is created
+/// at the current schema and never migrates from anything. Its verification of 0.8.0's
+/// migration was reporting on a code path its tests never enter.
+@Suite("Schema migration — data survives")
+struct MigrationDataSurvivalTests {
+
+    /// A token written before the audience column existed is still readable after it arrives.
+    @Test("A row written pre-migration survives the migration")
+    func preMigrationRowSurvives() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("oauth-survival-\(UUID().uuidString).sqlite").path
+        // SECURITY: removes only the uniquely-named temp file this test just created.
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        // A database as version 0 left it: access_tokens exists, with no audience column.
+        _ = try OAuthStorage(path: path, schemaVersion: 0)
+
+        // Plant a row the current API cannot write, because it names no audience.
+        try Self.executeRaw(path: path, sql: """
+            INSERT INTO access_tokens
+            (token_hash, client_id, scope, expires_at, created_at, revoked)
+            VALUES ('deadbeef', 'legacy-client', 'legacy:scope', \(Date().addingTimeInterval(3600).timeIntervalSince1970), \(Date().timeIntervalSince1970), 0)
+        """)
+
+        // Reopening at the current version migrates.
+        let migrated = try OAuthStorage(path: path)
+
+        _ = migrated  // opening it is what runs the migration
+
+        // Read back with raw SQL rather than through the API. The claim under test is about the
+        // state of the database, and adding a lookup-by-hash to the production type so a test
+        // could assert it would be a permanent API carrying a temporary need.
+        let row = try Self.queryRow(
+            path: path,
+            sql: "SELECT client_id, scope, audience FROM access_tokens WHERE token_hash = 'deadbeef'")
+
+        let survived = try #require(row, "the pre-migration row was lost by the migration")
+        #expect(survived[0] == "legacy-client")
+        #expect(survived[1] == "legacy:scope")
+        #expect(survived[2] == nil, "a token issued before audiences existed has none")
+    }
+
+    /// The first row a statement returns, as optional strings.
+    private static func queryRow(path: String, sql: String) throws -> [String?]? {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("could not open \(path)")
+        }
+        defer { sqlite3_close(db) }
+
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw OAuthStorageError.databaseError("query failed: \(message)")
+        }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        return (0..<sqlite3_column_count(stmt)).map { index in
+            sqlite3_column_text(stmt, index).map { String(cString: $0) }
+        }
+    }
+
+    /// Runs a statement against the database file directly.
+    private static func executeRaw(path: String, sql: String) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("could not open \(path)")
+        }
+        defer { sqlite3_close(db) }
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
+            throw OAuthStorageError.databaseError("raw insert failed: \(message)")
+        }
     }
 }

@@ -87,7 +87,10 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftOAuthProviderTests",
-            dependencies: ["SwiftOAuthProvider"],
+            // CSQLite so a migration test can plant a row in the old schema directly. The
+            // package's own API cannot write one — every write names the current columns — so
+            // without raw SQL the survival of pre-migration data is untestable.
+            dependencies: ["SwiftOAuthProvider", "CSQLite"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The two halves against each other. Neither depends on the other in production —
