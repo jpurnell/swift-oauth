@@ -74,9 +74,13 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
         case 0:
             return "This server lists no resources it issues tokens for."
         case 1:
-            return "It issues tokens for \(sorted[0])."
+            // Matched exactly, so the value is quoted and described as such. A reader who
+            // guesses that a trailing slash is equivalent has to be told otherwise, because
+            // it is not: this comparison treats them as different resources.
+            return "This server issues tokens for exactly \"\(sorted[0])\"."
         default:
-            return "It issues tokens for: \(sorted.joined(separator: ", "))."
+            return "This server issues tokens for exactly one of: "
+                + sorted.map { "\"\($0)\"" }.joined(separator: ", ") + "."
         }
     }
 
@@ -109,8 +113,9 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
                 // setting `resource`. A strict default that is easy to switch off under
                 // pressure gets switched off.
                 throw OAuthError.invalidTarget(
-                    "No resource indicator was supplied. Send the API this token is for as the "
-                    + "`resource` parameter. \(acceptedDescription)")
+                    "No resource indicator was supplied. Send the identifier of the API this "
+                    + "token is for as the `resource` parameter (RFC 8707), on the "
+                    + "authorization request and the token request. \(acceptedDescription)")
             }
             return nil
         }

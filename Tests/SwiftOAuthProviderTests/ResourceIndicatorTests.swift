@@ -69,6 +69,13 @@ struct ResourceIndicatorPolicyTests {
                 "the refusal should name the resource this server accepts")
         #expect(error?.detail?.contains("resource") == true,
                 "the refusal should name the parameter to set")
+        // Found by a session with no exposure to this work, given only the error: it read the
+        // refusal as coming from the token endpoint and could not tell whether the parameter
+        // belonged there, on the authorization request, or both.
+        #expect(error?.detail?.contains("authorization request") == true,
+                "the refusal should say which request carries the parameter")
+        #expect(error?.detail?.contains("RFC 8707") == true,
+                "naming the RFC removes the guesswork about which `resource` this is")
     }
 
     /// The permissive setting still exists, because a server whose tokens are already

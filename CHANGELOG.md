@@ -5,6 +5,73 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-09-03
+
+The RFC 8707 provider half. The client has sent `resource` since 0.7.0 and no server built on
+this package read it — the asymmetry this release exists to close.
+
+### Added
+- **`ResourceIndicatorPolicy`** decides what a token is *for*. A known resource becomes the
+  audience; an unknown one is refused with RFC 8707 §2's own `invalid_target`. Several distinct
+  resources are refused rather than narrowed to the first, which would issue a token for an
+  audience the client never asked for on its own. The same resource repeated is one audience,
+  not an ambiguity.
+
+  Prefer `.protecting(_:)`. The value it wants is the one the server already publishes as
+  `resource` in its RFC 9728 metadata, and a hand-written policy that disagrees produces a
+  server advertising a resource and refusing it — breaking the most conformant clients first,
+  since they read the metadata and obeyed it.
+
+- **`OAuthError.invalidTarget`**, mapping to 400. Distinct from `invalidScope` deliberately: a
+  scope names what may be done, a resource names where. A client told its scope was wrong
+  retries with different scopes and fails again, never learning the audience was the problem.
+
+- **Issued tokens carry their audience**, and `TokenValidationResult.valid` reports it. Checked
+  on refresh as well as on issue — a token that could shed its audience by being refreshed
+  would be bound only until its first renewal.
+
+- **A schema migration mechanism.** There was none: the schema is built with
+  `CREATE TABLE IF NOT EXISTS`, so a column added to an existing table never appeared, and the
+  failure would be a query naming a missing column at runtime, on deployed installations only,
+  never in a test starting from `:memory:`. `PRAGMA user_version` now carries a version.
+
+  The `CREATE` deliberately omits the new column, so every database — new or existing — arrives
+  through the migration path rather than only upgrades taking it.
+
+### Changed
+- **The default is strict.** A request naming no resource is refused. Accepting it would make
+  the safe configuration the one an operator has to go and find. `allowsUnspecified: true` is
+  the opt-out.
+
+- **`TokenValidationResult.valid` gains `audience`** — a source break for anyone matching it
+  exhaustively. Taken now because after 1.0 it costs a major version.
+
+- **`TokenRequest` gains `resource`**, defaulted, and the token endpoint reads repeats.
+  `parseFormBody` keeps one value per key, which is right for OAuth's singular parameters and
+  wrong for `resource`: a request naming two would have become a request naming the last, making
+  the refusal of several unreachable from a real request.
+
+### Known limitation
+**Validation happens at the token endpoint, not the authorization endpoint.** RFC 8707 §2 has
+the client send `resource` on both, and the refusal text says so because that is what a client
+should do and it is forward-compatible. But `/authorize` currently accepts the parameter
+without validating it or binding it to the authorization code, so the audience is decided when
+the token is issued rather than when the code is granted.
+
+The practical difference: a client can be granted a code and only then discover its resource is
+unknown. Nothing is issued wrongly — the token endpoint still refuses — but the error arrives a
+round trip later than it needs to. Closing it means carrying an audience on the authorization
+code, which is a second schema change and its own release.
+
+### Migration
+A server already serving correct protected-resource metadata needs no configuration — the
+policy defaults to its own issuer. Clients must send `resource`; on this package's client that
+is `ProviderConfiguration.resource`, shipped in 0.7.0. A client that sends nothing is refused
+with a description naming the value to send.
+
+Note that `from: "0.7.1"` on a 0.x package is up-to-next-major, so 0.8.0 satisfies it. A
+deployment relying on the permissive behaviour should bound its dependency before upgrading.
+
 ## [0.7.1] — 2026-09-02
 
 Authorization changes required by MCP `2026-07-28`.
