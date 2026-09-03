@@ -23,7 +23,15 @@ import SwiftOAuthCore
 /// fail in.
 public struct DPoPSession: Sendable {
 
-    private let key: P256.Signing.PrivateKey
+    /// The key's raw bytes, rather than the key.
+    ///
+    /// `P256.Signing.PrivateKey` is `Sendable` on Apple platforms and is not on
+    /// corelibs-crypto, so storing one in a `Sendable` struct compiles on a Mac and fails to
+    /// build on Linux. Carrying the bytes and rebuilding the key per signature keeps nothing
+    /// non-`Sendable` stored, at the cost of one key construction per proof.
+    ///
+    /// Exposure is unchanged: these are the same secret bytes the key object holds.
+    private let keyBytes: Data
 
     /// The RFC 7638 thumbprint of this session's public key.
     ///
@@ -35,7 +43,7 @@ public struct DPoPSession: Sendable {
     public init() {
         // stochastic:exempt a signing key must be unpredictable; there is no seeded path here
         let key = P256.Signing.PrivateKey()
-        self.key = key
+        self.keyBytes = key.rawRepresentation
         self.keyThumbprint = DPoPProof.thumbprint(of: key.publicKey)
     }
 
@@ -43,7 +51,7 @@ public struct DPoPSession: Sendable {
     ///
     /// - Parameter key: The key to sign proofs with.
     public init(key: P256.Signing.PrivateKey) {
-        self.key = key
+        self.keyBytes = key.rawRepresentation
         self.keyThumbprint = DPoPProof.thumbprint(of: key.publicKey)
     }
 
@@ -55,7 +63,8 @@ public struct DPoPSession: Sendable {
     /// - Returns: The value for the `DPoP` header.
     /// - Throws: If the proof could not be signed.
     public func proof(method: String, url: URL) throws -> String {
-        try DPoPProof.create(method: method, url: url, using: key)
+        let key = try P256.Signing.PrivateKey(rawRepresentation: keyBytes)
+        return try DPoPProof.create(method: method, url: url, using: key)
     }
 
     /// The headers a request carrying a bound token needs.
