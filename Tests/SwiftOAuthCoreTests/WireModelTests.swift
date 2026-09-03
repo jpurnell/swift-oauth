@@ -179,8 +179,11 @@ struct GrantTypeTests {
     func clientCredentialsAvailable() {
         #expect(GrantType(rawValue: "client_credentials") == .clientCredentials)
         #expect(GrantType.clientCredentials.rawValue == "client_credentials")
+        // The full set, pinned deliberately. The two grants OAuth 2.1 removes are absent
+        // rather than rejected, and this assertion is what would notice one reappearing.
+        // `deviceCode` joined it in 0.10.0 — RFC 8628, for anything without a browser.
         #expect(Set(GrantType.allCases)
-            == [.authorizationCode, .refreshToken, .clientCredentials])
+            == [.authorizationCode, .refreshToken, .clientCredentials, .deviceCode])
     }
 
     @Test("Only the code response type exists")

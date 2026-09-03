@@ -47,6 +47,13 @@ public enum GrantType: String, Codable, Sendable, Equatable, CaseIterable {
     /// be. **Client-side only**: this package's provider does not issue these,
     /// and requesting one from an `OAuthServer` returns `unsupported_grant_type`.
     case clientCredentials = "client_credentials"
+
+    /// Sign in on a device that cannot open a browser. RFC 8628.
+    ///
+    /// The wire value is a URN rather than a short name, which the specification requires and
+    /// which is easy to get wrong: a server matching on `"device_code"` refuses every
+    /// conformant client, and the refusal looks like an unsupported grant rather than a typo.
+    case deviceCode = "urn:ietf:params:oauth:grant-type:device_code"
 }
 
 /// The response types this package supports.

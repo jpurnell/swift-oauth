@@ -502,6 +502,12 @@ public struct OAuthHTTPHandler: Sendable {
             statusCode = 401
         case .invalidRequest, .invalidScope:
             statusCode = 400
+        case .authorizationPending, .slowDown, .expiredToken:
+            // 400, which RFC 8628 §3.5 specifies even for `authorization_pending` — the
+            // expected state of a flow that is working. It reads oddly and it is correct: the
+            // specification reuses RFC 6749 §5.2's error response, and that response is a 400.
+            // A server answering 200 here would be inventing a shape no client parses.
+            statusCode = 400
         case .invalidTarget:
             // 400, alongside the other "your request was wrong" codes. RFC 8707 §2 names the
             // error but not a status, and the resource being unknown is a fact about the

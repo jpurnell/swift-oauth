@@ -52,6 +52,19 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
     /// scopes and fail again, having never been told the audience was the problem.
     case invalidTarget(String?)
 
+    /// The user has not finished authorising yet — RFC 8628 §3.5.
+    ///
+    /// The expected answer for most of a device flow, and the reason it needs its own case:
+    /// without it a client sees a generic server error for the normal state of the operation
+    /// and cannot tell "still waiting" from "something broke".
+    case authorizationPending(String?)
+
+    /// Polling too fast — RFC 8628 §3.5. Widen the interval and keep waiting.
+    case slowDown(String?)
+
+    /// The device code expired before the user finished — RFC 8628 §3.5.
+    case expiredToken(String?)
+
     /// The wire value, per RFC 6749 §5.2.
     public var code: String {
         switch self {
@@ -65,6 +78,9 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case .temporarilyUnavailable: return "temporarily_unavailable"
         case .accessDenied: return "access_denied"
         case .invalidTarget: return "invalid_target"
+        case .authorizationPending: return "authorization_pending"
+        case .slowDown: return "slow_down"
+        case .expiredToken: return "expired_token"
         }
     }
 
@@ -74,7 +90,8 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case .invalidRequest(let d), .invalidClient(let d), .invalidGrant(let d),
              .unauthorizedClient(let d), .unsupportedGrantType(let d),
              .invalidScope(let d), .serverError(let d),
-             .temporarilyUnavailable(let d), .accessDenied(let d), .invalidTarget(let d):
+             .temporarilyUnavailable(let d), .accessDenied(let d), .invalidTarget(let d),
+             .authorizationPending(let d), .slowDown(let d), .expiredToken(let d):
             return d
         }
     }
@@ -99,6 +116,12 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
             return "The authorization server does not support the requested grant type."
         case .invalidTarget:
             return "The requested resource is not one this server issues tokens for."
+        case .authorizationPending:
+            return "The user has not yet finished authorising this device."
+        case .slowDown:
+            return "Polling too frequently; wait longer between requests."
+        case .expiredToken:
+            return "The device code expired before authorisation completed."
         case .invalidScope:
             return "The requested scope is invalid, unknown, or malformed."
         case .serverError:
@@ -131,6 +154,9 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case "temporarily_unavailable": self = .temporarilyUnavailable(description)
         case "access_denied": self = .accessDenied(description)
         case "invalid_target": self = .invalidTarget(description)
+        case "authorization_pending": self = .authorizationPending(description)
+        case "slow_down": self = .slowDown(description)
+        case "expired_token": self = .expiredToken(description)
         default: self = .serverError(description.map { "\(code): \($0)" } ?? code)
         }
     }
