@@ -271,7 +271,7 @@ struct OAuthStorageTests {
             let result = try await storage.validateAccessToken(token: token)
 
             #expect(result.isValid)
-            if case .valid(let clientId, let scope) = result {
+            if case .valid(let clientId, let scope, _) = result {
                 #expect(clientId == "client-123")
                 #expect(scope == "mcp:tools")
             }

@@ -238,8 +238,14 @@ public struct ClientRegistrationRequest: Codable, Sendable, Equatable {
 
 /// Result of validating an access token
 public enum TokenValidationResult: Sendable, Equatable {
-    /// Token is valid with associated client and scope
-    case valid(clientId: String, scope: String?)
+    /// Token is valid, with the client it was issued to, its scope, and the audience it was
+    /// bound to.
+    ///
+    /// `audience` is RFC 8707's resource indicator: the API this token is *for*. `nil` means
+    /// the token is not bound to one — either the server permits that, or the token predates
+    /// audiences being recorded. A resource server checking its own identifier against this is
+    /// what stops a token minted elsewhere from being accepted here.
+    case valid(clientId: String, scope: String?, audience: URL?)
 
     /// Token is invalid with reason
     case invalid(reason: String)

@@ -236,10 +236,11 @@ struct OAuthModelsTests {
         func validResultContainsInfo() {
             let result = TokenValidationResult.valid(
                 clientId: "client-123",
-                scope: "mcp:tools"
+                scope: "mcp:tools",
+                audience: nil
             )
 
-            if case .valid(let clientId, let scope) = result {
+            if case .valid(let clientId, let scope, _) = result {
                 #expect(clientId == "client-123")
                 #expect(scope == "mcp:tools")
             } else {
@@ -260,7 +261,7 @@ struct OAuthModelsTests {
 
         @Test("Provides isValid convenience property")
         func providesIsValidProperty() {
-            let valid = TokenValidationResult.valid(clientId: "c", scope: nil)
+            let valid = TokenValidationResult.valid(clientId: "c", scope: nil, audience: nil)
             let invalid = TokenValidationResult.invalid(reason: "bad")
 
             #expect(valid.isValid == true)

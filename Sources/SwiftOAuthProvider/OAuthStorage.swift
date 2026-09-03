@@ -49,10 +49,14 @@ public actor OAuthStorage {
 
     /// Creates a new OAuth storage instance
     ///
-    /// - Parameter path: Path to the SQLite database file.
-    ///   Use ":memory:" for an in-memory database (useful for testing).
+    /// - Parameters:
+    ///   - path: Path to the SQLite database file.
+    ///     Use ":memory:" for an in-memory database (useful for testing).
+    ///   - schemaVersion: The schema version to bring the database up to. Defaults to
+    ///     ``currentSchemaVersion``. A lower value exists so a test can produce a database as
+    ///     an earlier release left it, which is the only way to exercise a migration.
     /// - Throws: `OAuthStorageError` if database cannot be opened
-    public init(path: String) throws {
+    public init(path: String, schemaVersion: Int = OAuthStorage.currentSchemaVersion) throws {
         self.path = path
 
         // Create parent directory if needed
@@ -83,15 +87,27 @@ public actor OAuthStorage {
         self.db = validDb
 
         // Enable foreign keys and create tables
-        try Self.initializeDatabase(db: validDb)
+        try Self.initializeDatabase(db: validDb, targetVersion: schemaVersion)
     }
 
     deinit {
         sqlite3_close(db)
     }
 
+    /// The schema this build expects.
+    ///
+    /// Raised whenever the shape of a table changes. Version 1 added `access_tokens.audience`
+    /// for RFC 8707.
+    public static let currentSchemaVersion = 1
+
     /// Static helper to initialize database schema (runs before actor isolation)
-    private static func initializeDatabase(db: OpaquePointer) throws {
+    ///
+    /// - Parameters:
+    ///   - db: The open database.
+    ///   - targetVersion: The schema version to bring the database up to. Defaults to
+    ///     ``currentSchemaVersion``; a lower value exists so a test can produce a database as
+    ///     an earlier release left it, which is the only way to exercise a migration.
+    private static func initializeDatabase(db: OpaquePointer, targetVersion: Int) throws {
         try executeStatic(db: db, sql: "PRAGMA foreign_keys = ON")
 
         // Clients table
@@ -165,6 +181,64 @@ public actor OAuthStorage {
         try executeStatic(db: db, sql: "CREATE INDEX IF NOT EXISTS idx_access_tokens_client ON access_tokens(client_id)")
         try executeStatic(db: db, sql: "CREATE INDEX IF NOT EXISTS idx_refresh_tokens_client ON refresh_tokens(client_id)")
         try executeStatic(db: db, sql: "CREATE INDEX IF NOT EXISTS idx_csrf_tokens_expires ON csrf_tokens(expires_at)")
+
+        try migrate(db: db, to: targetVersion)
+    }
+
+    /// Brings an existing database up to `targetVersion`.
+    ///
+    /// The tables above are created with `CREATE TABLE IF NOT EXISTS`, which is why this is
+    /// needed and why its absence would have been hard to notice: on a fresh database the
+    /// `CREATE` includes every column and everything works, while on a database that already
+    /// exists the `CREATE` is skipped entirely and a newly added column never appears. The
+    /// failure would then be a query naming a column that is not there — at runtime, on
+    /// deployed installations only, and never in a test that starts from `:memory:`.
+    ///
+    /// `PRAGMA user_version` is SQLite's own slot for this and costs nothing to read.
+    private static func migrate(db: OpaquePointer, to targetVersion: Int) throws {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to read the schema version.")
+        }
+        var version = 0
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            version = Int(sqlite3_column_int(stmt, 0))
+        }
+        sqlite3_finalize(stmt)
+
+        // Version 1: RFC 8707 — the audience a token was issued for.
+        //
+        // Added rather than recreated, so existing tokens survive. A token issued before
+        // audiences existed has none, which is the honest answer: it was never bound to one.
+        //
+        // The `CREATE TABLE` above deliberately does NOT include this column. If it did, a
+        // fresh database would get it from the create and never take this path, so the
+        // migration would only ever run on upgrades — the case hardest to test and easiest to
+        // ship broken. Leaving it out means every database, new or old, arrives here.
+        if version < 1 && targetVersion >= 1 {
+            if try !columnExists(db: db, table: "access_tokens", column: "audience") {
+                try executeStatic(db: db, sql: "ALTER TABLE access_tokens ADD COLUMN audience TEXT")
+            }
+        }
+
+        if version < targetVersion {
+            try executeStatic(db: db, sql: "PRAGMA user_version = \(targetVersion)")
+        }
+    }
+
+    /// Whether a table already has a column, so a migration can be run twice safely.
+    private static func columnExists(db: OpaquePointer, table: String, column: String) throws -> Bool {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to inspect \(table).")
+        }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let name = sqlite3_column_text(stmt, 1), String(cString: name) == column {
+                return true
+            }
+        }
+        return false
     }
 
     /// Static SQL execution helper for initialization
@@ -446,20 +520,22 @@ public actor OAuthStorage {
         token: String,
         clientId: String,
         scope: String?,
-        expiresAt: Date
+        expiresAt: Date,
+        audience: URL? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO access_tokens
-            (token_hash, client_id, scope, expires_at, created_at, revoked)
-            VALUES (?, ?, ?, ?, ?, 0)
+            (token_hash, client_id, scope, expires_at, created_at, revoked, audience)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
         """, parameters: [
             tokenHash,
             clientId,
             scope as Any,
             expiresAt.timeIntervalSince1970,
-            Date().timeIntervalSince1970
+            Date().timeIntervalSince1970,
+            audience?.absoluteString as Any
         ])
     }
 
@@ -471,7 +547,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked
+            SELECT client_id, scope, expires_at, revoked, audience
             FROM access_tokens
             WHERE token_hash = ?
         """
@@ -490,6 +566,12 @@ public actor OAuthStorage {
         let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
         let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
         let revoked = sqlite3_column_int(stmt, 3) != 0
+        // A token stored before audiences existed has NULL here, which reads as "bound to
+        // nothing" — the honest answer, since it never was.
+        let audience = sqlite3_column_text(stmt, 4)
+            .map { String(cString: $0) }
+            // SECURITY: parses a value this server wrote itself when it issued the token.
+            .flatMap { URL(string: $0) }
 
         if revoked {
             return .invalid(reason: "Token revoked")
@@ -499,7 +581,7 @@ public actor OAuthStorage {
             return .invalid(reason: "Token expired")
         }
 
-        return .valid(clientId: clientId, scope: scope)
+        return .valid(clientId: clientId, scope: scope, audience: audience)
     }
 
     /// Revokes an access token

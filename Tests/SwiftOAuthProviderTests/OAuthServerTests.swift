@@ -659,7 +659,7 @@ struct OAuthServerTests {
             let result = try await server.validateAccessToken(tokens.accessToken)
 
             #expect(result.isValid)
-            if case .valid(let clientId, let scope) = result {
+            if case .valid(let clientId, let scope, _) = result {
                 #expect(clientId == client.clientId)
                 #expect(scope == "mcp:tools")
             }
