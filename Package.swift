@@ -25,10 +25,23 @@ let package = Package(
     products: [
         .library(name: "SwiftOAuthCore", targets: ["SwiftOAuthCore"]),
         .library(name: "SwiftOAuthProvider", targets: ["SwiftOAuthProvider"]),
-        .library(name: "SwiftOAuthClient", targets: ["SwiftOAuthClient"])
+        .library(name: "SwiftOAuthClient", targets: ["SwiftOAuthClient"]),
+        // mTLS lives in its own product, so linking NIO is something a consumer opts into.
+        //
+        // Being precise about what that buys: SwiftPM resolves every package-level dependency
+        // regardless, so the download is taken either way. What a separate product avoids is
+        // *linking* NIO into a binary that never uses it, and compiling it as part of every
+        // build of the other targets.
+        .library(name: "SwiftOAuthMTLS", targets: ["SwiftOAuthMTLS"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        // For mTLS only — RFC 8705. `URLSession` cannot answer a client-certificate challenge
+        // on Linux: corelibs-foundation's `URLCredential` has no identity-based initialiser,
+        // and its source says outright that there is no SecIdentity support. NIOSSL's
+        // `TLSConfiguration` does expose `certificateChain` and `privateKey`, and
+        // AsyncHTTPClient accepts one — so mutual TLS means a NIO-backed transport or nothing.
+        .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.19.0"),
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0")
     ],
     targets: [
@@ -43,6 +56,15 @@ let package = Package(
             // silence SwiftPM's unhandled-file warning by handing DocC nothing, and doc-lint
             // would pass over an article it never opened.
             resources: [.copy("SwiftOAuthCore.docc")],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "SwiftOAuthMTLS",
+            dependencies: [
+                "SwiftOAuthCore",
+                "SwiftOAuthClient",
+                .product(name: "AsyncHTTPClient", package: "async-http-client")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .systemLibrary(
@@ -83,6 +105,11 @@ let package = Package(
         .testTarget(
             name: "SwiftOAuthCoreTests",
             dependencies: ["SwiftOAuthCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "SwiftOAuthMTLSTests",
+            dependencies: ["SwiftOAuthMTLS"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
