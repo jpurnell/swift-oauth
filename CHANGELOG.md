@@ -9,14 +9,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 RFC 7662 token introspection, both halves, and `WWW-Authenticate` parsing.
 
-### Not a breaking release
-Everything here is additive: new types, new methods, no changed signatures, no tightened
-defaults, no schema change. Taking 0.9.0 from 0.8.0 requires no code change and no client
-migration.
+### Additive — but read this if you are on 0.7.x
 
-That is stated explicitly because 0.8.0 was the opposite and said so too late. The lesson from
-that release stands: for a server package, ask what the *clients* of a deployment must do, not
-only what the operator must configure.
+**Coming from 0.8.0:** everything here is additive. New types, new methods, no changed
+signatures, no tightened defaults, no schema change. A bound raise and nothing else.
+
+**Coming from 0.7.x:** everything in 0.8.0's notes applies to you as well. This release adds
+nothing on top of it, but there is no route to 0.9.0 except through 0.8.0, so you still take its
+client refusals on the way through. Read that entry first; this one adds no migration of its
+own.
+
+The distinction matters because of who is likely to be reading. Anyone who followed 0.8.0's
+advice and bounded their dependency is sitting at 0.7.1 — a population that release's own
+warning created. **An additive release is only additive relative to a baseline, and the baseline
+worth stating is the one consumers are actually on, which after a breaking release is the
+version before it rather than the version after.** Bounded consumers accumulate at the last safe
+version, which is exactly where a "nothing to plan around" note is least true.
 
 ### Added
 - **`IntrospectionResult`** (Core) — RFC 7662's response. An expired, revoked or unknown token
