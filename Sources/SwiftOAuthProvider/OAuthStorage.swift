@@ -584,6 +584,62 @@ public actor OAuthStorage {
         return .valid(clientId: clientId, scope: scope, audience: audience)
     }
 
+    /// Everything RFC 7662 reports about an access token.
+    ///
+    /// Separate from ``validateAccessToken(token:)`` rather than an extension of it. That
+    /// method answers "may this request proceed" and returns an enum whose shape is already a
+    /// published contract — widening it again for `exp` and `iat` would be a second source
+    /// break in consecutive releases for callers who do not introspect at all.
+    ///
+    /// Returns ``IntrospectionResult/inactive`` for a token that is expired, revoked or
+    /// unknown, and the three are indistinguishable to the caller on purpose: RFC 7662 §2.2
+    /// requires that an inactive response say nothing else, because a caller holding a dead
+    /// token has proven nothing and a response carrying claims is an oracle.
+    ///
+    /// - Parameter token: The token to describe.
+    /// - Returns: The introspection response to send.
+    /// - Throws: `OAuthStorageError` if the database cannot be read.
+    public func introspectAccessToken(token: String) throws -> IntrospectionResult {
+        let tokenHash = hashToken(token)
+
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+
+        let sql = """
+            SELECT client_id, scope, expires_at, revoked, audience, created_at
+            FROM access_tokens
+            WHERE token_hash = ?
+        """
+
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            return .inactive
+        }
+
+        let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
+        let revoked = sqlite3_column_int(stmt, 3) != 0
+        guard !revoked, Date() < expiresAt else {
+            return .inactive
+        }
+
+        let clientId = String(cString: sqlite3_column_text(stmt, 0))
+        let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
+        let audience = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+        let issuedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+
+        return IntrospectionResult(
+            active: true,
+            scope: scope,
+            clientId: clientId,
+            audience: audience.map { [$0] },
+            expiry: expiresAt,
+            issuedAt: issuedAt)
+    }
+
     /// Revokes an access token
     public func revokeAccessToken(token: String) throws {
         let tokenHash = hashToken(token)

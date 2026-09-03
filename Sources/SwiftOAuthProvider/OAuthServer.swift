@@ -109,6 +109,25 @@ public actor OAuthServer {
 
     // MARK: - Protected Resource Metadata (RFC 9728)
 
+    /// Describes a token — RFC 7662 token introspection.
+    ///
+    /// How a resource server answers the only question it has about a bearer string it was
+    /// handed: is this still good, and what is it for? Without it a resource server either
+    /// trusts what it received or reaches past this package to find out.
+    ///
+    /// An expired, revoked or unknown token is reported as inactive rather than raised as an
+    /// error. That is RFC 7662 §2.2, and it matters: a server answering 401 for an expired
+    /// token makes every caller treat "this token is no good" as a transport failure, which is
+    /// a different condition handled in a different place, usually with a retry that cannot
+    /// help.
+    ///
+    /// - Parameter token: The access token to describe.
+    /// - Returns: The introspection response, active or not.
+    /// - Throws: Only if storage cannot be read. A token being bad is an answer, not an error.
+    public func introspect(token: String) async throws -> IntrospectionResult {
+        try await storage.introspectAccessToken(token: token)
+    }
+
     /// Returns OAuth 2.0 Protected Resource Metadata
     ///
     /// Per RFC 9728, this tells clients which authorization server protects
