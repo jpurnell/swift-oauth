@@ -43,6 +43,26 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
         self.allowsUnspecified = allowsUnspecified
     }
 
+    /// A policy for a server that protects the resource it identifies itself as.
+    ///
+    /// This is the ordinary case and the one to prefer, because the alternative invites a
+    /// specific and badly-behaved failure. A provider publishes its canonical resource
+    /// identifier in RFC 9728 metadata at `/.well-known/oauth-protected-resource`, and that is
+    /// exactly what a conformant client reads in order to learn what to put in `resource`. If
+    /// a hand-written policy then disagrees with that metadata — a trailing slash, a port,
+    /// `http` against `https`, or someone changing one and not the other — the server
+    /// advertises a resource and refuses it at the token endpoint.
+    ///
+    /// The client that breaks first is the most correct one: it read the metadata, sent what
+    /// it was told, and got `invalid_target`. Both halves look right in isolation, and the
+    /// operator's first instinct is that the client is wrong.
+    ///
+    /// - Parameter identifier: The server's canonical resource identifier — the same value it
+    ///   publishes as `resource` in its protected-resource metadata.
+    public static func protecting(_ identifier: URL) -> ResourceIndicatorPolicy {
+        ResourceIndicatorPolicy(known: [identifier])
+    }
+
     /// The audience to bind into a token, for the resources a request named.
     ///
     /// - Parameter requested: Every `resource` parameter on the request, in order. RFC 8707 §2
@@ -59,8 +79,13 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
 
         guard let resource = distinct.first else {
             guard allowsUnspecified else {
+                // Distinct wording from the mismatch case on purpose. Under a strict default
+                // the commonest failure is a client that sent nothing at all, and telling it
+                // its resource was refused — when it named none — sends the reader looking for
+                // a value that was never there.
                 throw OAuthError.invalidTarget(
-                    "This server requires a resource indicator naming the API the token is for.")
+                    "No resource indicator was supplied, and this server requires one naming "
+                    + "the API the token is for.")
             }
             return nil
         }

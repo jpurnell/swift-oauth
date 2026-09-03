@@ -120,3 +120,56 @@ struct InvalidTargetWireTests {
         #expect(error.code == "invalid_target")
     }
 }
+
+/// The policy against what the server actually advertises.
+///
+/// These are the tests that would catch the drift, and they are the reason the cross-half
+/// check in the proposal's §11 exists. A provider publishes its canonical resource identifier
+/// in RFC 9728 metadata, and that is what a conformant client reads to learn what to send. A
+/// policy written by hand that disagrees with that metadata produces a server which advertises
+/// a resource and then refuses it — and the client it breaks first is the one that did
+/// everything right.
+///
+/// Neither half is wrong on its own, which is exactly why no single-half test finds it.
+@Suite("RFC 8707 — policy agrees with published metadata")
+struct ResourceIndicatorMetadataAgreementTests {
+
+    private static func makeServer(issuer: String) async throws -> OAuthServer {
+        let storage = try OAuthStorage(path: ":memory:")
+        return await OAuthServer(storage: storage, issuer: issuer)
+    }
+
+    /// The advertised resource is accepted by a policy built from the same identifier.
+    @Test("What the server advertises, a policy built from it accepts")
+    func advertisedResourceIsAccepted() async throws {
+        let server = try await Self.makeServer(issuer: "https://mcp.example.com")
+        let metadata = await server.getProtectedResourceMetadata()
+
+        // SECURITY: parses the identifier this server published about itself.
+        let advertised = try #require(URL(string: metadata.resource))
+        let policy = ResourceIndicatorPolicy.protecting(advertised)
+
+        #expect(try policy.audience(for: [advertised]) == advertised)
+    }
+
+    /// And the failure it prevents, stated as a test so the shape is on record: a policy naming
+    /// something the metadata does not refuses the very value a conformant client was told to
+    /// send.
+    @Test("A policy disagreeing with the metadata refuses a conformant client")
+    func disagreementRefusesConformantClient() async throws {
+        let server = try await Self.makeServer(issuer: "https://mcp.example.com")
+        let metadata = await server.getProtectedResourceMetadata()
+        // SECURITY: parses literals written in this test; no request is issued from either.
+        let advertised = try #require(URL(string: metadata.resource))
+        // The same host with a trailing slash — the drift is this small.
+        let almost = try #require(URL(string: "https://mcp.example.com/"))
+
+        let policy = ResourceIndicatorPolicy.protecting(almost)
+
+        let error = #expect(throws: OAuthError.self) {
+            _ = try policy.audience(for: [advertised])
+        }
+        #expect(error?.code == "invalid_target",
+                "a client that read the metadata and obeyed it was refused")
+    }
+}
