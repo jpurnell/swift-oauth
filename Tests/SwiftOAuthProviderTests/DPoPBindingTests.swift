@@ -108,3 +108,73 @@ struct DPoPBindingTests {
             "jti-old", expiresAt: Date().addingTimeInterval(300)))
     }
 }
+
+/// The bearer entry point, against a token that is not a bearer token.
+///
+/// RFC 9449 §7.1 gives a bound token its own scheme. A server that accepts one at the `Bearer`
+/// entry point accepts it *without checking any proof* — the token validates, the caller sees
+/// success, and the binding is silently gone. The code compiles, nothing logs, and a grep for
+/// "DPoP" in the consumer's sources finds nothing, which is exactly why nobody looks there.
+///
+/// So the refusal lives here rather than in a release note. A token carrying a key thumbprint,
+/// presented at the bearer endpoint, is being presented incorrectly by definition — whoever is
+/// asking, and whether or not they have read anything about DPoP.
+@Suite("RFC 9449 — a bound token is not a bearer token")
+struct BoundTokenSchemeTests {
+
+    private func makeHandler() async throws -> (OAuthHTTPHandler, OAuthStorage) {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(
+            storage: storage, issuer: "https://mcp.example.com",
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
+        return (await OAuthHTTPHandler(server: server), storage)
+    }
+
+    /// An ordinary bearer token still works. The refusal must be narrow, or every existing
+    /// consumer breaks.
+    @Test("An unbound token is still accepted as a bearer token")
+    func unboundTokenStillWorks() async throws {
+        let (handler, storage) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "plain", clientId: "c1", scope: "read",
+            expiresAt: Date().addingTimeInterval(3600), audience: nil)
+
+        let result = await handler.validateBearerToken(authHeader: "Bearer plain")
+
+        #expect(result.isValid)
+    }
+
+    /// A bound token presented as a bearer token is refused.
+    @Test("A bound token is refused at the bearer entry point")
+    func boundTokenIsRefusedAsBearer() async throws {
+        let (handler, storage) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "bound", clientId: "c1", scope: "read",
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            keyThumbprint: "thumb-abc")
+
+        let result = await handler.validateBearerToken(authHeader: "Bearer bound")
+
+        #expect(!result.isValid,
+                "a bound token validated as a bearer token; the binding was discarded")
+    }
+
+    /// And the refusal says why, because "invalid token" sends an operator looking for an
+    /// expiry or a typo rather than at the scheme they used.
+    @Test("The refusal names the scheme as the problem")
+    func refusalExplainsTheScheme() async throws {
+        let (handler, storage) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "bound2", clientId: "c1", scope: nil,
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            keyThumbprint: "thumb-abc")
+
+        let result = await handler.validateBearerToken(authHeader: "Bearer bound2")
+
+        guard case .invalid(let reason) = result else {
+            Issue.record("expected a refusal, got \(result)")
+            return
+        }
+        #expect(reason.contains("DPoP"), "the reason should name the scheme to use")
+    }
+}

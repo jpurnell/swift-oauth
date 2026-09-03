@@ -416,7 +416,25 @@ public struct OAuthHTTPHandler: Sendable {
         let token = String(header.dropFirst(7))
 
         do {
-            return try await server.validateAccessToken(token)
+            let result = try await server.validateAccessToken(token)
+
+            // A bound token is not a bearer token — RFC 9449 §7.1 gives it its own scheme.
+            //
+            // Refused here rather than documented, because the alternative fails silently: a
+            // server that accepts a bound token at this entry point accepts it *without
+            // checking any proof*, the caller sees success, and the binding is gone. Nothing
+            // logs, the code compiles, and a search for "DPoP" in that consumer's sources
+            // finds nothing — so there is no thread to pull.
+            //
+            // Every consumer with a `Bearer` path would otherwise have to know that bound
+            // tokens exist and write this check themselves, and the consumer who has not read
+            // the DPoP notes is exactly the one it protects.
+            if case .valid(let validated) = result, validated.keyThumbprint != nil {
+                return .invalid(
+                    reason: "This token is bound to a key and must be presented with the DPoP "
+                        + "scheme, with a proof — not as a bearer token.")
+            }
+            return result
         } catch {
             #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
