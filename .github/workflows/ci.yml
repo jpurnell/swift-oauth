@@ -1,0 +1,67 @@
+# Linux is the only reason this exists.
+#
+# macOS is already covered: the pre-commit and pre-push hooks run the full quality gate — the
+# same build and suite plus forty-odd static checkers — on every commit. Linux is built nowhere
+# else, and this package has real platform-conditional code: `EncryptedFileClientStorage` logs
+# through `os.Logger`, which is Apple-only, and `URLSessionTokenTransport` needs
+# `FoundationNetworking`, which does not exist on a Mac. Both are guarded, and only a Linux
+# build notices when a guard is missed.
+#
+# That is not hypothetical here. This package did not compile on Linux at all until 0.7.x, and
+# the eighty-six errors were found by SwiftMCPClient's CI — a *consumer's* CI, discovering that
+# its dependency was broken on a platform the dependency had never been built for. This
+# workflow exists so that gap is closed on the side that owns the code.
+#
+# No macOS job, deliberately. GitHub's newest macOS image ships an older Swift than this package
+# declares, so it could only ever report a toolchain behind the one every commit is built
+# against locally.
+#
+# No swift-actions/setup-swift either: it resolves versions from its own table, and a version
+# missing from that table fails a run before a line is compiled. The official container is
+# authoritative about what it contains.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Manual runs, for checking a change to this workflow without inventing a commit to trigger it.
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    # Matches the tools version this package declares. A container older than that fails at
+    # manifest parsing, with an error about the tools version rather than about the code.
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@v5
+
+      # SQLite headers. `CSQLite` is a `systemLibrary` target — it links the platform's
+      # sqlite3 rather than vendoring one, and declares `.apt(["libsqlite3-dev"])` as its
+      # provider. SwiftPM prints that provider hint; it does not install it. macOS has the
+      # library via the SDK, so this is invisible locally and is a hard failure here: without
+      # it the build dies at the module map, unable to find `sqlite3.h`.
+      - name: Install SQLite headers
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq libsqlite3-dev
+
+      # Every dependency here is public — swift-crypto and the DocC plugin, both Apple's. There
+      # is deliberately no token step: this package has none of the private-dependency
+      # authentication SwiftMCPClient needed, and adding a guard for a case that cannot arise
+      # would be a step that silently skips forever.
+      - name: Preflight
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      # The whole suite runs here. Unlike a consumer, this package has no platform-specific
+      # test target to exclude: what is Apple-only is the *logging* inside a store whose
+      # behaviour is tested identically on both platforms, so a Linux run that passes fewer
+      # tests than a Mac one would itself be a finding.
+      - name: Test
+        run: swift test
