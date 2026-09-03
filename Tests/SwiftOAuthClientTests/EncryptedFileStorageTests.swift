@@ -2,6 +2,20 @@ import Foundation
 import Testing
 import Crypto
 import SwiftOAuthCore
+
+/// A key built from fixed bytes, rather than `SymmetricKey(size:)` held across an `await`.
+///
+/// `SymmetricKey` is `Sendable` on Apple platforms and is not on corelibs-crypto, so a key
+/// created before an `await` and used after it compiles on a Mac and fails on Linux with
+/// "sending 'key' risks causing data races". Building the key at each use from plain bytes
+/// keeps nothing non-`Sendable` alive across a suspension point.
+///
+/// The bytes are fixed rather than random: this is a test key, and a seeded value is also one
+/// the stochastic-determinism checker will not object to.
+private func testKey(_ label: UInt8 = 0x01) -> SymmetricKey {
+    SymmetricKey(data: Data(repeating: label, count: 32))
+}
+
 @testable import SwiftOAuthClient
 
 /// Persistent credential storage.
@@ -18,14 +32,13 @@ struct EncryptedFileStorageTests {
     @Test("A credential survives a new instance over the same file")
     func credentialSurvivesRestart() async throws {
         let location = temporaryFile()
-        let key = SymmetricKey(size: .bits256)
         defer { try? FileManager.default.removeItem(at: location) }
 
-        let first = try EncryptedFileClientStorage(url: location, key: key)
+        let first = try EncryptedFileClientStorage(url: location, key: testKey())
         try await first.store(credential(access: "the-token"), for: .testConnection)
 
         // A separate instance, as though the process had restarted.
-        let second = try EncryptedFileClientStorage(url: location, key: key)
+        let second = try EncryptedFileClientStorage(url: location, key: testKey())
         let recovered = try await second.credential(for: .testConnection)
 
         #expect(recovered?.accessToken == "the-token")
@@ -86,8 +99,7 @@ struct EncryptedFileStorageTests {
         let location = temporaryFile()
         defer { try? FileManager.default.removeItem(at: location) }
 
-        let key = SymmetricKey(size: .bits256)
-        let storage = try EncryptedFileClientStorage(url: location, key: key)
+        let storage = try EncryptedFileClientStorage(url: location, key: testKey())
         try await storage.store(credential(access: "the-token"), for: .testConnection)
 
         var raw = try Data(contentsOf: location)
@@ -96,7 +108,9 @@ struct EncryptedFileStorageTests {
         raw[index] ^= 0x01
         try raw.write(to: location)
 
-        let reopened = try EncryptedFileClientStorage(url: location, key: key)
+        // The same key, deliberately: this asserts the *tamper* is detected, and a different
+        // key would fail for the wrong reason while looking identical.
+        let reopened = try EncryptedFileClientStorage(url: location, key: testKey())
         await #expect(throws: StorageError.cannotDecrypt) {
             try await reopened.credential(for: .testConnection)
         }
