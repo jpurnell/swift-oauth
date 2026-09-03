@@ -17,14 +17,22 @@ import os
 public struct OAuthHTTPHandler: Sendable {
 
     private let server: OAuthServer
-    private let logger: os.Logger
+
+    // `os.Logger` is Apple-only, and this was an unguarded stored property of that type — so
+    // the import was conditional and the use was not, and this file did not compile on Linux
+    // at all. Matches the pattern in `EncryptedFileClientStorage`.
+    #if canImport(os)
+    private let logger: Logger
+    #endif
 
     /// Creates a new OAuth HTTP handler
     ///
     /// - Parameter server: The OAuth server to delegate to
     public init(server: OAuthServer) {
         self.server = server
-        self.logger = os.Logger(subsystem: "com.swiftmcp", category: "OAuthHTTPHandler")
+        #if canImport(os)
+        self.logger = Logger(subsystem: "com.swiftoauth.provider", category: "OAuthHTTPHandler")
+        #endif
     }
 
     // MARK: - Protected Resource Metadata
@@ -50,7 +58,9 @@ public struct OAuthHTTPHandler: Sendable {
                 body: body
             )
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.serverError("Failed to encode protected resource metadata"))
         }
     }
@@ -75,7 +85,9 @@ public struct OAuthHTTPHandler: Sendable {
                 body: body
             )
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.serverError("Failed to encode metadata"))
         }
     }
@@ -106,10 +118,14 @@ public struct OAuthHTTPHandler: Sendable {
                 body: responseBody
             )
         } catch let error as OAuthError {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.code, privacy: .public)")
+            #endif
             return errorResponse(error)
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.invalidRequest(nil))
         }
     }
@@ -167,7 +183,9 @@ public struct OAuthHTTPHandler: Sendable {
                 body: consentPage.render()
             )
         } catch let error as OAuthError {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.code, privacy: .public)")
+            #endif
             // For invalid redirect_uri, we must NOT redirect to it
             // Instead, show an error page directly
             // Matches any `invalid_request`, whatever detail it carries — narrowing this to
@@ -185,7 +203,9 @@ public struct OAuthHTTPHandler: Sendable {
 
             return errorResponse(error)
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.serverError("Unexpected error"))
         }
     }
@@ -234,7 +254,9 @@ public struct OAuthHTTPHandler: Sendable {
                 return jsonErrorResponse("invalid_request", "Invalid or expired csrf token")
             }
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return jsonErrorResponse("invalid_request", "CSRF validation failed")
         }
         do {
@@ -242,7 +264,9 @@ public struct OAuthHTTPHandler: Sendable {
                 return jsonErrorResponse("invalid_client", "Client not found")
             }
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return jsonErrorResponse("server_error", "Failed to verify client")
         }
         return nil
@@ -265,7 +289,9 @@ public struct OAuthHTTPHandler: Sendable {
                 URLQueryItem(name: "code", value: response.code),
             ], state: response.state)
         } catch let error as OAuthError {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.code, privacy: .public)")
+            #endif
             var items = [URLQueryItem(name: "error", value: error.code)]
             if let description = error.detail ?? error.standardDescription as String? {
                 items.append(URLQueryItem(name: "error_description", value: description))
@@ -273,7 +299,9 @@ public struct OAuthHTTPHandler: Sendable {
             let redirect = buildRedirect(uri: redirectUri, queryItems: items, state: state)
             return redirect.statusCode == 302 ? redirect : errorResponse(error)
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.serverError("Authorization failed"))
         }
     }
@@ -361,10 +389,14 @@ public struct OAuthHTTPHandler: Sendable {
                 ]
             )
         } catch let error as OAuthError {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.code, privacy: .public)")
+            #endif
             return errorResponse(error)
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.serverError("Token request failed"))
         }
     }
@@ -386,7 +418,9 @@ public struct OAuthHTTPHandler: Sendable {
         do {
             return try await server.validateAccessToken(token)
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return .invalid(reason: "Token validation failed")
         }
     }
@@ -543,7 +577,9 @@ public struct OAuthHTTPHandler: Sendable {
                 body: String(data: data, encoding: .utf8) ?? "{}"
             )
         } catch {
+            #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            #endif
             return OAuthHTTPResponse(
                 statusCode: statusCode,
                 contentType: "application/json",
