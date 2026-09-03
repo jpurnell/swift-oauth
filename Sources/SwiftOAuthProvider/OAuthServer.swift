@@ -46,6 +46,13 @@ public actor OAuthServer {
 
     private let storage: OAuthStorage
     private let issuer: String
+
+    /// Which resources this server issues tokens for — RFC 8707.
+    ///
+    /// Defaults to the server's own identifier, so a deployment that already serves correct
+    /// protected-resource metadata needs no configuration. Supply one explicitly when the
+    /// resource identifier legitimately differs from the issuer.
+    public let resourcePolicy: ResourceIndicatorPolicy
     private let accessTokenLifetime: TimeInterval
     private let refreshTokenLifetime: TimeInterval
     private let authorizationCodeLifetime: TimeInterval
@@ -65,10 +72,19 @@ public actor OAuthServer {
         issuer: String,
         accessTokenLifetime: TimeInterval = 86400,        // 24 hours
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
-        authorizationCodeLifetime: TimeInterval = 600     // 10 minutes
+        authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
+        resourcePolicy: ResourceIndicatorPolicy? = nil
     ) {
         self.storage = storage
         self.issuer = issuer
+        // Defaulted from the issuer, which is what this server already publishes as its
+        // resource identifier in RFC 9728 metadata. Asking an operator to repeat that value
+        // invites the two to drift, and a server that advertises a resource then refuses it
+        // breaks the most conformant clients first — they read the metadata and obeyed it.
+        self.resourcePolicy = resourcePolicy
+            // SECURITY: parses this server's own configured issuer; nothing is fetched from it.
+            ?? URL(string: issuer).map { ResourceIndicatorPolicy.protecting($0) }
+            ?? ResourceIndicatorPolicy(known: [], allowsUnspecified: true)
         self.accessTokenLifetime = accessTokenLifetime
         self.refreshTokenLifetime = refreshTokenLifetime
         self.authorizationCodeLifetime = authorizationCodeLifetime
@@ -350,12 +366,17 @@ public actor OAuthServer {
 
         let now = Date()
 
+        // RFC 8707: what this token is for, decided before it is issued. A token stored
+        // without an audience is one every resource accepts.
+        let audience = try resourcePolicy.audience(for: request.resource)
+
         // Store tokens
         try await storage.saveAccessToken(
             token: accessToken,
             clientId: request.clientId,
             scope: authCode.scope,
-            expiresAt: now.addingTimeInterval(accessTokenLifetime)
+            expiresAt: now.addingTimeInterval(accessTokenLifetime),
+            audience: audience
         )
 
         if let rt = refreshToken {
@@ -423,11 +444,16 @@ public actor OAuthServer {
         let newAccessToken = TokenGenerator.generateAccessToken()
         let now = Date()
 
+        // Checked on refresh too. A token that could shed its audience by being refreshed
+        // would make the binding good only until the first renewal.
+        let audience = try resourcePolicy.audience(for: request.resource)
+
         try await storage.saveAccessToken(
             token: newAccessToken,
             clientId: request.clientId,
             scope: tokenInfo.scope,
-            expiresAt: now.addingTimeInterval(accessTokenLifetime)
+            expiresAt: now.addingTimeInterval(accessTokenLifetime),
+            audience: audience
         )
 
         // Optionally rotate refresh token (we'll keep the same one for simplicity)
@@ -691,6 +717,12 @@ public struct TokenRequest: Sendable {
     /// The refresh token (for refresh_token grant)
     public let refreshToken: String?
 
+    /// The `resource` parameters on the request — RFC 8707 resource indicators.
+    ///
+    /// An array because the parameter may repeat. Empty means the request named none, which a
+    /// strict policy refuses.
+    public let resource: [URL]
+
     /// Creates a new token request
     public init(
         grantType: String,
@@ -699,8 +731,10 @@ public struct TokenRequest: Sendable {
         clientId: String,
         clientSecret: String?,
         codeVerifier: String?,
-        refreshToken: String?
+        refreshToken: String?,
+        resource: [URL] = []
     ) {
+        self.resource = resource
         self.grantType = grantType
         self.code = code
         self.redirectUri = redirectUri

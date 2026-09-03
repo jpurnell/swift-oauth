@@ -11,7 +11,12 @@ struct OAuthServerTests {
 
     static func makeTestServer() async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(storage: storage, issuer: "https://example.com")
+        return await OAuthServer(storage: storage, issuer: "https://example.com",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
     }
 
     // MARK: - Server Metadata Tests

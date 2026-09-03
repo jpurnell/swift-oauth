@@ -336,7 +336,13 @@ public struct OAuthHTTPHandler: Sendable {
                 clientId: clientId,
                 clientSecret: params["client_secret"],
                 codeVerifier: params["code_verifier"],
-                refreshToken: params["refresh_token"]
+                refreshToken: params["refresh_token"],
+                // Read separately because it may repeat. A value that is not a URL is dropped
+                // rather than rejected here — the policy refuses what it does not know, and it
+                // is the one place that decision belongs.
+                //
+                // SECURITY: parses client-supplied identifiers; nothing is fetched from them.
+                resource: Self.formValues(for: "resource", in: body).compactMap { URL(string: $0) }
             )
 
             let response = try await server.handleTokenRequest(request)
@@ -386,6 +392,25 @@ public struct OAuthHTTPHandler: Sendable {
     }
 
     // MARK: - Helpers
+
+    /// Every value a form body carries for one key, in the order they appear.
+    ///
+    /// ``parseFormBody(_:)`` keeps one value per key, which is right for the parameters OAuth
+    /// defines as singular and wrong for `resource`: RFC 8707 §2 permits it to repeat, and
+    /// collapsing a repeat would turn a request naming two resources into a request naming the
+    /// last one. The refusal of several distinct resources would then be unreachable from a
+    /// real request, and a client asking for two audiences would quietly get a token for one.
+    ///
+    /// Static so the parsing can be tested without standing up a server.
+    static func formValues(for key: String, in body: String) -> [String] {
+        body.split(separator: "&").compactMap { pair in
+            let keyValue = pair.split(separator: "=", maxSplits: 1)
+            guard keyValue.count == 2 else { return nil }
+            let name = String(keyValue[0]).removingPercentEncoding ?? String(keyValue[0])
+            guard name == key else { return nil }
+            return String(keyValue[1]).removingPercentEncoding ?? String(keyValue[1])
+        }
+    }
 
     private func parseFormBody(_ body: String) -> [String: String] {
         var params: [String: String] = [:]

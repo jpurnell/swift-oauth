@@ -229,7 +229,12 @@ struct OAuthConsentTests {
     @Test("Consent - Approve returns authorization code")
     func testConsentApproveReturnsCode() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Register a client first
@@ -264,7 +269,12 @@ struct OAuthConsentTests {
     @Test("Consent - Deny returns access_denied error")
     func testConsentDenyReturnsError() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Register a client first
@@ -298,7 +308,12 @@ struct OAuthConsentTests {
     @Test("Consent - Invalid CSRF token rejected")
     func testConsentInvalidCSRFRejected() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Register a client first
@@ -324,7 +339,12 @@ struct OAuthConsentTests {
     @Test("Consent - Invalid client_id rejected")
     func testConsentInvalidClientRejected() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Submit with non-existent client
@@ -343,7 +363,12 @@ struct OAuthConsentTests {
     @Test("Consent - Missing required params rejected")
     func testConsentMissingParamsRejected() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Missing action
@@ -376,7 +401,12 @@ struct OAuthConsentTests {
     @Test("Authorization - Returns consent page HTML")
     func testAuthorizationReturnsConsentPage() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Register a client first
@@ -405,7 +435,12 @@ struct OAuthConsentTests {
     @Test("Authorization - Invalid redirect_uri returns error page")
     func testAuthorizationInvalidRedirectUri() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080")
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080",
+            // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
+            // shapes. Strict resource indicators would make every one of them carry a `resource`
+            // parameter that has nothing to do with what they test. The strict default has its own
+            // coverage in ResourceIndicatorTests and AudienceBindingTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = OAuthHTTPHandler(server: server)
 
         // Register a client

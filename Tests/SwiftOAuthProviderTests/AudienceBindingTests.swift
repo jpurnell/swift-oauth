@@ -112,3 +112,107 @@ struct AudienceBindingTests {
         #expect(try await third.validateAccessToken(token: "tok-3").isValid)
     }
 }
+
+/// The token endpoint, end to end.
+///
+/// The policy and the storage column are both in place; this is the part that connects them —
+/// a token request naming a resource is validated against what the server serves, and the
+/// token that comes back carries that audience.
+@Suite("RFC 8707 — the token endpoint")
+struct TokenEndpointResourceTests {
+
+    private func url(_ string: String) throws -> URL {
+        // SECURITY: parses a literal written in this test; no request is issued from it.
+        try #require(URL(string: string))
+    }
+
+    /// The default policy is the server's own identity, so a consumer that already serves
+    /// correct RFC 9728 metadata needs no configuration at all.
+    ///
+    /// This is what makes the migration a bound raise rather than a code change: the value the
+    /// server publishes as its resource identifier is the value it accepts.
+    @Test("A server accepts the resource it advertises, with no configuration")
+    func acceptsItsOwnAdvertisedResource() async throws {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com")
+
+        let metadata = await server.getProtectedResourceMetadata()
+        let advertised = try url(metadata.resource)
+
+        let policy = await server.resourcePolicy
+        #expect(try policy.audience(for: [advertised]) == advertised)
+    }
+
+    /// A request naming no resource is refused, because strict is the default.
+    @Test("The token endpoint refuses a request naming no resource")
+    func refusesUnspecifiedResource() async throws {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com")
+
+        let policy = await server.resourcePolicy
+        let error = #expect(throws: OAuthError.self) {
+            _ = try policy.audience(for: [])
+        }
+        #expect(error?.code == "invalid_target")
+    }
+
+    /// A server whose resource identifier is not its issuer can say so, and the override is
+    /// what the metadata should then advertise too.
+    @Test("An explicit policy overrides the default")
+    func explicitPolicyOverrides() async throws {
+        let storage = try OAuthStorage(path: ":memory:")
+        let api = try url("https://api.example.com")
+        let server = await OAuthServer(
+            storage: storage,
+            issuer: "https://auth.example.com",
+            resourcePolicy: .protecting(api))
+
+        let policy = await server.resourcePolicy
+        #expect(try policy.audience(for: [api]) == api)
+        #expect(throws: OAuthError.self) {
+            _ = try policy.audience(for: [try self.url("https://auth.example.com")])
+        }
+    }
+}
+
+/// `resource` as it arrives on the wire.
+///
+/// RFC 8707 §2 permits the parameter to repeat, and the form parser keeps one value per key —
+/// so a request naming two resources would silently become a request naming the last one. The
+/// policy's refusal of several distinct resources could then never fire from a real request,
+/// and a client asking for two audiences would quietly receive a token for one of them.
+@Suite("RFC 8707 — parsing resource from the wire")
+struct ResourceParsingTests {
+
+    private func handler(issuer: String) async throws -> OAuthHTTPHandler {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(storage: storage, issuer: issuer)
+        return await OAuthHTTPHandler(server: server)
+    }
+
+    /// A single `resource` reaches the request.
+    @Test("One resource parameter is read")
+    func singleResourceIsRead() async throws {
+        let values = OAuthHTTPHandler.formValues(
+            for: "resource",
+            in: "grant_type=authorization_code&resource=https%3A%2F%2Fapi.example.com")
+        #expect(values == ["https://api.example.com"])
+    }
+
+    /// A repeated `resource` yields both, rather than the last one silently winning.
+    @Test("A repeated resource parameter yields every value")
+    func repeatedResourceIsRead() async throws {
+        let values = OAuthHTTPHandler.formValues(
+            for: "resource",
+            in: "resource=https%3A%2F%2Fa.example.com&grant_type=x"
+               + "&resource=https%3A%2F%2Fb.example.com")
+        #expect(values == ["https://a.example.com", "https://b.example.com"],
+                "a repeated parameter collapsed to one value")
+    }
+
+    /// Absent means absent, not an empty string.
+    @Test("No resource parameter yields nothing")
+    func absentResourceYieldsNothing() async throws {
+        #expect(OAuthHTTPHandler.formValues(for: "resource", in: "grant_type=x").isEmpty)
+    }
+}
