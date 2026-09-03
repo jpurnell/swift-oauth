@@ -47,6 +47,12 @@ public actor OAuthServer {
     private let storage: OAuthStorage
     private let issuer: String
 
+    /// How long a device code is good for — RFC 8628 suggests a value in this range.
+    private let deviceCodeLifetime: TimeInterval = 1800
+
+    /// How long a device should wait between polls. §3.2's own default.
+    private let devicePollInterval: TimeInterval = 5
+
     /// Which resources this server issues tokens for — RFC 8707.
     ///
     /// Defaults to the server's own identifier, so a deployment that already serves correct
@@ -126,6 +132,103 @@ public actor OAuthServer {
     /// - Throws: Only if storage cannot be read. A token being bad is an answer, not an error.
     public func introspect(token: String) async throws -> IntrospectionResult {
         try await storage.introspectAccessToken(token: token)
+    }
+
+    // MARK: - Device Authorization Grant (RFC 8628)
+
+    /// Starts a device flow — RFC 8628 §3.1.
+    ///
+    /// For a client that cannot open a browser. It receives a device code to poll with and a
+    /// short user code to display; the user enters that code somewhere with a keyboard.
+    ///
+    /// - Parameters:
+    ///   - clientId: The client asking.
+    ///   - scope: What it is asking for.
+    /// - Returns: The codes and where to send the user.
+    /// - Throws: `OAuthStorageError` if the codes cannot be stored.
+    public func authorizeDevice(
+        clientId: String, scope: String?
+    ) async throws -> DeviceAuthorizationResponse {
+        let deviceCode = TokenGenerator.generateDeviceCode()
+        let userCode = TokenGenerator.generateUserCode()
+        let expiresAt = Date().addingTimeInterval(deviceCodeLifetime)
+
+        try await storage.saveDeviceCode(
+            deviceCode: deviceCode, userCode: userCode, clientId: clientId,
+            scope: scope, expiresAt: expiresAt)
+
+        // SECURITY: builds this server's own verification URL from its configured issuer.
+        let verificationURI = URL(string: issuer + "/device")
+            ?? URL(fileURLWithPath: "/device")
+
+        return DeviceAuthorizationResponse(
+            deviceCode: deviceCode,
+            userCode: userCode,
+            verificationURI: verificationURI,
+            expiresIn: deviceCodeLifetime,
+            interval: devicePollInterval)
+    }
+
+    /// Records that a user approved a device — RFC 8628 §3.3.
+    ///
+    /// - Parameters:
+    ///   - userCode: The code the user typed.
+    ///   - subject: Who approved it.
+    /// - Throws: ``OAuthError/invalidGrant(_:)`` if no live, unapproved code matches. Unknown
+    ///   and expired are not distinguished: the approval page would otherwise confirm which
+    ///   short codes exist, and they are short by design.
+    public func approveDeviceCode(userCode: String, subject: String) async throws {
+        let approved = try await storage.approveDeviceCode(userCode: userCode, subject: subject)
+        guard approved else {
+            throw OAuthError.invalidGrant("That code is not valid, or has expired.")
+        }
+    }
+
+    /// Exchanges an approved device code for tokens — RFC 8628 §3.4.
+    ///
+    /// - Parameters:
+    ///   - deviceCode: The code the device has been polling with.
+    ///   - clientId: The client redeeming it.
+    /// - Returns: The tokens, once the user has approved.
+    /// - Throws: ``OAuthError/authorizationPending(_:)`` while the user has not finished —
+    ///   the expected answer for most of the flow — or ``OAuthError/expiredToken(_:)``,
+    ///   or ``OAuthError/invalidGrant(_:)`` for a code that is unknown, not this client's, or
+    ///   already spent.
+    public func redeemDeviceCode(
+        _ deviceCode: String, clientId: String
+    ) async throws -> TokenResponse {
+        switch try await storage.deviceCodeState(deviceCode: deviceCode, clientId: clientId) {
+        case .pending:
+            throw OAuthError.authorizationPending(nil)
+        case .expired:
+            throw OAuthError.expiredToken(nil)
+        case .unknown, .alreadyRedeemed:
+            // One answer for both. A device code is single-use, and telling a caller that a
+            // code exists but is spent distinguishes it from one that never existed.
+            throw OAuthError.invalidGrant(nil)
+        case .approved(let scope):
+            // Marked spent before the token is issued. The other order leaves a window in
+            // which two concurrent polls both see an approved code and both collect a token.
+            try await storage.markDeviceCodeRedeemed(deviceCode: deviceCode)
+
+            let accessToken = TokenGenerator.generateAccessToken()
+            let refreshToken = TokenGenerator.generateRefreshToken()
+            let now = Date()
+
+            try await storage.saveAccessToken(
+                token: accessToken, clientId: clientId, scope: scope,
+                expiresAt: now.addingTimeInterval(accessTokenLifetime), audience: nil)
+            try await storage.saveRefreshToken(
+                token: refreshToken, clientId: clientId, scope: scope,
+                expiresAt: now.addingTimeInterval(refreshTokenLifetime))
+
+            return TokenResponse(
+                accessToken: accessToken,
+                tokenType: "Bearer",
+                expiresIn: Int(accessTokenLifetime),
+                refreshToken: refreshToken,
+                scope: scope)
+        }
     }
 
     /// Returns OAuth 2.0 Protected Resource Metadata

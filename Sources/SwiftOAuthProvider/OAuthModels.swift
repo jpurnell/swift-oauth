@@ -360,3 +360,23 @@ public struct CSRFValidationResult: Sendable, Equatable {
         self.error = error
     }
 }
+
+// MARK: - DeviceCodeState
+
+/// What a device code currently is — RFC 8628 §3.5.
+///
+/// ``unknown`` covers both "no such code" and "not yours", deliberately. Distinguishing them
+/// tells a caller holding someone else's device code that it exists, which is the one thing
+/// they should not learn.
+public enum DeviceCodeState: Sendable, Equatable {
+    /// No such code, or it belongs to another client.
+    case unknown
+    /// Issued, and the user has not finished.
+    case pending
+    /// Approved and ready to exchange.
+    case approved(scope: String?)
+    /// Already exchanged. Single-use, so a second attempt is a refusal.
+    case alreadyRedeemed
+    /// Issued, but the user did not finish in time.
+    case expired
+}

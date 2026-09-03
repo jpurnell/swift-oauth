@@ -97,8 +97,8 @@ public actor OAuthStorage {
     /// The schema this build expects.
     ///
     /// Raised whenever the shape of a table changes. Version 1 added `access_tokens.audience`
-    /// for RFC 8707.
-    public static let currentSchemaVersion = 1
+    /// for RFC 8707; version 2 added `device_codes` for RFC 8628.
+    public static let currentSchemaVersion = 2
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -219,6 +219,31 @@ public actor OAuthStorage {
             if try !columnExists(db: db, table: "access_tokens", column: "audience") {
                 try executeStatic(db: db, sql: "ALTER TABLE access_tokens ADD COLUMN audience TEXT")
             }
+        }
+
+        // Version 2: RFC 8628 — the device grant's codes.
+        //
+        // A whole table rather than a column, and created here rather than alongside the
+        // others for the same reason: a database that already exists skips every
+        // `CREATE TABLE IF NOT EXISTS` in the schema block, so a table added there would never
+        // appear on an upgrade. `IF NOT EXISTS` still, so running it twice is safe.
+        if version < 2 && targetVersion >= 2 {
+            try executeStatic(db: db, sql: """
+                CREATE TABLE IF NOT EXISTS device_codes (
+                    device_code_hash TEXT PRIMARY KEY,
+                    user_code TEXT NOT NULL UNIQUE,
+                    client_id TEXT NOT NULL,
+                    scope TEXT,
+                    subject TEXT,
+                    approved INTEGER DEFAULT 0,
+                    redeemed INTEGER DEFAULT 0,
+                    expires_at REAL NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            try executeStatic(
+                db: db,
+                sql: "CREATE INDEX IF NOT EXISTS idx_device_codes_expires ON device_codes(expires_at)")
         }
 
         if version < targetVersion {
@@ -638,6 +663,92 @@ public actor OAuthStorage {
             audience: audience.map { [$0] },
             expiry: expiresAt,
             issuedAt: issuedAt)
+    }
+
+    /// Stores a device code and the short code the user will type — RFC 8628.
+    ///
+    /// The device code is hashed, like every other credential here: it is a bearer credential
+    /// until redeemed, so a database read must not yield something redeemable.
+    ///
+    /// The user code is stored in the clear, deliberately. It has to be looked up by exactly
+    /// what a person typed, it is short-lived, and it is useless without the device code —
+    /// approving one authorises a session the approver cannot themselves collect.
+    public func saveDeviceCode(
+        deviceCode: String,
+        userCode: String,
+        clientId: String,
+        scope: String?,
+        expiresAt: Date
+    ) throws {
+        try execute("""
+            INSERT INTO device_codes
+            (device_code_hash, user_code, client_id, scope, subject, approved, redeemed,
+             expires_at, created_at)
+            VALUES (?, ?, ?, ?, NULL, 0, 0, ?, ?)
+        """, parameters: [
+            hashToken(deviceCode),
+            userCode,
+            clientId,
+            scope as Any,
+            expiresAt.timeIntervalSince1970,
+            Date().timeIntervalSince1970
+        ])
+    }
+
+    /// Marks the user code approved, recording who approved it.
+    ///
+    /// - Returns: `false` if no unexpired, unapproved code matches — which is what an unknown
+    ///   or stale code looks like, and is not distinguished from it on purpose. The approval
+    ///   page would otherwise be an oracle for guessing codes that are short by design.
+    public func approveDeviceCode(userCode: String, subject: String) throws -> Bool {
+        try execute("""
+            UPDATE device_codes SET approved = 1, subject = ?
+            WHERE user_code = ? AND redeemed = 0 AND expires_at > ?
+        """, parameters: [subject, userCode, Date().timeIntervalSince1970])
+        return sqlite3_changes(db) > 0
+    }
+
+    /// What a device code currently is, for a client redeeming it.
+    public func deviceCodeState(
+        deviceCode: String, clientId: String
+    ) throws -> DeviceCodeState {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+
+        let sql = """
+            SELECT client_id, scope, subject, approved, redeemed, expires_at
+            FROM device_codes WHERE device_code_hash = ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, hashToken(deviceCode), -1, SQLITE_TRANSIENT)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return .unknown }
+
+        let owner = String(cString: sqlite3_column_text(stmt, 0))
+        let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
+        let approved = sqlite3_column_int(stmt, 3) != 0
+        let redeemed = sqlite3_column_int(stmt, 4) != 0
+        let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+
+        // The client check comes before everything else. A device code seen in transit is
+        // otherwise redeemable by anyone who can name a client id, and client ids are public
+        // by design.
+        // The client check comes before everything else. A device code seen in transit is
+        // otherwise redeemable by anyone who can name a client id, and client ids are public
+        // by design.
+        guard owner == clientId else { return .unknown }
+        guard !redeemed else { return .alreadyRedeemed }
+        guard Date() < expiresAt else { return .expired }
+        return approved ? .approved(scope: scope) : .pending
+    }
+
+    /// Marks a device code redeemed, so it cannot be used again.
+    public func markDeviceCodeRedeemed(deviceCode: String) throws {
+        try execute(
+            "UPDATE device_codes SET redeemed = 1 WHERE device_code_hash = ?",
+            parameters: [hashToken(deviceCode)])
     }
 
     /// Revokes an access token

@@ -114,6 +114,42 @@ public enum TokenGenerator {
         "mcp_at_" + generateToken(byteLength: 32)
     }
 
+    /// Generates a device code — RFC 8628's device-side credential.
+    ///
+    /// Long and opaque, because it is a bearer credential until redeemed: whoever holds it
+    /// collects the token the user is about to authorise.
+    ///
+    /// - Returns: A device code with an `mcp_dc_` prefix.
+    public static func generateDeviceCode() -> String {
+        "mcp_dc_" + generateToken(byteLength: 32)
+    }
+
+    /// The alphabet a user code is drawn from — RFC 8628 §6.1.
+    ///
+    /// Twenty letters and no digits. `0`/`O` and `1`/`I`/`l` are the pairs people confuse when
+    /// reading a code off a screen and typing it on a different device, which is the entire
+    /// interaction this grant exists for, so they are absent rather than merely discouraged.
+    /// Vowels are excluded too, so a random code cannot spell something unfortunate on a
+    /// television in someone's living room.
+    private static let userCodeAlphabet = Array("BCDFGHJKLMNPQRSTVWXZ")
+
+    /// Generates a user code — the short one a person reads and types.
+    ///
+    /// Eight characters from a twenty-character alphabet is a little over 34 bits, which is
+    /// weak by credential standards and correct here: it is short-lived, rate-limited by the
+    /// polling interval, and useless on its own. Approving one authorises a session the
+    /// approver cannot collect, because collecting it needs the device code.
+    ///
+    /// - Returns: A user code in `XXXX-XXXX` form.
+    public static func generateUserCode() -> String {
+        // stochastic:exempt a user code must be unpredictable; there is no seeded path here
+        var rng = SystemRandomNumberGenerator()
+        let characters = (0..<8).map { _ in
+            userCodeAlphabet[Int(rng.next(upperBound: UInt64(userCodeAlphabet.count)))]
+        }
+        return String(characters[0..<4]) + "-" + String(characters[4..<8])
+    }
+
     /// Generates a refresh token
     ///
     /// Refresh tokens include a prefix for easy identification.
