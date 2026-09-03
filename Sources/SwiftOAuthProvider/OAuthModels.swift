@@ -380,3 +380,50 @@ public enum DeviceCodeState: Sendable, Equatable {
     /// Issued, but the user did not finish in time.
     case expired
 }
+
+// MARK: - Pushed authorization requests (RFC 9126)
+
+/// The parameters a client pushed ahead of sending the user — RFC 9126 §2.
+public struct PushedAuthorizationRequest: Sendable, Equatable {
+    /// Where to return the user.
+    public let redirectUri: String
+    /// What is being asked for.
+    public let scope: String?
+    /// The client's opaque state.
+    public let state: String?
+    /// The PKCE challenge.
+    public let codeChallenge: String?
+    /// How the challenge was derived.
+    public let codeChallengeMethod: String?
+
+    /// Creates a pushed request.
+    public init(
+        redirectUri: String, scope: String?, state: String?,
+        codeChallenge: String?, codeChallengeMethod: String?
+    ) {
+        self.redirectUri = redirectUri
+        self.scope = scope
+        self.state = state
+        self.codeChallenge = codeChallenge
+        self.codeChallengeMethod = codeChallengeMethod
+    }
+}
+
+/// What a server returns from the pushed authorization request endpoint — RFC 9126 §2.2.
+public struct PushedAuthorizationResponse: Codable, Sendable, Equatable {
+    /// The opaque reference the browser carries in place of the parameters.
+    public let requestURI: String
+    /// How long it is good for, in seconds.
+    public let expiresIn: TimeInterval
+
+    private enum CodingKeys: String, CodingKey {
+        case requestURI = "request_uri"
+        case expiresIn = "expires_in"
+    }
+
+    /// Creates a response.
+    public init(requestURI: String, expiresIn: TimeInterval) {
+        self.requestURI = requestURI
+        self.expiresIn = expiresIn
+    }
+}

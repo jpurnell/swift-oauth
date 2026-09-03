@@ -97,8 +97,9 @@ public actor OAuthStorage {
     /// The schema this build expects.
     ///
     /// Raised whenever the shape of a table changes. Version 1 added `access_tokens.audience`
-    /// for RFC 8707; version 2 added `device_codes` for RFC 8628.
-    public static let currentSchemaVersion = 2
+    /// for RFC 8707; version 2 added `device_codes` for RFC 8628; version 3 added
+    /// `pushed_requests` for RFC 9126.
+    public static let currentSchemaVersion = 3
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -244,6 +245,27 @@ public actor OAuthStorage {
             try executeStatic(
                 db: db,
                 sql: "CREATE INDEX IF NOT EXISTS idx_device_codes_expires ON device_codes(expires_at)")
+        }
+
+        // Version 3: RFC 9126 — pushed authorization requests.
+        if version < 3 && targetVersion >= 3 {
+            try executeStatic(db: db, sql: """
+                CREATE TABLE IF NOT EXISTS pushed_requests (
+                    request_uri_hash TEXT PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    redirect_uri TEXT NOT NULL,
+                    scope TEXT,
+                    state TEXT,
+                    code_challenge TEXT,
+                    code_challenge_method TEXT,
+                    consumed INTEGER DEFAULT 0,
+                    expires_at REAL NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            try executeStatic(
+                db: db,
+                sql: "CREATE INDEX IF NOT EXISTS idx_pushed_requests_expires ON pushed_requests(expires_at)")
         }
 
         if version < targetVersion {
@@ -749,6 +771,75 @@ public actor OAuthStorage {
         try execute(
             "UPDATE device_codes SET redeemed = 1 WHERE device_code_hash = ?",
             parameters: [hashToken(deviceCode)])
+    }
+
+    /// Stores a pushed authorization request — RFC 9126 §2.
+    ///
+    /// The reference is hashed, like every other credential here. It travels through a
+    /// browser, so a database read must not yield something usable.
+    public func savePushedRequest(
+        requestURI: String,
+        clientId: String,
+        redirectUri: String,
+        scope: String?,
+        state: String?,
+        codeChallenge: String?,
+        codeChallengeMethod: String?,
+        expiresAt: Date
+    ) throws {
+        try execute("""
+            INSERT INTO pushed_requests
+            (request_uri_hash, client_id, redirect_uri, scope, state, code_challenge,
+             code_challenge_method, consumed, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        """, parameters: [
+            hashToken(requestURI), clientId, redirectUri, scope as Any, state as Any,
+            codeChallenge as Any, codeChallengeMethod as Any,
+            expiresAt.timeIntervalSince1970, Date().timeIntervalSince1970
+        ])
+    }
+
+    /// Consumes a pushed request, returning what was pushed.
+    ///
+    /// Single-use: the row is marked spent in the same step that reads it, so two concurrent
+    /// authorization requests cannot both succeed on one reference.
+    ///
+    /// - Returns: `nil` when no live, unspent request matches this client. Unknown, expired,
+    ///   spent and belonging-to-someone-else are one answer, because distinguishing them lets a
+    ///   caller probe which references exist.
+    public func consumePushedRequest(
+        requestURI: String, clientId: String
+    ) throws -> PushedAuthorizationRequest? {
+        let hash = hashToken(requestURI)
+
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = """
+            SELECT redirect_uri, scope, state, code_challenge, code_challenge_method
+            FROM pushed_requests
+            WHERE request_uri_hash = ? AND client_id = ? AND consumed = 0 AND expires_at > ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, hash, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, clientId, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 3, Date().timeIntervalSince1970)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        let request = PushedAuthorizationRequest(
+            redirectUri: String(cString: sqlite3_column_text(stmt, 0)),
+            scope: sqlite3_column_text(stmt, 1).map { String(cString: $0) },
+            state: sqlite3_column_text(stmt, 2).map { String(cString: $0) },
+            codeChallenge: sqlite3_column_text(stmt, 3).map { String(cString: $0) },
+            codeChallengeMethod: sqlite3_column_text(stmt, 4).map { String(cString: $0) })
+
+        try execute(
+            "UPDATE pushed_requests SET consumed = 1 WHERE request_uri_hash = ?",
+            parameters: [hash])
+
+        return request
     }
 
     /// Revokes an access token

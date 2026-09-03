@@ -47,6 +47,10 @@ public actor OAuthServer {
     private let storage: OAuthStorage
     private let issuer: String
 
+    /// How long a pushed authorization request is good for — RFC 9126 §2.2 suggests
+    /// "relatively short", on the order of a minute, since the client redirects immediately.
+    private let pushedRequestLifetime: TimeInterval = 90
+
     /// How long a device code is good for — RFC 8628 suggests a value in this range.
     private let deviceCodeLifetime: TimeInterval = 1800
 
@@ -132,6 +136,60 @@ public actor OAuthServer {
     /// - Throws: Only if storage cannot be read. A token being bad is an answer, not an error.
     public func introspect(token: String) async throws -> IntrospectionResult {
         try await storage.introspectAccessToken(token: token)
+    }
+
+    // MARK: - Pushed Authorization Requests (RFC 9126)
+
+    /// Accepts an authorization request ahead of time — RFC 9126 §2.
+    ///
+    /// Ordinarily the request travels in a URL through the user's browser, where every
+    /// parameter is visible to the browser, its history, any extension, and every intermediary
+    /// that logs a URL — and modifiable by all of them before this server sees it. Pushing it
+    /// over an authenticated back channel means the browser carries only an opaque reference,
+    /// so what the user's agent can see it can no longer change.
+    ///
+    /// - Returns: The reference and its lifetime.
+    /// - Throws: `OAuthStorageError` if it cannot be stored.
+    public func pushAuthorizationRequest(
+        clientId: String,
+        redirectUri: String,
+        scope: String?,
+        state: String?,
+        codeChallenge: String?,
+        codeChallengeMethod: String?
+    ) async throws -> PushedAuthorizationResponse {
+        // §2.2 requires this URN form, so a server can tell a pushed reference from any other
+        // URI a client might hand it — including one pointing somewhere it should not fetch.
+        let requestURI = "urn:ietf:params:oauth:request_uri:"
+            + TokenGenerator.generateToken(byteLength: 32)
+        let expiresAt = Date().addingTimeInterval(pushedRequestLifetime)
+
+        try await storage.savePushedRequest(
+            requestURI: requestURI, clientId: clientId, redirectUri: redirectUri,
+            scope: scope, state: state, codeChallenge: codeChallenge,
+            codeChallengeMethod: codeChallengeMethod, expiresAt: expiresAt)
+
+        return PushedAuthorizationResponse(
+            requestURI: requestURI, expiresIn: pushedRequestLifetime)
+    }
+
+    /// Redeems a pushed reference for the parameters it stands for — RFC 9126 §4.
+    ///
+    /// Single-use. A reference that can be replayed is one a browser extension can harvest and
+    /// present again.
+    ///
+    /// - Throws: ``OAuthError/invalidRequest(_:)`` when no live, unspent request matches this
+    ///   client. Unknown, expired, spent and belonging-to-someone-else are one answer, so a
+    ///   caller cannot probe which references exist.
+    public func consumePushedRequest(
+        requestURI: String, clientId: String
+    ) async throws -> PushedAuthorizationRequest {
+        guard let request = try await storage.consumePushedRequest(
+            requestURI: requestURI, clientId: clientId) else {
+            throw OAuthError.invalidRequest(
+                "That request_uri is not valid for this client, or has already been used.")
+        }
+        return request
     }
 
     // MARK: - Device Authorization Grant (RFC 8628)
