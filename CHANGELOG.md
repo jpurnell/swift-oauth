@@ -5,6 +5,62 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-09-03
+
+RFC 8628, the device authorization grant — signing in on anything without a browser.
+
+### Breaking
+
+**`GrantType` gains `deviceCode`.** A source break for anyone switching exhaustively over it.
+This is the change the design proposal argued must land before 1.0, on the grounds that
+afterwards it costs a major version.
+
+Its wire value is the URN `urn:ietf:params:oauth:grant-type:device_code`, not a short name. A
+server matching on `"device_code"` refuses every conformant client, and the refusal reads as an
+unsupported grant rather than as a typo.
+
+**`OAuthError` gains three cases** — `authorizationPending`, `slowDown`, `expiredToken` — which
+is a source break for the same reason. Without them a client sees a generic server error for
+`authorization_pending`, the expected answer during most of a device flow, and cannot tell
+"still waiting" from "something broke".
+
+**Your database is migrated on first open**, to schema version 2, adding a `device_codes` table.
+Additive and idempotent. Servers that never issue device codes still take the migration; it
+creates an empty table and nothing else.
+
+**Coming from 0.7.x or 0.8.x?** Read those entries too. There is no route here except through
+0.8.0's client refusals.
+
+### Added
+- **`OAuthServer.authorizeDevice(clientId:scope:)`**, **`approveDeviceCode(userCode:subject:)`**
+  and **`redeemDeviceCode(_:clientId:)`** — the provider half.
+
+- **`DeviceFlow.poll`** — the client half. `slow_down` widens the wait that follows it and the
+  widening persists; a client that applies it once and reverts keeps making the same mistake at
+  the same rate. The loop also stops itself once the code's lifetime has passed: a server is not
+  obliged to answer `expired_token` — it may simply have forgotten the code — so without a local
+  bound a device left on a shelf polls indefinitely.
+
+- **`TokenGenerator.generateUserCode()`** — eight characters from a twenty-letter alphabet with
+  `0`/`O` and `1`/`I` excluded, those being the pairs people confuse when reading a code off one
+  screen and typing it on another, which is the entire interaction this grant exists for. Vowels
+  are excluded too, so a random code cannot spell something unfortunate on a television.
+
+  A little over 34 bits, which is weak by credential standards and correct here: short-lived,
+  rate-limited by the polling interval, and useless without the device code.
+
+### Security notes for anyone implementing against this
+- The device code is hashed at rest; the user code is not, deliberately — it is looked up by
+  exactly what a person typed, and approving one authorises a session the approver cannot
+  collect.
+- A device code is bound to the client it was issued to. Without that check, a code seen in
+  transit is redeemable by anyone who can name a client id, and client ids are public by design.
+- It is single-use, and marked spent before the token is issued — the other order leaves a
+  window in which two concurrent polls both collect a token.
+- Unknown, not-yours and already-redeemed are indistinguishable to a caller, and unknown and
+  expired are indistinguishable at the approval page. Otherwise it confirms which short codes
+  exist, and they are short by design.
+
 ## [0.9.0] — 2026-09-03
 
 RFC 7662 token introspection, both halves, and `WWW-Authenticate` parsing.
