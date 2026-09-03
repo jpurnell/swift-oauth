@@ -393,6 +393,74 @@ public struct OAuthHTTPHandler: Sendable {
 
     // MARK: - Helpers
 
+    /// Handles a token introspection request — RFC 7662 §2.
+    ///
+    /// **The endpoint is authenticated, and that is not optional.** §2.1 requires it. Left
+    /// open, this endpoint tells anyone whether any string is a live token: it turns a stolen
+    /// token into a verified one, and turns guessing into something with a feedback signal.
+    /// Authentication is checked before the token is looked at, so an unauthenticated caller
+    /// learns nothing about it either way.
+    ///
+    /// A token that is expired, revoked or unknown answers `200` with `{"active":false}` — not
+    /// an error status. RFC 7662 §2.2, and the distinction that matters to every caller: a
+    /// dead token is an answer, and answering `401` for one makes callers treat it as a
+    /// transport failure.
+    ///
+    /// - Parameters:
+    ///   - body: The URL-encoded form body, carrying `token`.
+    ///   - authHeader: The `Authorization` header presented by the caller.
+    /// - Returns: The introspection response, or a refusal.
+    public func handleIntrospectionRequest(
+        body: String, authHeader: String?
+    ) async -> OAuthHTTPResponse {
+        let params = parseFormBody(body)
+
+        guard let clientId = params["client_id"] ?? Self.clientId(fromBasic: authHeader) else {
+            return errorResponse(.invalidClient(nil))
+        }
+
+        do {
+            let authenticated = try await server.authenticateClient(
+                clientId: clientId,
+                authHeader: authHeader,
+                bodyClientSecret: params["client_secret"]
+            )
+            guard authenticated else {
+                return errorResponse(.invalidClient(nil))
+            }
+
+            guard let token = params["token"] else {
+                return errorResponse(.invalidRequest(nil))
+            }
+
+            let result = try await server.introspect(token: token)
+            let encoded = try JSONEncoder().encode(result)
+            return OAuthHTTPResponse(
+                statusCode: 200,
+                contentType: "application/json",
+                body: String(decoding: encoded, as: UTF8.self))
+        } catch let error as OAuthError {
+            return errorResponse(error)
+        } catch {
+            return errorResponse(.serverError(nil))
+        }
+    }
+
+    /// The client id inside a Basic credential, when the caller authenticated that way.
+    ///
+    /// RFC 6749 §2.3.1 puts the id in the header rather than the body for `client_secret_basic`,
+    /// so a request authenticating that way carries no `client_id` parameter to read.
+    static func clientId(fromBasic authHeader: String?) -> String? {
+        guard let authHeader,
+              authHeader.lowercased().hasPrefix("basic "),
+              let decoded = Data(base64Encoded: String(authHeader.dropFirst("basic ".count))),
+              let pair = String(data: decoded, encoding: .utf8),
+              let separator = pair.firstIndex(of: ":") else {
+            return nil
+        }
+        return String(pair[pair.startIndex..<separator])
+    }
+
     /// Every value a form body carries for one key, in the order they appear.
     ///
     /// ``parseFormBody(_:)`` keeps one value per key, which is right for the parameters OAuth

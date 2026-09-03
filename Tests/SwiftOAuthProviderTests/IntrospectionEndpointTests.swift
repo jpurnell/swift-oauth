@@ -114,3 +114,78 @@ struct IntrospectionEndpointTests {
         #expect(object.count == 1, "an inactive response carried \(object.keys.sorted())")
     }
 }
+
+/// Introspection over HTTP — RFC 7662 §2.
+///
+/// The endpoint is protected. §2.1 requires it: an open introspection endpoint lets anyone
+/// holding a stolen token confirm it is live, and lets anyone at all probe strings to find one
+/// that is.
+@Suite("RFC 7662 — the introspection endpoint over HTTP")
+struct IntrospectionHTTPTests {
+
+    private func makeHandler() async throws
+        -> (OAuthHTTPHandler, OAuthStorage, ClientRegistrationResponse) {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com")
+        let client = try await server.registerClient(ClientRegistrationRequest(
+            clientName: "prober",
+            redirectUris: ["https://app.example.com/callback"]))
+        return (await OAuthHTTPHandler(server: server), storage, client)
+    }
+
+    /// An authenticated caller gets the answer.
+    @Test("An authenticated introspection request succeeds")
+    func authenticatedRequestSucceeds() async throws {
+        let (handler, storage, client) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "live", clientId: client.clientId, scope: "read",
+            expiresAt: Date().addingTimeInterval(3600), audience: nil)
+
+        let response = await handler.handleIntrospectionRequest(
+            body: "token=live",
+            authHeader: basicAuth(client))
+
+        #expect(response.statusCode == 200)
+        let result = try JSONDecoder().decode(
+            IntrospectionResult.self, from: Data(response.body.utf8))
+        #expect(result.active)
+    }
+
+    /// An unauthenticated caller is refused before the token is looked at.
+    ///
+    /// RFC 7662 §2.1. Left open, this endpoint tells anyone whether any string is a live token —
+    /// which turns a stolen token into a verifiable one and makes guessing testable.
+    @Test("An unauthenticated introspection request is refused")
+    func unauthenticatedRequestIsRefused() async throws {
+        let (handler, storage, client) = try await makeHandler()
+        try await storage.saveAccessToken(
+            token: "live", clientId: client.clientId, scope: "read",
+            expiresAt: Date().addingTimeInterval(3600), audience: nil)
+
+        let response = await handler.handleIntrospectionRequest(
+            body: "token=live", authHeader: nil)
+
+        #expect(response.statusCode == 401)
+        #expect(!response.body.contains("\"active\":true"),
+                "an unauthenticated caller learned the token was live")
+    }
+
+    /// A dead token still answers 200 with `active: false`, not an error status.
+    @Test("An inactive token answers 200, not an error status")
+    func inactiveTokenAnswersSuccessfully() async throws {
+        let (handler, _, client) = try await makeHandler()
+
+        let response = await handler.handleIntrospectionRequest(
+            body: "token=never-existed",
+            authHeader: basicAuth(client))
+
+        #expect(response.statusCode == 200, "a dead token is an answer, not a failure")
+        #expect(response.body.contains("false"))
+    }
+
+    private func basicAuth(_ client: ClientRegistrationResponse) -> String {
+        let secret = client.clientSecret ?? ""
+        let encoded = Data("\(client.clientId):\(secret)".utf8).base64EncodedString()
+        return "Basic \(encoded)"
+    }
+}
