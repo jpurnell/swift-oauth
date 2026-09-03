@@ -56,6 +56,21 @@ one nullable column and an empty table.
 
 - **A cross-half conformance suite** for the four places the two halves must agree on one value.
 
+### Fixed
+- **`validateBearerToken` now refuses a bound token.** A server accepting one at the `Bearer`
+  entry point accepts it *without checking any proof* — the token validates, the caller sees
+  success, and the binding is silently gone. Nothing logs, and a search for "DPoP" in that
+  consumer's sources finds nothing, so there is no thread to pull.
+
+  The refusal is here rather than in these notes because documenting it puts the burden on every
+  consumer with a Bearer path: know bound tokens exist, know they must be refused at that entry
+  point, and write the check. The consumer who has not read this section is exactly the one it
+  protects.
+
+  Found by a consumer that checked its own code after the warning and found the shape in its own
+  request handler — not exploitable there yet, since it issues no bound tokens, but live the
+  moment it does.
+
 ## [0.11.1] — 2026-09-03
 
 ### Fixed
