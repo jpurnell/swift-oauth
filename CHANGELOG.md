@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] — 2026-09-03
+
+RFC 9449 — DPoP. A token that only works for the client holding its key.
+
+### Breaking
+
+**`TokenValidationResult.valid` now carries a single `ValidatedToken` struct** instead of a list
+of associated values:
+
+```swift
+case .valid(let clientId, let scope, _)   // before
+case .valid(let token)                    // after — token.clientId, token.scope, …
+```
+
+This case has been widened twice in four releases: 0.8.0 added the audience, and this needed to
+add the key binding. Each widening broke every exhaustive `case .valid(a, b)` in every consumer,
+including ones with no interest in the feature that caused it — seven sites across two packages
+paid for the first. Adding a property to a struct breaks nobody, so **this is one more break to
+end a recurring one**, taken now because pre-1.0 is the only cheap moment.
+
+**Your database migrates to schema version 4 on first open** — `access_tokens.key_thumbprint`
+and a `dpop_proofs` table. Additive and idempotent; a server that never issues bound tokens gets
+one nullable column and an empty table.
+
+**Coming from 0.7.x–0.11.x?** Read those entries too. There is no route here except through
+0.8.0's client refusals and 0.10.0's `GrantType` and `OAuthError` breaks.
+
+### Added
+- **`DPoPProof`** (Core) — create and verify proofs. Three of the four claims are checked here:
+  `htm`, or a proof captured from a `GET` replays as a `DELETE`; `htu`, or a proof captured by
+  one resource server replays against another; `iat`, or a proof never goes stale.
+
+  `jti` is surfaced, not checked — refusing a replay needs memory of what has been seen, and
+  that memory belongs to the server.
+
+- **`DPoPSession`** (Client) — one key per session, a fresh proof per request, and the token
+  presented with the `DPoP` scheme rather than `Bearer`. That distinction is load-bearing: a
+  bound token sent as `Bearer` is either refused, or — on a server accepting both — accepted
+  *without the proof being checked*, which silently discards the binding.
+
+  The key is held in memory and not persisted. A restart costs a re-authorisation, which is the
+  safe direction to fail in; persisting it would mean writing a private key to disk with the
+  same protection needs as the tokens it guards.
+
+- **Token binding and replay protection** (Provider). `claimProofIdentifier` decides by the
+  *insert*, not by a preceding read: `INSERT OR IGNORE` on a primary key either succeeds or does
+  not, atomically, where a check-then-insert would let two concurrent requests both find the
+  identifier absent and both proceed — precisely the replay it exists to stop.
+
+- **A cross-half conformance suite** for the four places the two halves must agree on one value.
+
 ## [0.11.1] — 2026-09-03
 
 ### Fixed
