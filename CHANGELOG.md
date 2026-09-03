@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-09-03
+
+RFC 7662 token introspection, both halves, and `WWW-Authenticate` parsing.
+
+### Not a breaking release
+Everything here is additive: new types, new methods, no changed signatures, no tightened
+defaults, no schema change. Taking 0.9.0 from 0.8.0 requires no code change and no client
+migration.
+
+That is stated explicitly because 0.8.0 was the opposite and said so too late. The lesson from
+that release stands: for a server package, ask what the *clients* of a deployment must do, not
+only what the operator must configure.
+
+### Added
+- **`IntrospectionResult`** (Core) — RFC 7662's response. An expired, revoked or unknown token
+  is `active: false`, **not** an error. That is §2.2 and it is the distinction implementations
+  most often get wrong: a server answering `401` for an expired token makes every caller treat
+  "this token is no good" as a transport failure, handled elsewhere, usually with a retry that
+  cannot help.
+
+  An inactive response carries nothing else — not scope, not client, not subject. A caller
+  holding a dead token has proven nothing, and a response with claims in it is an oracle for
+  probing tokens that are not theirs.
+
+  `aud` decodes as a string or an array, per RFC 7519 §4.1.3. Handling one shape fails against
+  half the providers in existence, at the moment a token is being checked.
+
+- **`OAuthServer.introspect(token:)`** and **`OAuthHTTPHandler.handleIntrospectionRequest`**
+  (Provider). The endpoint is authenticated, as §2.1 requires: left open it tells anyone whether
+  any string is a live token, which turns a stolen token into a verified one and gives guessing
+  a feedback signal. Authentication is checked before the token is looked at.
+
+- **`TokenIntrospector`** (Client) — for a resource server validating a token it was handed. An
+  inactive answer is returned, not thrown, so a caller can tell a revoked token from an
+  unreachable server. The token travels in a form body, never a URL, because a token in a query
+  string is a token in every log that records a path.
+
+- **`BearerChallenge`** (Client) — `WWW-Authenticate` parsing, RFC 6750 §3. Asks for **exactly**
+  the scopes the challenge names, not those added to what is already held: unioning them widens
+  the grant on every `401` while each individual step looks like it is only asking for what it
+  was told.
+
+  Its parser scans rather than splitting on commas, because `error_description="Expired, please
+  retry"` is a legal header that the obvious implementation truncates while inventing a
+  parameter from the tail.
+
+  It also reads RFC 9728's `resource_metadata` pointer, which closes the loop with RFC 8707: a
+  client refused for naming no resource can follow it to find the identifier to send. The
+  pointer is parsed, never fetched — following it would turn reading a header into a request to
+  an address the header chose.
+
 ## [0.8.0] — 2026-09-03
 
 ### Read this first: taking 0.8.0 refuses every existing client
