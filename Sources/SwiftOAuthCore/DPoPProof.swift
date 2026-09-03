@@ -190,8 +190,16 @@ public enum DPoPProof {
         return #"{"crv":"P-256","kty":"EC","x":"\#(x)","y":"\#(y)"}"#
     }
 
-    /// The RFC 7638 thumbprint: SHA-256 over the canonical JWK.
-    static func thumbprint(of key: P256.Signing.PublicKey) -> String {
+    /// The RFC 7638 thumbprint of a public key: SHA-256 over the canonical JWK.
+    ///
+    /// Public because it is what a caller has to compare. An authorization server records this
+    /// as `cnf.jkt` when it binds a token; a resource server checks the value against the proof
+    /// on each request; a client needs to know its own in order to recognise what it was issued.
+    /// All three are outside this module.
+    ///
+    /// - Parameter key: The public key to identify.
+    /// - Returns: The base64url-encoded thumbprint.
+    public static func thumbprint(of key: P256.Signing.PublicKey) -> String {
         CompactJWS.base64URL(Data(SHA256.hash(data: Data(jwk(for: key).utf8))))
     }
 
