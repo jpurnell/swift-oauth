@@ -7,6 +7,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.8.0] — 2026-09-03
 
+### Read this first: taking 0.8.0 refuses every existing client
+
+Not a configuration change — a deployment-ordering one. **A server that upgrades starts
+refusing every client that does not send `resource`, which is every client written before this
+release.** Verified from outside this package: SwiftMCPServer's Sources compiled completely
+unchanged and its OAuth suite then failed six ways, all standard authorization-code exchanges
+that send no resource indicator.
+
+The server needs no configuration. Its clients all need a code change. For a server package
+that is the harder half, because the operator taking the bump is usually not the person who
+controls the clients.
+
+If you cannot migrate clients at the same time, stage it deliberately:
+
+```swift
+OAuthServer(storage: storage, issuer: issuer,
+            resourcePolicy: ResourceIndicatorPolicy(known: [...], allowsUnspecified: true))
+```
+
+That accepts requests naming no resource while you migrate, and tightens later by removing the
+flag. It is the supported staging path, not a workaround — but it is opt-in on purpose, so that
+a server issuing tokens good at every resource is a decision someone made rather than one they
+inherited.
+
 ### Breaking, and it affects you even if you never touch resource indicators
 
 **`TokenValidationResult.valid` gains a third associated value, `audience: URL?`.** Every
@@ -87,9 +111,13 @@ round trip later than it needs to. Closing it means carrying an audience on the 
 code, which is a second schema change and its own release.
 
 ### Migration
-Raise the bound, update any `case .valid(_, _)` patterns to `case .valid(_, _, _)`, and let the
-database migrate on first open. That is the whole of it for a server already serving correct
-protected-resource metadata — the policy defaults to its own issuer. Clients must send `resource`; on this package's client that
+On the server: raise the bound, update any `case .valid(_, _)` patterns to
+`case .valid(_, _, _)`, and let the database migrate on first open. No configuration is needed
+if you already serve correct protected-resource metadata — the policy defaults to your issuer.
+
+On every client: send `resource`. This is the part that is not mechanical, and the part to plan
+the rollout around. On this package's client it is `ProviderConfiguration.resource`, shipped in
+0.7.0. Until a client sends it, that client is refused. Clients must send `resource`; on this package's client that
 is `ProviderConfiguration.resource`, shipped in 0.7.0. A client that sends nothing is refused
 with a description naming the value to send.
 
