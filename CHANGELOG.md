@@ -5,6 +5,53 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-09-03
+
+PAR (RFC 9126) and JAR (RFC 9101) — two ways of protecting an authorization request that
+compose rather than compete. PAR hides the parameters from the browser; JAR proves who wrote
+them. A pushed request is opaque but unsigned; a signed request in a URL is authentic but
+visible.
+
+### Compatibility
+
+**Coming from 0.10.0:** no source break. New types and new methods only — no changed
+signatures, no tightened defaults.
+
+**One thing is not source-level:** your database migrates to schema version 3 on first open,
+adding a `pushed_requests` table. Additive and idempotent, and a server that never accepts
+pushed requests gets an empty table. It still changes data you own, which is why it is here
+rather than under "Added".
+
+**Coming from 0.7.x, 0.8.x or 0.9.x:** read those entries too. There is no route here except
+through 0.8.0's client refusals and 0.10.0's `GrantType` and `OAuthError` breaks.
+
+### Added
+- **`OAuthServer.pushAuthorizationRequest(...)`** and **`consumePushedRequest(...)`** — RFC 9126.
+  The reference is hashed at rest, 32 bytes, single-use, bound to the client that pushed it, and
+  marked spent in the same step that reads it so two concurrent authorization requests cannot
+  both succeed on one. Unknown, expired, spent and belonging-to-another-client are one answer,
+  because distinguishing them lets a caller probe which references exist.
+
+- **`RequestObject.verify(...)`** — RFC 9101. **A request object that does not verify is refused,
+  and the query parameters are not used instead.** That is the whole feature: a server that falls
+  back has built a signature an attacker can simply omit. There is deliberately no API returning
+  parameters without verification, so the fallback cannot be written by accident.
+
+  `iss` must be the client, `aud` must contain this server, and the inner `client_id` must match
+  the outer one — closing, respectively: one client presenting another's signed object; an object
+  addressed to a different authorization server being replayed here; and the server
+  authenticating one client while honouring another's parameters.
+
+- **`CompactJWS`** — a minimal JWS in compact serialization, **ES256 only**. swift-crypto carries
+  every primitive and no JOSE layer, so this is written once here and reused by RFC 9449 rather
+  than taking a JOSE dependency for two features.
+
+  One algorithm, deliberately. The two most-exploited JWT flaws both come from a verifier acting
+  on what the token says about itself: `alg: none`, and algorithm confusion where a token
+  declares HS256 and a verifier uses the public key as an HMAC secret — the public key being
+  public, anyone can forge it. Accepting exactly one algorithm makes both unrepresentable rather
+  than guarded against. The header's `alg` is read only to refuse anything that is not ES256.
+
 ## [0.10.0] — 2026-09-03
 
 RFC 8628, the device authorization grant — signing in on anything without a browser.
