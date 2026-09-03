@@ -62,7 +62,13 @@ struct ResourceIndicatorPolicyTests {
             _ = try policy.audience(for: [])
         }
         #expect(error?.code == "invalid_target")
-        #expect(error?.detail?.isEmpty == false, "a refusal should say what was expected")
+        // Naming the rule is not enough. A refusal that says only "this server requires one"
+        // reads as server policy, and the nearest apparent remedy is then to turn the check
+        // off rather than to send the value — so the refusal names the value it wants.
+        #expect(error?.detail?.contains("api.example.com") == true,
+                "the refusal should name the resource this server accepts")
+        #expect(error?.detail?.contains("resource") == true,
+                "the refusal should name the parameter to set")
     }
 
     /// The permissive setting still exists, because a server whose tokens are already

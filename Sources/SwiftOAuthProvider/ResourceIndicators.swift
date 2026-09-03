@@ -63,6 +63,23 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
         ResourceIndicatorPolicy(known: [identifier])
     }
 
+    /// What this server accepts, phrased for an error message.
+    ///
+    /// Included in every refusal. A client that has just been told "no" needs the value, and
+    /// the alternative is an operator reading a specification to discover something the server
+    /// already knew and could have said.
+    private var acceptedDescription: String {
+        let sorted = known.map(\.absoluteString).sorted()
+        switch sorted.count {
+        case 0:
+            return "This server lists no resources it issues tokens for."
+        case 1:
+            return "It issues tokens for \(sorted[0])."
+        default:
+            return "It issues tokens for: \(sorted.joined(separator: ", "))."
+        }
+    }
+
     /// The audience to bind into a token, for the resources a request named.
     ///
     /// - Parameter requested: Every `resource` parameter on the request, in order. RFC 8707 §2
@@ -83,9 +100,17 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
                 // the commonest failure is a client that sent nothing at all, and telling it
                 // its resource was refused — when it named none — sends the reader looking for
                 // a value that was never there.
+                // The refusal hands over the value rather than describing the rule.
+                //
+                // "this server requires one" is accurate and reads as server policy, which
+                // points at the wrong remedy: an operator whose client worked yesterday
+                // concludes the server is configured too strictly, and the nearest apparent
+                // fix is `allowsUnspecified: true` — turning the check off — rather than
+                // setting `resource`. A strict default that is easy to switch off under
+                // pressure gets switched off.
                 throw OAuthError.invalidTarget(
-                    "No resource indicator was supplied, and this server requires one naming "
-                    + "the API the token is for.")
+                    "No resource indicator was supplied. Send the API this token is for as the "
+                    + "`resource` parameter. \(acceptedDescription)")
             }
             return nil
         }
@@ -100,7 +125,8 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
 
         guard known.contains(resource) else {
             throw OAuthError.invalidTarget(
-                "This server does not issue tokens for \(resource.absoluteString).")
+                "This server does not issue tokens for \(resource.absoluteString). "
+                + acceptedDescription)
         }
 
         return resource
