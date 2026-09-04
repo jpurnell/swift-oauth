@@ -100,8 +100,9 @@ public actor OAuthStorage {
     /// for RFC 8707; version 2 added `device_codes` for RFC 8628; version 3 added
     /// `pushed_requests` for RFC 9126; version 4 added `access_tokens.key_thumbprint` and
     /// `dpop_proofs` for RFC 9449; version 5 added `access_tokens.certificate_thumbprint`
-    /// for RFC 8705.
-    public static let currentSchemaVersion = 5
+    /// for RFC 8705; version 6 added `authorization_codes.audience`, closing the RFC 8707
+    /// authorization-endpoint gap 0.8.0 left open.
+    public static let currentSchemaVersion = 6
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -304,6 +305,18 @@ public actor OAuthStorage {
             }
         }
 
+        // Version 6: RFC 8707 — the audience an authorization code was granted for.
+        //
+        // Without it the audience is decided at redemption, so a client can name one resource
+        // at `/authorize` — the one the user saw and consented to — and a different one at
+        // `/token`, with nothing on the code to contradict it.
+        if version < 6 && targetVersion >= 6 {
+            if try !columnExists(db: db, table: "authorization_codes", column: "audience") {
+                try executeStatic(
+                    db: db, sql: "ALTER TABLE authorization_codes ADD COLUMN audience TEXT")
+            }
+        }
+
         if version < targetVersion {
             try executeStatic(db: db, sql: "PRAGMA user_version = \(targetVersion)")
         }
@@ -420,8 +433,8 @@ public actor OAuthStorage {
         try execute("""
             INSERT OR REPLACE INTO authorization_codes
             (code, client_id, redirect_uri, scope, code_challenge, code_challenge_method,
-             expires_at, created_at, consumed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+             expires_at, created_at, consumed, audience)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
         """, parameters: [
             code.code,
             code.clientId,
@@ -430,7 +443,8 @@ public actor OAuthStorage {
             code.codeChallenge as Any,
             code.codeChallengeMethod as Any,
             code.expiresAt.timeIntervalSince1970,
-            code.createdAt.timeIntervalSince1970
+            code.createdAt.timeIntervalSince1970,
+            code.audience?.absoluteString as Any
         ])
     }
 
@@ -1214,6 +1228,13 @@ public actor OAuthStorage {
         let codeChallengeMethod = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
         let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
         let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
+        // Column 8 is `consumed`; 9 is the audience added in schema 6. A code stored before
+        // that migration has NULL here, which reads as "granted for no particular resource" —
+        // the honest answer, since it never was.
+        let audience = sqlite3_column_text(stmt, 9)
+            .map { String(cString: $0) }
+            // SECURITY: parses a value this server wrote itself when it issued the code.
+            .flatMap { URL(string: $0) }
 
         return AuthorizationCode(
             code: code,
@@ -1223,7 +1244,8 @@ public actor OAuthStorage {
             codeChallenge: codeChallenge,
             codeChallengeMethod: codeChallengeMethod,
             expiresAt: expiresAt,
-            createdAt: createdAt
+            createdAt: createdAt,
+            audience: audience
         )
     }
 }

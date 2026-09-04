@@ -557,6 +557,21 @@ public actor OAuthServer {
         let code = TokenGenerator.generateAuthorizationCode()
         let now = Date()
 
+        // RFC 8707 at the authorization endpoint, which 0.8.0 left open.
+        //
+        // Refused here, before the user is sent anywhere. Validating only at the token endpoint
+        // meant a client naming a resource this server does not serve still sent the user
+        // through a full authorization — sign in, read a consent screen, approve — for a
+        // request that was never going to succeed.
+        //
+        // Fixing the audience onto the code also closes a subtler hole: with it decided at
+        // redemption, a client could name the resource the user saw here and a different one at
+        // `/token`, and nothing on the code contradicted it.
+        //
+        // SECURITY: parses a client-supplied identifier; nothing is fetched from it.
+        let requestedResource = request.resource.flatMap { URL(string: $0) }
+        let audience = try resourcePolicy.audience(for: requestedResource.map { [$0] } ?? [])
+
         let authCode = AuthorizationCode(
             code: code,
             clientId: request.clientId,
@@ -565,7 +580,8 @@ public actor OAuthServer {
             codeChallenge: request.codeChallenge,
             codeChallengeMethod: request.codeChallengeMethod,
             expiresAt: now.addingTimeInterval(authorizationCodeLifetime),
-            createdAt: now
+            createdAt: now,
+            audience: audience
         )
 
         try await storage.saveAuthorizationCode(authCode)
@@ -720,9 +736,21 @@ public actor OAuthServer {
 
         let now = Date()
 
-        // RFC 8707: what this token is for, decided before it is issued. A token stored
-        // without an audience is one every resource accepts.
-        let audience = try resourcePolicy.audience(for: request.resource)
+        // RFC 8707: what this token is for. The audience was fixed when the code was granted,
+        // so this endpoint honours that rather than deciding again — a client that named one
+        // resource at `/authorize` and another here is substituting an audience the user never
+        // saw, and the code is the only record of what they did see.
+        let audience: URL?
+        if let requested = request.resource.first {
+            guard authCode.audience == requested else {
+                throw OAuthError.invalidTarget(
+                    "This authorization code was granted for a different resource than the one "
+                    + "requested. Start a new authorization request naming the resource you want.")
+            }
+            audience = authCode.audience
+        } else {
+            audience = authCode.audience
+        }
 
         // Store tokens
         try await storage.saveAccessToken(
@@ -1195,6 +1223,14 @@ public struct AuthorizationRequest: Sendable {
     /// PKCE code challenge method (e.g. "S256")
     public let codeChallengeMethod: String?
 
+    /// The `resource` parameter — RFC 8707. The API the eventual token is for.
+    ///
+    /// Validated here rather than only at the token endpoint, so a client naming a resource
+    /// this server does not serve is refused before the user is sent anywhere — rather than
+    /// after they have signed in, read a consent screen and approved a request that was never
+    /// going to succeed.
+    public let resource: String?
+
     /// Creates a new authorization request
     public init(
         responseType: String,
@@ -1203,7 +1239,8 @@ public struct AuthorizationRequest: Sendable {
         scope: String?,
         state: String?,
         codeChallenge: String?,
-        codeChallengeMethod: String?
+        codeChallengeMethod: String?,
+        resource: String? = nil
     ) {
         self.responseType = responseType
         self.clientId = clientId
@@ -1212,6 +1249,7 @@ public struct AuthorizationRequest: Sendable {
         self.state = state
         self.codeChallenge = codeChallenge
         self.codeChallengeMethod = codeChallengeMethod
+        self.resource = resource
     }
 }
 

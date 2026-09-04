@@ -342,6 +342,13 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
     /// When this code was created
     public let createdAt: Date
 
+    /// The resource this code was granted for — RFC 8707.
+    ///
+    /// Fixed when the code is issued, so redemption cannot substitute a different one. Without
+    /// it the audience is decided at the token endpoint, and a client can name the resource the
+    /// user consented to at `/authorize` and a different one at `/token`.
+    public let audience: URL?
+
     /// Whether this code has expired
     public var isExpired: Bool {
         Date() >= expiresAt
@@ -365,7 +372,8 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
         codeChallenge: String?,
         codeChallengeMethod: String?,
         expiresAt: Date,
-        createdAt: Date
+        createdAt: Date,
+        audience: URL? = nil
     ) {
         self.code = code
         self.clientId = clientId
@@ -375,6 +383,7 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
         self.codeChallengeMethod = codeChallengeMethod
         self.expiresAt = expiresAt
         self.createdAt = createdAt
+        self.audience = audience
     }
 
     // MARK: - Codable
@@ -386,6 +395,7 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
         case scope
         case codeChallenge = "code_challenge"
         case codeChallengeMethod = "code_challenge_method"
+        case audience
         case expiresAt = "expires_at"
         case createdAt = "created_at"
     }

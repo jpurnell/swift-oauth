@@ -1069,7 +1069,12 @@ extension OAuthServerTests {
             storage: storage,
             issuer: "https://example.com",
             scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core,
-            authorizationCodeLifetime: codeLifetime
+            authorizationCodeLifetime: codeLifetime,
+            // This suite predates RFC 8707 and exercises grants, PKCE and code lifetimes. The
+            // strict default would make every one of its authorization requests carry a
+            // resource indicator that has nothing to do with what it tests; the strict path has
+            // its own coverage in AuthorizationResourceTests.
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true)
         )
     }
 }
