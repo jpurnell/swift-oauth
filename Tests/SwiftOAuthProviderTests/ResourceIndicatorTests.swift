@@ -149,7 +149,7 @@ struct ResourceIndicatorMetadataAgreementTests {
 
     private static func makeServer(issuer: String) async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(storage: storage, issuer: issuer)
+        return await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"])
     }
 
     /// The advertised resource is accepted by a policy built from the same identifier.

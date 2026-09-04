@@ -11,7 +11,7 @@ struct OAuthHTTPHandlerTests {
 
     static func makeTestHandler() async throws -> OAuthHTTPHandler {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://example.com",
+        let server = await OAuthServer(storage: storage, issuer: "https://example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -83,9 +83,13 @@ struct OAuthHTTPHandlerTests {
 
             #expect(metadata.resource == "https://example.com")
             #expect(metadata.authorizationServers == ["https://example.com"])
-            #expect(metadata.scopesSupported.contains("mcp:tools"))
-            #expect(metadata.scopesSupported.contains("mcp:resources"))
-            #expect(metadata.scopesSupported.contains("mcp:prompts"))
+            // Required, not optional-chained: the field being absent is a distinct failure
+            // from it being present and wrong, and `?.contains() == true` would report both
+            // the same way.
+            let scopes = try #require(metadata.scopesSupported)
+            #expect(scopes.contains("mcp:tools"))
+            #expect(scopes.contains("mcp:resources"))
+            #expect(scopes.contains("mcp:prompts"))
             #expect(metadata.bearerMethodsSupported.contains("header"))
         }
     }

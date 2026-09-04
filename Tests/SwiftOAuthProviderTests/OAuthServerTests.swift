@@ -11,7 +11,7 @@ struct OAuthServerTests {
 
     static func makeTestServer() async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(storage: storage, issuer: "https://example.com",
+        return await OAuthServer(storage: storage, issuer: "https://example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -962,9 +962,10 @@ struct OAuthServerTests {
 
             #expect(metadata.resource == "https://example.com")
             #expect(metadata.authorizationServers == ["https://example.com"])
-            #expect(metadata.scopesSupported.contains("mcp:tools"))
-            #expect(metadata.scopesSupported.contains("mcp:resources"))
-            #expect(metadata.scopesSupported.contains("mcp:prompts"))
+            let scopes = try #require(metadata.scopesSupported)
+            #expect(scopes.contains("mcp:tools"))
+            #expect(scopes.contains("mcp:resources"))
+            #expect(scopes.contains("mcp:prompts"))
             #expect(metadata.bearerMethodsSupported.contains("header"))
         }
     }
@@ -1067,6 +1068,7 @@ extension OAuthServerTests {
         return await OAuthServer(
             storage: storage,
             issuer: "https://example.com",
+            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             authorizationCodeLifetime: codeLifetime
         )
     }

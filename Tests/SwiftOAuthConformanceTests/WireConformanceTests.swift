@@ -40,7 +40,8 @@ struct WireConformanceTests {
         // refusal is the correct behaviour, so the agreement is checked against an issuer
         // shaped the way a deployed server's would be.
         let server = OAuthServer(
-            storage: try makeStorage(), issuer: "https://mcp.example.com")
+            storage: try makeStorage(), issuer: "https://mcp.example.com",
+            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"])
         let published = await server.getMetadata()
         let data = try JSONEncoder().encode(published)
         let discovered = try JSONDecoder().decode(AuthorizationServerMetadata.self, from: data)
@@ -369,7 +370,7 @@ private func makeStorage() throws -> OAuthStorage {
 }
 
 private func makeServer() async throws -> OAuthServer {
-    OAuthServer(storage: try makeStorage(), issuer: "https://mcp.example.com",
+    OAuthServer(storage: try makeStorage(), issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own

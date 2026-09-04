@@ -47,6 +47,15 @@ public actor OAuthServer {
     private let storage: OAuthStorage
     private let issuer: String
 
+    /// The scopes this deployment offers, advertised in both metadata documents.
+    ///
+    /// Supplied by the consumer with **no default**. A default of `[]` produces an empty
+    /// document silently; any other default invents scopes the deployment never chose, which is
+    /// what this package did until now — one consumer advertised three MCP scopes purely
+    /// because this code named them. `nil` means "advertise none", and it is a decision a
+    /// caller makes rather than inherits.
+    private let scopesSupported: [String]?
+
     /// How long a pushed authorization request is good for — RFC 9126 §2.2 suggests
     /// "relatively short", on the order of a minute, since the client redirects immediately.
     private let pushedRequestLifetime: TimeInterval = 90
@@ -80,6 +89,7 @@ public actor OAuthServer {
     public init(
         storage: OAuthStorage,
         issuer: String,
+        scopesSupported: [String]?,
         accessTokenLifetime: TimeInterval = 86400,        // 24 hours
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
@@ -87,6 +97,7 @@ public actor OAuthServer {
     ) {
         self.storage = storage
         self.issuer = issuer
+        self.scopesSupported = scopesSupported
         // Defaulted from the issuer, which is what this server already publishes as its
         // resource identifier in RFC 9728 metadata. Asking an operator to repeat that value
         // invites the two to drift, and a server that advertises a resource then refuses it
@@ -110,10 +121,30 @@ public actor OAuthServer {
             tokenEndpoint: "\(issuer)/token",
             registrationEndpoint: "\(issuer)/register",
             responseTypesSupported: ["code"],
-            grantTypesSupported: ["authorization_code", "refresh_token"],
+            // Named from `GrantType` rather than written out again: two lists drift, one does
+            // not, and this is a test about drift. `clientCredentials` is absent deliberately —
+            // this provider does not issue those, and advertising a grant it refuses is worse
+            // than omitting one it honours.
+            grantTypesSupported: [
+                GrantType.authorizationCode.rawValue,
+                GrantType.refreshToken.rawValue,
+                GrantType.deviceCode.rawValue,
+                GrantType.tokenExchange.rawValue
+            ],
             codeChallengeMethodsSupported: [PKCE.ChallengeMethod.s256.rawValue],
-            tokenEndpointAuthMethodsSupported: ["client_secret_basic", "client_secret_post", "none"],
-            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"]
+            tokenEndpointAuthMethodsSupported: [
+                ClientAuthenticationMethod.clientSecretBasic.rawValue,
+                ClientAuthenticationMethod.clientSecretPost.rawValue,
+                ClientAuthenticationMethod.none.rawValue,
+                ClientAuthenticationMethod.tlsClientAuth.rawValue,
+                ClientAuthenticationMethod.selfSignedTLSClientAuth.rawValue
+            ],
+            // The consumer's, or none. This package no longer invents scopes.
+            scopesSupported: scopesSupported,
+            introspectionEndpoint: "\(issuer)/introspect",
+            pushedAuthorizationRequestEndpoint: "\(issuer)/par",
+            deviceAuthorizationEndpoint: "\(issuer)/device_authorization",
+            dpopSigningAlgValuesSupported: ["ES256"]
         )
     }
 
@@ -380,7 +411,9 @@ public actor OAuthServer {
         ProtectedResourceMetadata(
             resource: issuer,
             authorizationServers: [issuer],
-            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+            // One source for both documents. A client may read either, and two literals would
+            // drift into disagreeing about one deployment.
+            scopesSupported: scopesSupported,
             bearerMethodsSupported: ["header"]
         )
     }
@@ -868,6 +901,24 @@ public struct ServerMetadata: Codable, Sendable {
     /// Supported OAuth scopes
     public let scopesSupported: [String]?
 
+    /// Where a resource server introspects a token — RFC 7662 §2.
+    ///
+    /// Absent from this document, the endpoint is unreachable by a conformant client however
+    /// completely it is implemented: a client does not guess endpoints.
+    public let introspectionEndpoint: String?
+
+    /// Where a client pushes an authorization request — RFC 9126 §5.
+    public let pushedAuthorizationRequestEndpoint: String?
+
+    /// Where a device begins a browserless sign-in — RFC 8628 §4.
+    public let deviceAuthorizationEndpoint: String?
+
+    /// The DPoP proof algorithms this server verifies — RFC 9449 §5.1.
+    ///
+    /// Exactly what it accepts, never more: a client chooses from this list, so advertising an
+    /// algorithm this server refuses invites proofs it will reject.
+    public let dpopSigningAlgValuesSupported: [String]?
+
     private enum CodingKeys: String, CodingKey {
         case issuer
         case authorizationEndpoint = "authorization_endpoint"
@@ -878,6 +929,10 @@ public struct ServerMetadata: Codable, Sendable {
         case codeChallengeMethodsSupported = "code_challenge_methods_supported"
         case tokenEndpointAuthMethodsSupported = "token_endpoint_auth_methods_supported"
         case scopesSupported = "scopes_supported"
+        case introspectionEndpoint = "introspection_endpoint"
+        case pushedAuthorizationRequestEndpoint = "pushed_authorization_request_endpoint"
+        case deviceAuthorizationEndpoint = "device_authorization_endpoint"
+        case dpopSigningAlgValuesSupported = "dpop_signing_alg_values_supported"
     }
 }
 
@@ -889,8 +944,13 @@ public struct ProtectedResourceMetadata: Codable, Sendable {
     public let resource: String
     /// URLs of authorization servers that protect this resource
     public let authorizationServers: [String]
-    /// Scopes supported by this resource
-    public let scopesSupported: [String]
+    /// The scopes this resource offers, when it names any.
+    ///
+    /// Optional per RFC 9728 §2, and for the reason that matters: an absent field and an empty
+    /// array say different things. Absent means "this document does not enumerate scopes";
+    /// empty means "this resource offers none". A non-optional field forced the second whenever
+    /// the first was true.
+    public let scopesSupported: [String]?
     /// Supported bearer token methods
     public let bearerMethodsSupported: [String]
 

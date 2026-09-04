@@ -16,7 +16,7 @@ struct DPoPBindingTests {
     private func makeServer() async throws -> (OAuthServer, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com",
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         return (server, storage)
     }
@@ -125,7 +125,7 @@ struct BoundTokenSchemeTests {
     private func makeHandler() async throws -> (OAuthHTTPHandler, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com",
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         return (await OAuthHTTPHandler(server: server), storage)
     }
@@ -190,7 +190,7 @@ struct CertificateBoundTokenTests {
     private func makeHandler() async throws -> (OAuthHTTPHandler, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com",
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         return (await OAuthHTTPHandler(server: server), storage)
     }
