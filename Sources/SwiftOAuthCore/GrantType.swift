@@ -54,6 +54,16 @@ public enum GrantType: String, Codable, Sendable, Equatable, CaseIterable {
     /// which is easy to get wrong: a server matching on `"device_code"` refuses every
     /// conformant client, and the refusal looks like an unsupported grant rather than a typo.
     case deviceCode = "urn:ietf:params:oauth:grant-type:device_code"
+
+    /// Exchange one token for another — RFC 8693.
+    ///
+    /// For a service acting with a token it was given rather than one it obtained: an API
+    /// gateway calling a backend, a job running on a user's behalf, or a service narrowing its
+    /// own privilege before calling something less trusted.
+    ///
+    /// A URN, like the device grant, and for the same reason: a server matching a short name
+    /// refuses every conformant client and the refusal reads as an unsupported grant.
+    case tokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
 }
 
 /// The response types this package supports.
