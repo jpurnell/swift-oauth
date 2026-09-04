@@ -32,7 +32,11 @@ struct IntrospectionEndpointTests {
     func activeTokenIntrospects() async throws {
         let (server, storage) = try await makeServer()
         let api = try url("https://mcp.example.com")
-        let expiry = Date().addingTimeInterval(3600)
+        // A fixed instant, not `Date() + 3600`. What this asserts is that a stored expiry
+        // survives the round trip — a question about storage, not about elapsed time — and
+        // measuring it against the clock made it a timing assertion that flakes under load for
+        // reasons unrelated to what it checks.
+        let expiry = Date(timeIntervalSince1970: 2_000_000_000)  // 2033-05-18
         try await storage.saveAccessToken(
             token: "live-token", clientId: "client-1", scope: "read write",
             expiresAt: expiry, audience: api)
@@ -46,7 +50,8 @@ struct IntrospectionEndpointTests {
         // The stored expiry, to the second. Asserting only that it is non-nil would pass for
         // a server reporting the epoch, which is exactly the bug a resource server acts on.
         let reported = try #require(result.expiry)
-        #expect(abs(reported.timeIntervalSince(expiry)) < 1)
+        #expect(reported.timeIntervalSince1970 == expiry.timeIntervalSince1970,
+                "the stored expiry did not survive the round trip")
     }
 
     /// An expired token is `active: false` — **not** an error.

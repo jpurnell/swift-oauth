@@ -12,11 +12,6 @@ import Testing
 @Suite("RFC 8705 — the mTLS transport")
 struct MTLSTransportTests {
 
-    private func url(_ string: String) throws -> URL {
-        // SECURITY: parses a literal written in this test; no request is issued from it.
-        try #require(URL(string: string))
-    }
-
     /// A transport built from a certificate reports the identity it will present.
     ///
     /// This is what a token gets bound to, so a client that cannot say which certificate it

@@ -98,10 +98,12 @@ public enum CompactJWS {
 
         // Read only to refuse. This value never selects a code path — that is the whole
         // defence against `none` and against algorithm confusion.
+        // silent: a header that will not parse is a token this function rejects on the next line
         let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any]
         let algorithm = (header ?? [:])["alg"] as? String
         guard algorithm == "ES256" else { throw Failure.unsupportedAlgorithm(algorithm) }
 
+        // silent: signature bytes that are not a well-formed ECDSA pair are a rejected signature
         guard let signature = try? P256.Signing.ECDSASignature(
             rawRepresentation: signatureData) else {
             throw Failure.signatureRejected

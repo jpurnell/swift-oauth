@@ -79,13 +79,39 @@ public enum DPoPProof {
         using key: P256.Signing.PrivateKey,
         issuedAt: Date = Date()
     ) throws -> String {
+        var generator = SystemRandomNumberGenerator() // stochastic:exempt convenience wrapper; injectable overload below
+        return try create(
+            method: method, url: url, using: key, issuedAt: issuedAt, generator: &generator)
+    }
+
+    /// Creates a proof, drawing its identifier from a supplied generator.
+    ///
+    /// Injectable so the proof's *shape* can be tested against a known sequence without
+    /// asserting anything about a value that must be unpredictable in production — a `jti` an
+    /// attacker can predict is a replay window, since a server refusing repeats can only refuse
+    /// the ones it sees coming.
+    ///
+    /// - Parameters:
+    ///   - method: The HTTP method, upper-case.
+    ///   - url: The request URI. Query and fragment are stripped, per §4.2.
+    ///   - key: The key this client holds.
+    ///   - issuedAt: When the proof is made.
+    ///   - generator: The source of the proof identifier.
+    /// - Returns: The compact JWS to send in the `DPoP` header.
+    /// - Throws: If the proof could not be signed.
+    public static func create(
+        method: String,
+        url: URL,
+        using key: P256.Signing.PrivateKey,
+        issuedAt: Date = Date(),
+        generator: inout some RandomNumberGenerator
+    ) throws -> String {
         let jwk = Self.jwk(for: key.publicKey)
         let header = Data(#"{"typ":"dpop+jwt","alg":"ES256","jwk":\#(jwk)}"#.utf8)
 
         // 16 bytes from the system CSPRNG. A guessable `jti` is a replay window, since a
         // server refusing repeats can only refuse the ones it can predict being reused.
-        // stochastic:exempt a proof identifier must be unpredictable; there is no seeded path
-        var generator = SystemRandomNumberGenerator()
+        var generator = SystemRandomNumberGenerator() // stochastic:exempt convenience wrapper; `create(…using:)` takes a generator
         // base64url rather than hex: the encoding is irrelevant to a `jti` — uniqueness and
         // unpredictability are the whole requirement — and it avoids `String(format:)`, which
         // bridges to the C printf ABI and fails at runtime rather than at compile time.
@@ -123,6 +149,7 @@ public enum DPoPProof {
         // proves only that the attacker can sign, which is why the thumbprint is what a token
         // is bound to rather than the proof alone.
         guard let headerData = CompactJWS.unverifiedHeader(proof),
+              // silent: an unparseable header is a malformed proof, thrown as such by this guard
               let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any],
               header["typ"] as? String == "dpop+jwt" else {
             throw Failure.malformedHeader
@@ -134,6 +161,7 @@ public enum DPoPProof {
 
         let payload = try CompactJWS.verify(proof, using: publicKey)
 
+        // silent: claims that will not parse are a malformed proof, thrown by this guard
         guard let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
               let identifier = claims["jti"] as? String,
               let issued = claims["iat"] as? TimeInterval else {
@@ -211,6 +239,7 @@ public enum DPoPProof {
               x.count == 32, y.count == 32 else {
             return nil
         }
+        // silent: coordinates that are not a valid point yield no key, which the caller reads as absent
         return try? P256.Signing.PublicKey(rawRepresentation: x + y)
     }
 }

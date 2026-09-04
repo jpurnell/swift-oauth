@@ -96,6 +96,7 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
         // fails at the point a token is being checked rather than at configuration time.
         // Typed explicitly: `.map` on a bare `String?` resolves to `Sequence.map` and yields
         // an array of characters, which compiles nowhere useful and reads as a decoder bug.
+        // silent: `aud` may be a string or an array; failing the first shape is how the second is tried
         let singleAudience: String? = try? container.decodeIfPresent(String.self, forKey: .aud)
         if let singleAudience {
             audience = [singleAudience]

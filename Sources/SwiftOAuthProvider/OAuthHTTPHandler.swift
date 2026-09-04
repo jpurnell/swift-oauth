@@ -501,9 +501,16 @@ public struct OAuthHTTPHandler: Sendable {
                 statusCode: 200,
                 contentType: "application/json",
                 body: String(decoding: encoded, as: UTF8.self))
+        // logging: an OAuth error *is* the response; nothing is discarded by converting it
         } catch let error as OAuthError {
             return errorResponse(error)
         } catch {
+            // An error that is not an `OAuthError` is one this handler did not anticipate, and
+            // the client is told only `server_error` — correctly, since the detail is not
+            // theirs to see. Logged so the operator has the one copy that exists.
+            #if canImport(os)
+            logger.error("Unexpected error handling introspection: \(error.localizedDescription, privacy: .public)")
+            #endif
             return errorResponse(.serverError(nil))
         }
     }

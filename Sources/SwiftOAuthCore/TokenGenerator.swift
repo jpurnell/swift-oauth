@@ -142,8 +142,19 @@ public enum TokenGenerator {
     ///
     /// - Returns: A user code in `XXXX-XXXX` form.
     public static func generateUserCode() -> String {
-        // stochastic:exempt a user code must be unpredictable; there is no seeded path here
-        var rng = SystemRandomNumberGenerator()
+        var rng = SystemRandomNumberGenerator() // stochastic:exempt convenience wrapper; injectable overload below
+        return generateUserCode(using: &rng)
+    }
+
+    /// Generates a user code from a supplied generator.
+    ///
+    /// Injectable so the alphabet's properties can be tested against a known sequence — that
+    /// excluded characters never appear, and that the shape is `XXXX-XXXX` — without asserting
+    /// anything about a value that must be unpredictable in production.
+    ///
+    /// - Parameter rng: The generator to draw from.
+    /// - Returns: A user code in `XXXX-XXXX` form.
+    public static func generateUserCode(using rng: inout some RandomNumberGenerator) -> String {
         let characters = (0..<8).map { _ in
             userCodeAlphabet[Int(rng.next(upperBound: UInt64(userCodeAlphabet.count)))]
         }

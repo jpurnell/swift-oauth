@@ -186,12 +186,6 @@ struct TokenEndpointResourceTests {
 @Suite("RFC 8707 — parsing resource from the wire")
 struct ResourceParsingTests {
 
-    private func handler(issuer: String) async throws -> OAuthHTTPHandler {
-        let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core)
-        return await OAuthHTTPHandler(server: server)
-    }
-
     /// A single `resource` reaches the request.
     @Test("One resource parameter is read")
     func singleResourceIsRead() async throws {
