@@ -19,7 +19,7 @@ struct IntrospectionEndpointTests {
         issuer: String = "https://mcp.example.com"
     ) async throws -> (server: OAuthServer, storage: OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
-        return (await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"]), storage)
+        return (await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none), storage)
     }
 
     private func url(_ string: String) throws -> URL {
@@ -126,7 +126,7 @@ struct IntrospectionHTTPTests {
     private func makeHandler() async throws
         -> (OAuthHTTPHandler, OAuthStorage, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"])
+        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none)
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "prober",
             redirectUris: ["https://app.example.com/callback"]))

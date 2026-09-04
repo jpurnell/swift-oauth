@@ -28,7 +28,7 @@ struct ReliedUponPropertiesTests {
     private func makeServer() async throws -> (OAuthServer, OAuthStorage, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "relying-party", redirectUris: ["https://app.example.com/callback"]))
@@ -84,7 +84,7 @@ struct ReliedUponPropertiesTests {
     func tokenEndpointAuthenticatesTheClient() async throws {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = await OAuthHTTPHandler(server: server)
         let client = try await server.registerClient(ClientRegistrationRequest(
@@ -137,7 +137,7 @@ struct ReliedUponPropertiesTests {
     func boundTokensRefusedAsBearer() async throws {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let handler = await OAuthHTTPHandler(server: server)
 

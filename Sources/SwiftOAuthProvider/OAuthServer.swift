@@ -56,6 +56,9 @@ public actor OAuthServer {
     /// caller makes rather than inherits.
     private let scopesSupported: [String]?
 
+    /// What this deployment actually serves, as opposed to what this package implements.
+    private let advertisedEndpoints: AdvertisedEndpoints
+
     /// How long a pushed authorization request is good for — RFC 9126 §2.2 suggests
     /// "relatively short", on the order of a minute, since the client redirects immediately.
     private let pushedRequestLifetime: TimeInterval = 90
@@ -90,6 +93,7 @@ public actor OAuthServer {
         storage: OAuthStorage,
         issuer: String,
         scopesSupported: [String]?,
+        advertisedEndpoints: AdvertisedEndpoints,
         accessTokenLifetime: TimeInterval = 86400,        // 24 hours
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
@@ -98,6 +102,7 @@ public actor OAuthServer {
         self.storage = storage
         self.issuer = issuer
         self.scopesSupported = scopesSupported
+        self.advertisedEndpoints = advertisedEndpoints
         // Defaulted from the issuer, which is what this server already publishes as its
         // resource identifier in RFC 9728 metadata. Asking an operator to repeat that value
         // invites the two to drift, and a server that advertises a resource then refuses it
@@ -141,9 +146,12 @@ public actor OAuthServer {
             ],
             // The consumer's, or none. This package no longer invents scopes.
             scopesSupported: scopesSupported,
-            introspectionEndpoint: "\(issuer)/introspect",
-            pushedAuthorizationRequestEndpoint: "\(issuer)/par",
-            deviceAuthorizationEndpoint: "\(issuer)/device_authorization",
+            // What the deployment serves, not what this package implements. Advertising an
+            // endpoint the consumer does not route makes a discoverable 404, and that failure
+            // lands on their clients rather than here.
+            introspectionEndpoint: advertisedEndpoints.introspection,
+            pushedAuthorizationRequestEndpoint: advertisedEndpoints.pushedAuthorizationRequest,
+            deviceAuthorizationEndpoint: advertisedEndpoints.deviceAuthorization,
             dpopSigningAlgValuesSupported: ["ES256"]
         )
     }
@@ -879,6 +887,60 @@ public actor OAuthServer {
 }
 
 // MARK: - Server Metadata
+
+/// The optional endpoints a deployment actually serves — RFC 8414 §2.
+///
+/// This package implements introspection, pushed authorization requests, device authorization
+/// and revocation. Whether any of them is *reachable* is a fact about the consumer's HTTP
+/// layer, not about this package, and only the consumer knows it.
+///
+/// The distinction matters because of who reads the metadata. A conformant client treats the
+/// document as a list of things it may call, so an endpoint advertised and not routed is a
+/// discoverable 404 — a worse failure than never advertising it, and one that surfaces at the
+/// client rather than at the server that made the claim.
+///
+/// Every field defaults to `nil`, meaning "not served". ``OAuthServer`` requires one of these
+/// with no default of its own, so a consumer states what it exposes rather than inheriting a
+/// claim about endpoints it may not route.
+public struct AdvertisedEndpoints: Sendable, Equatable {
+
+    /// Where this deployment serves token introspection — RFC 7662.
+    public let introspection: String?
+
+    /// Where it serves pushed authorization requests — RFC 9126.
+    public let pushedAuthorizationRequest: String?
+
+    /// Where it serves device authorization — RFC 8628.
+    public let deviceAuthorization: String?
+
+    /// Where it serves token revocation — RFC 7009.
+    public let revocation: String?
+
+    /// A deployment serving none of the optional endpoints.
+    ///
+    /// Named rather than defaulted, so choosing it is visible at the call site: a reader can
+    /// tell "serves none" from "nobody thought about it".
+    public static let none = AdvertisedEndpoints()
+
+    /// Declares which optional endpoints this deployment serves.
+    ///
+    /// - Parameters:
+    ///   - introspection: The introspection endpoint's URL, if routed.
+    ///   - pushedAuthorizationRequest: The PAR endpoint's URL, if routed.
+    ///   - deviceAuthorization: The device authorization endpoint's URL, if routed.
+    ///   - revocation: The revocation endpoint's URL, if routed.
+    public init(
+        introspection: String? = nil,
+        pushedAuthorizationRequest: String? = nil,
+        deviceAuthorization: String? = nil,
+        revocation: String? = nil
+    ) {
+        self.introspection = introspection
+        self.pushedAuthorizationRequest = pushedAuthorizationRequest
+        self.deviceAuthorization = deviceAuthorization
+        self.revocation = revocation
+    }
+}
 
 /// OAuth 2.0 Authorization Server Metadata per RFC 8414
 public struct ServerMetadata: Codable, Sendable {

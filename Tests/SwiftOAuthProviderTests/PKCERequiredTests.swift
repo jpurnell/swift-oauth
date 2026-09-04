@@ -22,7 +22,7 @@ struct PKCERequiredTests {
     private func makeServer() async throws -> (OAuthServer, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "app", redirectUris: ["https://app.example.com/callback"]))
@@ -96,7 +96,7 @@ struct TokenEndpointPKCETests {
     func storedCodeWithoutChallengeIsRefused() async throws {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "app", redirectUris: ["https://app.example.com/callback"]))

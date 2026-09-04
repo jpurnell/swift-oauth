@@ -229,7 +229,7 @@ struct OAuthConsentTests {
     @Test("Consent - Approve returns authorization code")
     func testConsentApproveReturnsCode() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -274,7 +274,7 @@ struct OAuthConsentTests {
     @Test("Consent - Deny returns access_denied error")
     func testConsentDenyReturnsError() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -313,7 +313,7 @@ struct OAuthConsentTests {
     @Test("Consent - Invalid CSRF token rejected")
     func testConsentInvalidCSRFRejected() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -344,7 +344,7 @@ struct OAuthConsentTests {
     @Test("Consent - Invalid client_id rejected")
     func testConsentInvalidClientRejected() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -368,7 +368,7 @@ struct OAuthConsentTests {
     @Test("Consent - Missing required params rejected")
     func testConsentMissingParamsRejected() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -406,7 +406,7 @@ struct OAuthConsentTests {
     @Test("Authorization - Returns consent page HTML")
     func testAuthorizationReturnsConsentPage() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -445,7 +445,7 @@ struct OAuthConsentTests {
     @Test("Authorization - Invalid redirect_uri returns error page")
     func testAuthorizationInvalidRedirectUri() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"],
+        let server = OAuthServer(storage: storage, issuer: "http://localhost:8080", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
