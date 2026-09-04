@@ -68,3 +68,59 @@ struct PKCERequiredTests {
         #expect(!response.code.isEmpty)
     }
 }
+
+/// The token endpoint enforces PKCE on its own, not by trusting the authorization endpoint.
+///
+/// After the authorization endpoint began requiring a challenge, verifying one at the token
+/// endpoint "if the code carried it" became equivalent *for codes minted afterwards*. Two edges
+/// remained, and the second is the one that matters:
+///
+/// 1. **Codes already stored.** One issued before the upgrade carries no challenge and redeems
+///    with no verifier — a window the length of the code lifetime, closing on its own, and
+///    exactly the window an attacker holding an intercepted code is standing in.
+/// 2. **Defence in depth.** The token endpoint's safety became a property of a *different*
+///    endpoint. Any future path that creates a code — an admin tool, a fixture, a migration, a
+///    grant type not yet written — reopens it silently, and the token endpoint would not object.
+///
+/// So the check is unconditional here. A stored code without a challenge is refused, whatever
+/// put it there. Raised by the SwiftMCPServer session after adopting the fix and reading the
+/// token endpoint rather than the release note.
+@Suite("OAuth 2.1 — the token endpoint enforces PKCE itself")
+struct TokenEndpointPKCETests {
+
+    /// A code in storage with no challenge cannot be redeemed, however it got there.
+    ///
+    /// Planted directly, because the authorization endpoint can no longer produce one — which
+    /// is the point: this asserts the token endpoint's own behaviour, not the pair's.
+    @Test("A stored code with no challenge is refused at the token endpoint")
+    func storedCodeWithoutChallengeIsRefused() async throws {
+        let storage = try OAuthStorage(path: ":memory:")
+        let server = await OAuthServer(
+            storage: storage, issuer: "https://mcp.example.com",
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
+        let client = try await server.registerClient(ClientRegistrationRequest(
+            clientName: "app", redirectUris: ["https://app.example.com/callback"]))
+
+        // A code as a pre-upgrade release would have left it: no challenge, no method.
+        try await storage.saveAuthorizationCode(AuthorizationCode(
+            code: "legacy-code",
+            clientId: client.clientId,
+            redirectUri: "https://app.example.com/callback",
+            scope: "read",
+            codeChallenge: nil,
+            codeChallengeMethod: nil,
+            expiresAt: Date().addingTimeInterval(600),
+            createdAt: Date()))
+
+        await #expect(throws: OAuthError.self) {
+            _ = try await server.handleTokenRequest(TokenRequest(
+                grantType: "authorization_code",
+                code: "legacy-code",
+                redirectUri: "https://app.example.com/callback",
+                clientId: client.clientId,
+                clientSecret: client.clientSecret,
+                codeVerifier: nil,
+                refreshToken: nil))
+        }
+    }
+}

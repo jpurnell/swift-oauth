@@ -628,9 +628,26 @@ public actor OAuthServer {
         }
 
         // Validate PKCE if code challenge was provided
-        if let codeChallenge = authCode.codeChallenge {
-            try validatePKCE(verifier: request.codeVerifier, challenge: codeChallenge, methodName: authCode.codeChallengeMethod)
+        // Unconditional, not "if the code carried a challenge".
+        //
+        // Once the authorization endpoint began requiring one, the conditional form became
+        // equivalent for codes minted afterwards — and that equivalence is the problem. It made
+        // this endpoint's safety a property of a *different* endpoint, so any future path that
+        // creates a code (an admin tool, a fixture, a migration, a grant type not yet written)
+        // would reopen the hole silently and this code would not object.
+        //
+        // It also fails closed for codes stored before the upgrade, which carry no challenge
+        // and would otherwise redeem with no verifier for the length of a code lifetime — the
+        // exact window an attacker holding an intercepted code is standing in.
+        guard let codeChallenge = authCode.codeChallenge else {
+            throw OAuthError.invalidGrant(
+                "This authorization code carries no PKCE challenge and cannot be redeemed. "
+                + "Start a new authorization request.")
         }
+        try validatePKCE(
+            verifier: request.codeVerifier,
+            challenge: codeChallenge,
+            methodName: authCode.codeChallengeMethod)
 
         // Get client to check grant types
         guard let client = try await storage.getClient(clientId: request.clientId) else {
