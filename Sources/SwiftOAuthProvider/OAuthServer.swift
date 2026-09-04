@@ -25,7 +25,14 @@ import SwiftOAuthCore
 ///     tokenRequest: TokenRequest
 /// ) async throws {
 ///     let storage = try OAuthStorage(path: "~/.businessmath-mcp/oauth.db")
-///     let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com")
+///     let server = await OAuthServer(
+///         storage: storage,
+///         issuer: "https://mcp.example.com",
+///         // What this deployment offers, and what it routes. Neither has a default: a
+///         // document that promises scopes or endpoints nobody serves is worse than one that
+///         // promises nothing.
+///         scopesSupported: ["files:read", "files:write"],
+///         advertisedEndpoints: .none)
 ///
 ///     // Get server metadata
 ///     let metadata = await server.getMetadata()
@@ -89,6 +96,18 @@ public actor OAuthServer {
     ///   - accessTokenLifetime: Access token lifetime in seconds (default: 24 hours)
     ///   - refreshTokenLifetime: Refresh token lifetime in seconds (default: 90 days)
     ///   - authorizationCodeLifetime: Auth code lifetime in seconds (default: 10 minutes)
+    ///   - scopesSupported: The scopes this deployment offers, advertised in both metadata
+    ///     documents. No default: `nil` means "advertise none", and it is a decision a caller
+    ///     makes rather than inherits. This package previously invented three MCP scopes, which
+    ///     one consumer advertised without ever having chosen them.
+    ///   - advertisedEndpoints: The optional endpoints this deployment actually routes. No
+    ///     default, for the same reason: a client reads the metadata as a list of things it may
+    ///     call, so advertising an endpoint nobody serves produces a discoverable 404 at the
+    ///     client rather than an error here. ``AdvertisedEndpoints/none`` is the explicit
+    ///     "serves none".
+    ///   - resourcePolicy: Which resources this server issues tokens for — RFC 8707. Defaults
+    ///     to ``ResourceIndicatorPolicy/protecting(_:)`` over the issuer, which is the value the
+    ///     server already publishes as its own resource identifier.
     public init(
         storage: OAuthStorage,
         issuer: String,
