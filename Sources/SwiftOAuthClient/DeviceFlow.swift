@@ -42,8 +42,8 @@ public enum DeviceFlow {
     ///   - elapsed: How long the flow has been running.
     ///   - redeem: One attempt at the token endpoint.
     /// - Returns: The tokens, once the user approves.
-    /// - Throws: ``OAuthError/accessDenied(_:)`` if the user refused,
-    ///   ``OAuthError/expiredToken(_:)`` if the code died or the local bound was reached, or
+    /// - Throws: `OAuthError.accessDenied(_:)` if the user refused,
+    ///   `OAuthError.expiredToken(_:)` if the code died or the local bound was reached, or
     ///   whatever `redeem` threw for a failure that is not a polling state.
     public static func poll(
         interval: TimeInterval,

@@ -60,7 +60,7 @@ public struct RequestObject: Sendable, Equatable {
     ///     replayable against this one.
     ///   - key: The client's public key.
     /// - Returns: The verified parameters.
-    /// - Throws: ``CompactJWS/Failure`` if the signature is not good, or ``Failure`` if a claim
+    /// - Throws: `CompactJWS.Failure` if the signature is not good, or ``Failure`` if a claim
     ///   is wrong. Either way the caller gets nothing usable — there is no partial result.
     public static func verify(
         _ token: String,

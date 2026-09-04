@@ -684,7 +684,7 @@ public actor OAuthStorage {
     /// published contract — widening it again for `exp` and `iat` would be a second source
     /// break in consecutive releases for callers who do not introspect at all.
     ///
-    /// Returns ``IntrospectionResult/inactive`` for a token that is expired, revoked or
+    /// Returns `IntrospectionResult.inactive` for a token that is expired, revoked or
     /// unknown, and the three are indistinguishable to the caller on purpose: RFC 7662 §2.2
     /// requires that an inactive response say nothing else, because a caller holding a dead
     /// token has proven nothing and a response carrying claims is an oracle.

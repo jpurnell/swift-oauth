@@ -220,8 +220,8 @@ public actor OAuthServer {
     ///   - request: What to exchange, and for what.
     ///   - clientId: The client performing the exchange.
     /// - Returns: The issued token and what kind it is.
-    /// - Throws: ``OAuthError/invalidGrant(_:)`` for a subject that cannot be exchanged, or
-    ///   ``OAuthError/invalidScope(_:)`` for a request that would widen privilege.
+    /// - Throws: `OAuthError.invalidGrant(_:)` for a subject that cannot be exchanged, or
+    ///   `OAuthError.invalidScope(_:)` for a request that would widen privilege.
     public func exchangeToken(
         _ request: TokenExchangeRequest, clientId: String
     ) async throws -> TokenExchangeResponse {
@@ -313,7 +313,7 @@ public actor OAuthServer {
     /// Single-use. A reference that can be replayed is one a browser extension can harvest and
     /// present again.
     ///
-    /// - Throws: ``OAuthError/invalidRequest(_:)`` when no live, unspent request matches this
+    /// - Throws: `OAuthError.invalidRequest(_:)` when no live, unspent request matches this
     ///   client. Unknown, expired, spent and belonging-to-someone-else are one answer, so a
     ///   caller cannot probe which references exist.
     public func consumePushedRequest(
@@ -367,7 +367,7 @@ public actor OAuthServer {
     /// - Parameters:
     ///   - userCode: The code the user typed.
     ///   - subject: Who approved it.
-    /// - Throws: ``OAuthError/invalidGrant(_:)`` if no live, unapproved code matches. Unknown
+    /// - Throws: `OAuthError.invalidGrant(_:)` if no live, unapproved code matches. Unknown
     ///   and expired are not distinguished: the approval page would otherwise confirm which
     ///   short codes exist, and they are short by design.
     public func approveDeviceCode(userCode: String, subject: String) async throws {
@@ -383,9 +383,9 @@ public actor OAuthServer {
     ///   - deviceCode: The code the device has been polling with.
     ///   - clientId: The client redeeming it.
     /// - Returns: The tokens, once the user has approved.
-    /// - Throws: ``OAuthError/authorizationPending(_:)`` while the user has not finished —
-    ///   the expected answer for most of the flow — or ``OAuthError/expiredToken(_:)``,
-    ///   or ``OAuthError/invalidGrant(_:)`` for a code that is unknown, not this client's, or
+    /// - Throws: `OAuthError.authorizationPending(_:)` while the user has not finished —
+    ///   the expected answer for most of the flow — or `OAuthError.expiredToken(_:)`,
+    ///   or `OAuthError.invalidGrant(_:)` for a code that is unknown, not this client's, or
     ///   already spent.
     public func redeemDeviceCode(
         _ deviceCode: String, clientId: String
@@ -988,7 +988,7 @@ public struct ServedCapabilities: Sendable, Equatable {
     /// way to test it before relying on it — it obtains a bound token first, and discovers the
     /// truth when the request it was designed for is turned away.
     ///
-    /// Whether, not which: the algorithms are this package's to state, since ``CompactJWS``
+    /// Whether, not which: the algorithms are this package's to state, since `CompactJWS`
     /// accepts ES256 and nothing else. A consumer choosing the list could advertise one this
     /// package refuses.
     public let honoursDPoPProofs: Bool

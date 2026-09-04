@@ -39,6 +39,11 @@ public enum CompactJWS {
     /// - Parameters:
     ///   - payload: The bytes to sign, usually JSON.
     ///   - key: The signing key.
+    ///   - headerJSON: The JOSE header, when the caller needs a specific one. DPoP requires
+    ///     `typ: dpop+jwt` and the public JWK inside it; RFC 9101 needs the plain header, which
+    ///     is the default. Supplying a header does **not** let a caller change the algorithm:
+    ///     `verify(_:using:)` accepts ES256 whatever a header claims, which is the defence
+    ///     against `alg: none` and against algorithm confusion.
     /// - Returns: The compact serialization, `header.payload.signature`.
     /// - Throws: If the signature could not be produced.
     public static func sign(
