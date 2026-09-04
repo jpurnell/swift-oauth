@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-beta.2] — 2026-09-04
+
+One fix, and it changes a signature — which is why it is a tag rather than a note on `main`.
+
+### Compatibility
+
+**`OAuthServer.init` requires a third argument with no default**, alongside `scopesSupported`
+and `served`:
+
+```swift
+OAuthServer(storage: storage, issuer: issuer,
+            scopesSupported: ["your:scopes"],
+            served: .core,
+            resourceIdentity: .colocated)   // this origin issues *and* protects
+```
+
+A deployment whose authorization server is somewhere else names it instead:
+
+```swift
+resourceIdentity: try ResourceIdentity(
+    resource: "https://api.example.com",
+    authorizationServers: ["https://auth.example.com"])
+```
+
+### Fixed
+- **Protected-resource metadata described a deployment shape it assumed rather than knew.**
+  `getProtectedResourceMetadata()` published `resource: issuer` and
+  `authorizationServers: [issuer]`, which is correct exactly when one origin both issues tokens
+  and protects the resource. RFC 9728 keeps the two fields separate because deployments
+  routinely split them, and this package supports the split role already — `introspect` and
+  `TokenIntrospector` exist so a resource server can validate a token it did not issue. Such a
+  server published metadata naming *itself* as its authorization server, sending clients to
+  authorize against something that issues nothing. A supported role with unreachable
+  configuration is not really supported.
+
+### Noted
+- **No shipped deployment was affected**, so beta.1's "no known issues" was true when claimed
+  and is not being retracted. This is tagged because the *signature* changed: anyone pinned to
+  beta.1 should meet a compile error on the way to 1.0.0, not a silent change in what their
+  server advertises.
+- **The default was written and then removed.** `resourceIdentity` initially defaulted to
+  `.colocated` while the doc comment above it said a default "would be right for most
+  deployments and silently wrong for the rest" — documentation and code disagreeing, in the
+  type family that exists to stop exactly that. Recorded because it was the fourth such
+  mismatch found in this package in a day, and because the gate caught the stale doc example
+  afterwards while the contradiction itself went unnoticed until re-reading.
+- This is the **fifth** instance of one defect: a metadata field the library computed from what
+  it could see when only the operator knew the answer. The other four were endpoints, grant
+  types, authentication methods, and DPoP algorithms. Each was found by a consumer running the
+  change; none by this package's own tests.
+
 ## [1.0.0-beta.1] — 2026-09-04
 
 The complete OAuth 2.1 surface the design proposal approved, exercised before the number is
@@ -914,11 +965,24 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/SwiftOAuth/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/jpurnell/SwiftOAuth/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/jpurnell/SwiftOAuth/releases/tag/v0.0.1
-
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.2...HEAD
+[1.0.0-beta.2]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.1...v1.0.0-beta.2
+[1.0.0-beta.1]: https://github.com/jpurnell/swift-oauth/compare/v0.14.1...v1.0.0-beta.1
+[0.14.1]: https://github.com/jpurnell/swift-oauth/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/jpurnell/swift-oauth/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/jpurnell/swift-oauth/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/jpurnell/swift-oauth/compare/v0.11.1...v0.12.0
+[0.11.1]: https://github.com/jpurnell/swift-oauth/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/jpurnell/swift-oauth/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/jpurnell/swift-oauth/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/jpurnell/swift-oauth/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/jpurnell/swift-oauth/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/jpurnell/swift-oauth/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/jpurnell/swift-oauth/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/jpurnell/swift-oauth/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/jpurnell/swift-oauth/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/jpurnell/swift-oauth/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/jpurnell/swift-oauth/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/jpurnell/swift-oauth/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/jpurnell/swift-oauth/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/jpurnell/swift-oauth/releases/tag/v0.0.1
