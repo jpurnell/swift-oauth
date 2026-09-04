@@ -86,16 +86,10 @@ struct MetadataAccuracyTests {
             == "https://mcp.example.com/device_authorization")
     }
 
-    /// DPoP is advertised with the algorithm this server verifies, and only that one.
-    ///
-    /// A client choosing an algorithm from this list must find only ES256, because that is the
-    /// only one `CompactJWS` accepts — advertising more would invite proofs this server refuses.
-    @Test("DPoP advertises exactly the algorithm this server verifies")
-    func dpopAlgorithmIsAdvertisedAccurately() async throws {
-        let metadata = try await makeServer().getMetadata()
-
-        #expect(metadata.dpopSigningAlgValuesSupported == ["ES256"])
-    }
+    /// DPoP is not advertised here: whether a deployment honours proofs is its own fact, and
+    /// this fixture declares the full set. See `MetadataFieldOwnershipTests`, which supersedes
+    /// the assertion that used to live here — it asserted the algorithms were advertised
+    /// unconditionally, which was the fourth instance of the library-versus-deployment defect.
 
     /// Scopes come from the consumer, and there is no default.
     @Test("Advertised scopes are the ones the consumer supplied")

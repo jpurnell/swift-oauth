@@ -162,7 +162,10 @@ public actor OAuthServer {
             introspectionEndpoint: served.introspection,
             pushedAuthorizationRequestEndpoint: served.pushedAuthorizationRequest,
             deviceAuthorizationEndpoint: served.deviceAuthorization,
-            dpopSigningAlgValuesSupported: ["ES256"]
+            // Advertised only by a deployment that honours proofs. The algorithms are this
+            // package's — `CompactJWS` accepts ES256 and nothing else — but *whether* a proof
+            // is accepted at all is the consumer's request handling.
+            dpopSigningAlgValuesSupported: served.honoursDPoPProofs ? ["ES256"] : nil
         )
     }
 
@@ -912,10 +915,25 @@ public actor OAuthServer {
 /// - A grant whose endpoint is absent is a flow that cannot be started.
 /// - An authentication method the TLS layer never requests is a handshake that cannot happen.
 ///
-/// All three were real. Each was found by a consumer running the change and reading its own
+/// All four were real. Each was found by a consumer running the change and reading its own
 /// document, and each was reported one release after the last — which is why this is a single
 /// value rather than a parameter per field: the ways a document can over-promise are not a list
 /// anybody has finished enumerating.
+///
+/// ## Which fields belong here
+///
+/// A field belongs to the deployment exactly when **the deployment can serve less than this
+/// package implements**. Endpoints, grants, authentication methods and DPoP all can: a consumer
+/// routes a subset, declines a grant, lacks the TLS configuration for mTLS, or never learned the
+/// `DPoP` scheme in its request handling.
+///
+/// `response_types_supported` and `code_challenge_methods_supported` do not. This package issues
+/// `code` and verifies `S256`, and a deployment cannot serve less without the package failing
+/// outright — there is no subset to choose. They are true for every deployment because they
+/// cannot be otherwise, which is different from being true by coincidence.
+///
+/// The distinction matters when the next field arrives: place it by that test rather than by
+/// whichever list is easier to add to.
 public struct ServedCapabilities: Sendable, Equatable {
 
     /// A declaration that cannot be honoured.
@@ -947,6 +965,22 @@ public struct ServedCapabilities: Sendable, Equatable {
     /// Where token revocation is routed — RFC 7009.
     public let revocation: String?
 
+    /// Whether this deployment honours DPoP proofs — RFC 9449.
+    ///
+    /// A fact about the consumer's request handling, not about this package: accepting a
+    /// `DPoP`-scheme `Authorization` header is something the consumer's HTTP layer either does
+    /// or does not do, and one that only matches `Bearer` will refuse a correctly-presented
+    /// bound token.
+    ///
+    /// This is the claim most likely to be believed, because a client reading it has no cheap
+    /// way to test it before relying on it — it obtains a bound token first, and discovers the
+    /// truth when the request it was designed for is turned away.
+    ///
+    /// Whether, not which: the algorithms are this package's to state, since ``CompactJWS``
+    /// accepts ES256 and nothing else. A consumer choosing the list could advertise one this
+    /// package refuses.
+    public let honoursDPoPProofs: Bool
+
     /// The deployment every consumer of this package has: the authorization code and refresh
     /// grants, secret-based client authentication, and no optional endpoints.
     ///
@@ -956,7 +990,7 @@ public struct ServedCapabilities: Sendable, Equatable {
         checkedGrantTypes: [.authorizationCode, .refreshToken],
         clientAuthenticationMethods: [.clientSecretBasic, .clientSecretPost, .none],
         introspection: nil, pushedAuthorizationRequest: nil,
-        deviceAuthorization: nil, revocation: nil)
+        deviceAuthorization: nil, revocation: nil, honoursDPoPProofs: false)
 
     /// Declares what this deployment serves.
     ///
@@ -971,7 +1005,8 @@ public struct ServedCapabilities: Sendable, Equatable {
         introspection: String? = nil,
         pushedAuthorizationRequest: String? = nil,
         deviceAuthorization: String? = nil,
-        revocation: String? = nil
+        revocation: String? = nil,
+        honoursDPoPProofs: Bool = false
     ) throws {
         guard grantTypes.contains(.authorizationCode) else {
             throw Inconsistency.missingAuthorizationCodeGrant
@@ -988,7 +1023,8 @@ public struct ServedCapabilities: Sendable, Equatable {
             introspection: introspection,
             pushedAuthorizationRequest: pushedAuthorizationRequest,
             deviceAuthorization: deviceAuthorization,
-            revocation: revocation)
+            revocation: revocation,
+            honoursDPoPProofs: honoursDPoPProofs)
     }
 
     /// The unchecked path, for ``core`` — whose values are written here and cannot be
@@ -999,7 +1035,8 @@ public struct ServedCapabilities: Sendable, Equatable {
         introspection: String?,
         pushedAuthorizationRequest: String?,
         deviceAuthorization: String?,
-        revocation: String?
+        revocation: String?,
+        honoursDPoPProofs: Bool
     ) {
         self.grantTypes = checkedGrantTypes
         self.clientAuthenticationMethods = clientAuthenticationMethods
@@ -1007,6 +1044,7 @@ public struct ServedCapabilities: Sendable, Equatable {
         self.pushedAuthorizationRequest = pushedAuthorizationRequest
         self.deviceAuthorization = deviceAuthorization
         self.revocation = revocation
+        self.honoursDPoPProofs = honoursDPoPProofs
     }
 }
 
