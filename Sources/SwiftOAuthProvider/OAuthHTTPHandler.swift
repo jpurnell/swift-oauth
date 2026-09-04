@@ -343,8 +343,12 @@ public struct OAuthHTTPHandler: Sendable {
         // Parse URL-encoded form body
         let params = parseFormBody(body)
 
+        // RFC 6749 §2.3.1: `client_secret_basic` puts the id in the header, so a request
+        // authenticating that way carries no `client_id` parameter to read. The helper below
+        // existed and said exactly this; the introspection endpoint called it and this one did
+        // not, so the spec-conformant request was the one that got `invalid_request`.
         guard let grantType = params["grant_type"],
-              let clientId = params["client_id"] else {
+              let clientId = params["client_id"] ?? Self.clientId(fromBasic: authHeader) else {
             return errorResponse(.invalidRequest(nil))
         }
 
@@ -406,11 +410,50 @@ public struct OAuthHTTPHandler: Sendable {
 
     // MARK: - Token Validation
 
-    /// Validates an access token from the Authorization header
+    /// Which audiences a resource server will honour — RFC 8707's second half.
     ///
-    /// - Parameter authHeader: The Authorization header value
-    /// - Returns: Validation result
-    public func validateBearerToken(authHeader: String?) async -> TokenValidationResult {
+    /// Binding an audience onto a token accomplishes nothing on its own. The binding is a claim
+    /// about where the token may be spent, and it does no work until somebody refuses a token
+    /// spent elsewhere. That refusal belongs here rather than in every consumer, for the reason
+    /// ``OAuthHTTPHandler/validateBearerToken(authHeader:acceptingAudiences:)`` already applies
+    /// to bound tokens: the caller is asking whether to honour this token, and this package
+    /// knows the answer better than the caller does. It holds the deployment's own identity.
+    public enum AcceptedAudiences: Sendable, Hashable {
+
+        /// Honour only tokens minted for this deployment, and tokens bound to no audience.
+        ///
+        /// The default, and the reason it is the default: the alternative is safe only when a
+        /// consumer knows that a successful validation does not mean the token was meant for
+        /// it. Every consumer would have to write this comparison, and the one who has not read
+        /// the RFC 8707 notes is exactly the one it protects.
+        ///
+        /// An unbound token — `audience == nil` — is honoured. That is the permissive contract
+        /// ``TokenValidationResult/ValidatedToken/audience`` documents rather than a mismatch:
+        /// a deployment that has not adopted resource indicators issues tokens bound to
+        /// nothing, and refusing them would break it on upgrade.
+        case ownResource
+
+        /// Honour any audience, leaving the comparison to the caller.
+        ///
+        /// For a gateway that legitimately holds tokens for other resources. Named rather than
+        /// arrived at: honouring a foreign token is a decision, and it should look like one at
+        /// the call site.
+        case any
+    }
+
+    /// Validates an access token from the Authorization header.
+    ///
+    /// Refuses a token that is expired, revoked, unknown, bound to a key or certificate (those
+    /// are not bearer tokens), or **minted for another resource**.
+    ///
+    /// - Parameters:
+    ///   - authHeader: The Authorization header value.
+    ///   - acceptingAudiences: Which audiences to honour. Defaults to ``AcceptedAudiences/ownResource``.
+    /// - Returns: Validation result.
+    public func validateBearerToken(
+        authHeader: String?,
+        acceptingAudiences: AcceptedAudiences = .ownResource
+    ) async -> TokenValidationResult {
         guard let header = authHeader,
               header.lowercased().hasPrefix("bearer ") else {
             return .invalid(reason: "Missing or invalid Authorization header")
@@ -437,6 +480,22 @@ public struct OAuthHTTPHandler: Sendable {
                     return .invalid(
                         reason: "This token is bound to a key and must be presented with the "
                             + "DPoP scheme, with a proof — not as a bearer token.")
+                }
+                // The audience is a claim about where this token may be spent, and until
+                // something refuses a token spent elsewhere it is decoration. Compared against
+                // what this deployment *advertises* rather than against the issuer: those are
+                // the same string only for a colocated deployment, and assuming they are equal
+                // is the defect `ResourceIdentity` exists to prevent — it would refuse a
+                // correct token at any resource server whose authorization server is elsewhere.
+                if case .ownResource = acceptingAudiences,
+                   let audience = validated.audience {
+                    let ours = await server.getProtectedResourceMetadata().resource
+                    if audience.absoluteString != ours {
+                        return .invalid(
+                            reason: "This token was issued for \(audience.absoluteString) and "
+                                + "this resource is \(ours). Obtain a token naming this "
+                                + "resource in the `resource` parameter (RFC 8707).")
+                    }
                 }
                 if validated.certificateThumbprint != nil {
                     // RFC 8705 §3: the same failure with a different key. Accepting it here
