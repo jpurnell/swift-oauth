@@ -256,7 +256,12 @@ struct OAuthConsentTests {
             "redirect_uri": "http://localhost:8080/callback",
             "csrf_token": csrfToken,
             "scope": "mcp:tools",
-            "state": "test-state"
+            "state": "test-state",
+            // Carried through the consent form as a real one does. The approve action builds an
+            // authorization request from these fields, so PKCE is required here too — which is
+            // the point: consent is not a way around it.
+            "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "code_challenge_method": "S256"
         ])
 
         #expect(response.statusCode == 302, "Should redirect")
@@ -421,7 +426,12 @@ struct OAuthConsentTests {
             "client_id": clientResponse.clientId,
             "redirect_uri": "http://localhost:8080/callback",
             "scope": "mcp:tools",
-            "state": "test-state"
+            "state": "test-state",
+            // Carried through the consent form as a real one does. The approve action builds an
+            // authorization request from these fields, so PKCE is required here too — which is
+            // the point: consent is not a way around it.
+            "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "code_challenge_method": "S256"
         ])
 
         // Should return HTML consent page, not redirect
