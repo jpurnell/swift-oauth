@@ -364,6 +364,9 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
     ///   - codeChallengeMethod: PKCE method
     ///   - expiresAt: Expiration time
     ///   - createdAt: Creation time
+    ///   - audience: The resource this code will mint a token for — RFC 8707. `nil` for a code
+    ///     issued against a request that named none, which a permissive
+    ///     ``ResourceIndicatorPolicy`` allows and a strict one refuses before reaching here.
     public init(
         code: String,
         clientId: String,

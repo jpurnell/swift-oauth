@@ -111,6 +111,11 @@ public actor OAuthServer {
     ///     the metadata as a list of things it may do, and anything advertised but not served
     ///     fails at the client rather than here. ``ServedCapabilities/core`` is the ordinary
     ///     deployment.
+    ///   - resourceIdentity: Which resource this deployment protects, and which authorization
+    ///     servers govern it — RFC 9728. No default: ``ResourceIdentity/colocated`` is right
+    ///     for a deployment that both issues tokens and protects the resource, which is common
+    ///     but not universal, and a wrong answer here misdirects a client rather than failing
+    ///     here.
     ///   - resourcePolicy: Which resources this server issues tokens for — RFC 8707. Defaults
     ///     to ``ResourceIndicatorPolicy/protecting(_:)`` over the issuer, which is the value the
     ///     server already publishes as its own resource identifier.

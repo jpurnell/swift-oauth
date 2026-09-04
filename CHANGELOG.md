@@ -51,6 +51,13 @@ resourceIdentity: try ResourceIdentity(
   type family that exists to stop exactly that. Recorded because it was the fourth such
   mismatch found in this package in a day, and because the gate caught the stale doc example
   afterwards while the contradiction itself went unnoticed until re-reading.
+- **beta.1's "no known issues" overstated one thing.** It claimed zero warnings; the gate was
+  emitting two doc-lint warnings at that tag, and the check that reported it clean grepped for
+  the PASSED line without ever reading the warning count. Both are fixed here — an undocumented
+  `audience` parameter dating to 0.8.0, and the `resourceIdentity` parameter added above. The
+  *code* claims in beta.1 hold; the claim about the gate did not, and grepping for a verdict
+  while ignoring the findings underneath it is the same shape of error as the metadata defect
+  this release fixes.
 - This is the **fifth** instance of one defect: a metadata field the library computed from what
   it could see when only the operator knew the answer. The other four were endpoints, grant
   types, authentication methods, and DPoP algorithms. Each was found by a consumer running the
