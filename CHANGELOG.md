@@ -5,6 +5,52 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-09-03
+
+RFC 8693 token exchange — the last feature before the 1.0.0 beta.
+
+### Compatibility
+
+**`GrantType` gains `tokenExchange`** — a source break only for an exhaustive `switch` with no
+`default`. The compiler points at any site that needs an arm. This is the last grant type this
+package adds before 1.0.
+
+No schema change. No other break.
+
+**Coming from 0.7.x–0.13.x?** Read those entries too. There is no route here except through
+0.8.0's client refusals and the breaks in 0.10.0, 0.12.0 and 0.13.0.
+
+### Added
+- **Token exchange**, for a service acting with a token it was given rather than one it
+  obtained: an API gateway calling a backend, a job running on a user's behalf, a service
+  narrowing its own privilege before calling something less trusted.
+
+  **An exchange may narrow privilege and never widens it.** That is the whole purpose, and the
+  thing a naive implementation gets wrong: granting the scope a client asked for, without
+  checking what the subject token carried, lets any holder of a read-only token mint an
+  administrative one through a documented grant type — and the result looks entirely legitimate
+  to everything downstream. Absent a requested scope, the subject's is inherited rather than the
+  server's full set.
+
+  Three further refusals, each closing a way the endpoint could launder a credential: an expired
+  or unknown subject token, or expiry means nothing; a **bound** subject token, because
+  exchanging one strips the binding and this endpoint would otherwise be a documented route
+  around everything 0.12.0 and 0.13.0 added; and an ID token, which this package does not
+  validate.
+
+- **`TokenExchangeRequest` distinguishes impersonation from delegation.** Without an actor token
+  the issued token is indistinguishable from one the subject obtained — an audit log can say
+  whose token was used and nothing about who used it. With one, the log can answer *who did
+  this*. A caller wanting delegation who forgets the actor token gets impersonation silently,
+  so `isDelegation` is a property rather than something inferred at a call site.
+
+  `actor_token_type` is dropped when there is no actor token, even if supplied: §2.1 gives it no
+  meaning alone, so sending it produces a request the server must reject — and that rejection
+  reads as malformed rather than as the mistake it is.
+
+- **`issued_token_type` is required on decode.** A client holding a token that does not know its
+  kind cannot know how it may be presented.
+
 ## [0.13.0] — 2026-09-03
 
 RFC 8705 — mutual TLS client authentication and certificate-bound tokens.
