@@ -5,6 +5,73 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-beta.1] — 2026-09-04
+
+The complete OAuth 2.1 surface the design proposal approved, exercised before the number is
+claimed. **No known issues**: 45 of 45 quality-gate checkers with zero warnings, 454 tests, and
+Linux CI green.
+
+### Compatibility
+
+**`OAuthServer.init` requires two new arguments, neither with a default:**
+
+```swift
+OAuthServer(storage: storage, issuer: issuer,
+            scopesSupported: ["your:scopes"],   // or nil, meaning "advertise none"
+            served: .core)                      // what this deployment actually routes
+```
+
+Both are required deliberately. A default for either produces a metadata document that promises
+something the deployment may not honour, and that failure surfaces at a *client* rather than at
+the server that made the claim. Forgetting should be a compile error.
+
+**`TokenValidationResult.valid` carries a `ValidatedToken` struct** rather than associated values
+(since 0.12.0). Update `case .valid(let a, let b)` to `case .valid(let token)`.
+
+**Your database migrates to schema version 6 on first open** — audience columns for RFC 8707, a
+key thumbprint and proof store for RFC 9449, a certificate thumbprint for RFC 8705, a device code
+table for RFC 8628, and pushed requests for RFC 9126. Additive and idempotent throughout.
+
+**PKCE is required.** A client sending no `code_challenge` is refused at the authorization
+endpoint. Every release before 0.12.1 / 0.14.1 accepted one without.
+
+**Coming from 0.7.x?** Read every entry between. Nothing here routes around 0.8.0's strict
+resource indicators.
+
+### What the beta is for
+
+Everything below has tests and a clean gate. What it does not have is use. The proposal's own
+criterion was that 1.0.0 is promoted only after the beta has been used, and the specific things
+worth learning from use are: whether the strict resource-indicator default is the right default
+in practice, whether `ServedCapabilities` covers what deployments actually vary, and whether the
+DPoP and mTLS paths hold up against a real authorization server rather than this package's own.
+
+### The complete surface
+
+| RFC | What |
+| :--- | :--- |
+| 6749 / 7636 | Authorization code with PKCE — **required**, both endpoints |
+| 6749 §6 | Refresh, with rotation |
+| 7009 | Revocation |
+| 7591 | Dynamic client registration |
+| 7662 | Token introspection, both halves |
+| 8414 / 9728 | Server and protected-resource metadata |
+| 8628 | Device authorization grant |
+| 8693 | Token exchange, narrowing only |
+| 8705 | mTLS client authentication and certificate-bound tokens |
+| 8707 | Resource indicators, both endpoints, strict by default |
+| 9101 | JWT-secured authorization requests |
+| 9126 | Pushed authorization requests |
+| 9207 | Issuer identification |
+| 9449 | DPoP, with replay protection |
+
+Deliberately absent: **OpenID Connect**. An access token is not an authentication statement, and
+treating one as proof of identity is the misuse OIDC exists to prevent. It returns after 1.0 as
+its own module — authorization is not identity.
+
+Also absent, because OAuth 2.1 removes them: the implicit grant and resource owner password
+credentials. They are omitted rather than unimplemented.
+
 ## [0.14.1] — 2026-09-04
 
 ### Security
