@@ -55,7 +55,7 @@ struct PushedAuthorizationTests {
         let pushed = try await server.pushAuthorizationRequest(
             clientId: client.clientId,
             redirectUri: "https://app.example.com/callback",
-            scope: nil, state: nil, codeChallenge: nil, codeChallengeMethod: nil)
+            scope: nil, state: nil, codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", codeChallengeMethod: "S256")
 
         let reference = pushed.requestURI
             .replacingOccurrences(of: "urn:ietf:params:oauth:request_uri:", with: "")
@@ -91,7 +91,7 @@ struct PushedAuthorizationTests {
         let pushed = try await server.pushAuthorizationRequest(
             clientId: client.clientId,
             redirectUri: "https://app.example.com/callback",
-            scope: nil, state: nil, codeChallenge: nil, codeChallengeMethod: nil)
+            scope: nil, state: nil, codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", codeChallengeMethod: "S256")
         _ = try await server.consumePushedRequest(
             requestURI: pushed.requestURI, clientId: client.clientId)
 
@@ -112,7 +112,7 @@ struct PushedAuthorizationTests {
         let pushed = try await server.pushAuthorizationRequest(
             clientId: client.clientId,
             redirectUri: "https://app.example.com/callback",
-            scope: nil, state: nil, codeChallenge: nil, codeChallengeMethod: nil)
+            scope: nil, state: nil, codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", codeChallengeMethod: "S256")
 
         await #expect(throws: OAuthError.self) {
             _ = try await server.consumePushedRequest(

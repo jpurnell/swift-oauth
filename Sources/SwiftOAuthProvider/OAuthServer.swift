@@ -464,6 +464,26 @@ public actor OAuthServer {
         // is still accepted; RFC 7636 §4.3 defaults it to `plain`, but this server only ever
         // verifies with S256, so an absent method that later presents a challenge is checked
         // as S256 and a genuine `plain` client fails closed at the token endpoint.
+        // PKCE is required, not merely supported.
+        //
+        // OAuth 2.1 §4.1 requires it for the authorization code grant, and this package's own
+        // `GrantType` documentation has always said so. The implementation did not enforce it:
+        // the challenge was optional here, and the token endpoint verified one only `if` the
+        // code carried it — so a client that simply omitted it got a code with no challenge and
+        // redeemed it with no verifier.
+        //
+        // The consequence is exactly what PKCE exists to prevent: an intercepted authorization
+        // code is redeemable by whoever intercepted it.
+        //
+        // Refused here rather than at the token endpoint, for the same reason `plain` is: by
+        // then a code has been issued and the client is mid-flow, whereas here the error still
+        // reaches whoever can fix it.
+        guard let challenge = request.codeChallenge, !challenge.isEmpty else {
+            throw OAuthError.invalidRequest(
+                "A code_challenge is required. This server implements OAuth 2.1, which requires "
+                + "PKCE on the authorization code grant.")
+        }
+
         if let method = request.codeChallengeMethod,
            method != PKCE.ChallengeMethod.s256.rawValue {
             throw OAuthError.invalidRequest(nil)

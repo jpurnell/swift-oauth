@@ -263,8 +263,8 @@ struct OAuthServerTests {
                 redirectUri: "http://localhost/callback",
                 scope: nil,
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             )
 
             do {
@@ -291,8 +291,8 @@ struct OAuthServerTests {
                 redirectUri: "https://attacker.example/callback", // Wrong URI
                 scope: nil,
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             )
 
             do {
@@ -319,8 +319,8 @@ struct OAuthServerTests {
                 redirectUri: "http://localhost/callback",
                 scope: nil,
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             )
 
             do {
@@ -482,8 +482,8 @@ struct OAuthServerTests {
                 redirectUri: "http://localhost/callback",
                 scope: nil,
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             ))
 
             let tokenRequest = TokenRequest(
@@ -819,8 +819,8 @@ struct OAuthServerTests {
                 redirectUri: "http://localhost/callback",
                 scope: "   ",
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             ))
 
             #expect(!authResponse.code.isEmpty)
@@ -918,8 +918,8 @@ struct OAuthServerTests {
                 redirectUri: "http://localhost/callback",
                 scope: "mcp:tools mcp:resources mcp:prompts",
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             ))
 
             #expect(!authResponse.code.isEmpty)
@@ -941,8 +941,8 @@ struct OAuthServerTests {
                 redirectUri: "http://localhost/callback",
                 scope: "openid profile email",
                 state: nil,
-                codeChallenge: nil,
-                codeChallengeMethod: nil
+                codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                codeChallengeMethod: "S256"
             ))
 
             #expect(validatedClient.clientId == client.clientId)
