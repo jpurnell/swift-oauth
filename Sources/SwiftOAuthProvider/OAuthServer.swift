@@ -138,6 +138,89 @@ public actor OAuthServer {
         try await storage.introspectAccessToken(token: token)
     }
 
+    // MARK: - Token Exchange (RFC 8693)
+
+    /// Exchanges one token for another — RFC 8693 §2.
+    ///
+    /// For a service acting with a token it was given: an API gateway calling a backend, or a
+    /// service narrowing its own privilege before calling something less trusted.
+    ///
+    /// ## The rule that makes this safe
+    ///
+    /// **An exchange may narrow privilege and never widens it.** That is the whole purpose, and
+    /// it is what a naive implementation gets wrong: granting the scope the client asked for,
+    /// without checking what the subject token actually carried, lets any holder of a read-only
+    /// token mint an administrative one through a documented grant type — and the result looks
+    /// entirely legitimate to everything downstream.
+    ///
+    /// Three further refusals, each closing a way the endpoint could launder a credential:
+    ///
+    /// - An **expired or unknown** subject token, or expiry means nothing and a dead credential
+    ///   buys a live one.
+    /// - A **bound** subject token, because exchanging it would strip the binding — a DPoP- or
+    ///   certificate-bound token in, an ordinary bearer token out, and everything the binding
+    ///   protected against available to whoever holds the result.
+    /// - An **ID token**, because this package does not validate one. Accepting it would treat
+    ///   an unverified assertion of identity as authorisation, which is the misuse the OIDC
+    ///   boundary exists to prevent.
+    ///
+    /// - Parameters:
+    ///   - request: What to exchange, and for what.
+    ///   - clientId: The client performing the exchange.
+    /// - Returns: The issued token and what kind it is.
+    /// - Throws: ``OAuthError/invalidGrant(_:)`` for a subject that cannot be exchanged, or
+    ///   ``OAuthError/invalidScope(_:)`` for a request that would widen privilege.
+    public func exchangeToken(
+        _ request: TokenExchangeRequest, clientId: String
+    ) async throws -> TokenExchangeResponse {
+        guard request.subjectTokenType == .accessToken else {
+            throw OAuthError.invalidRequest(
+                "This server exchanges access tokens only. \(request.subjectTokenType.rawValue) "
+                + "is not a token type it can validate.")
+        }
+
+        let validated = try await storage.validateAccessToken(token: request.subjectToken)
+        guard case .valid(let subject) = validated else {
+            throw OAuthError.invalidGrant("The subject token is not valid.")
+        }
+
+        guard subject.keyThumbprint == nil, subject.certificateThumbprint == nil else {
+            throw OAuthError.invalidGrant(
+                "The subject token is bound to a key or certificate. Exchanging it would issue "
+                + "an unbound token, discarding that binding.")
+        }
+
+        // Narrowing only. A requested scope must be a subset of what the subject carries;
+        // absent, the subject's scope is inherited rather than the server's full set.
+        let held = Set((subject.scope ?? "").split(separator: " ").map(String.init))
+        let issuedScope: String?
+        if let requested = request.scope {
+            let asked = Set(requested.split(separator: " ").map(String.init))
+            let widening = asked.subtracting(held)
+            guard widening.isEmpty else {
+                throw OAuthError.invalidScope(
+                    "An exchange cannot grant scopes the subject token does not carry: "
+                    + widening.sorted().joined(separator: ", ") + ".")
+            }
+            issuedScope = requested
+        } else {
+            issuedScope = subject.scope
+        }
+
+        let issued = TokenGenerator.generateAccessToken()
+        try await storage.saveAccessToken(
+            token: issued, clientId: clientId, scope: issuedScope,
+            expiresAt: Date().addingTimeInterval(accessTokenLifetime),
+            audience: request.resource)
+
+        return TokenExchangeResponse(
+            accessToken: issued,
+            issuedTokenType: .accessToken,
+            tokenType: "Bearer",
+            expiresIn: Int(accessTokenLifetime),
+            scope: issuedScope)
+    }
+
     // MARK: - Pushed Authorization Requests (RFC 9126)
 
     /// Accepts an authorization request ahead of time — RFC 9126 §2.
