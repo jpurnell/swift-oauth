@@ -152,7 +152,8 @@ public struct OAuthHTTPHandler: Sendable {
             scope: queryParams["scope"],
             state: queryParams["state"],
             codeChallenge: queryParams["code_challenge"],
-            codeChallengeMethod: queryParams["code_challenge_method"]
+            codeChallengeMethod: queryParams["code_challenge_method"],
+            resource: queryParams["resource"]
         )
 
         do {
@@ -174,7 +175,8 @@ public struct OAuthHTTPHandler: Sendable {
                 state: request.state,
                 csrfToken: csrfToken,
                 codeChallenge: request.codeChallenge,
-                codeChallengeMethod: request.codeChallengeMethod
+                codeChallengeMethod: request.codeChallengeMethod,
+                resource: request.resource
             )
 
             return OAuthHTTPResponse(
@@ -280,7 +282,8 @@ public struct OAuthHTTPHandler: Sendable {
             scope: formParams["scope"],
             state: state,
             codeChallenge: formParams["code_challenge"],
-            codeChallengeMethod: formParams["code_challenge_method"]
+            codeChallengeMethod: formParams["code_challenge_method"],
+            resource: formParams["resource"]
         )
 
         do {

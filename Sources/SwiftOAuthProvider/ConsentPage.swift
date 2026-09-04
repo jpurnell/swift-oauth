@@ -53,6 +53,14 @@ public struct ConsentPage: Sendable {
     /// PKCE code challenge method (optional, typically "S256")
     public let codeChallengeMethod: String?
 
+    /// The resource the eventual token is for — RFC 8707.
+    ///
+    /// Rendered as a hidden field because the browser posts what this page contains, not what
+    /// the original authorization request held. A resource that reaches the consent page and
+    /// not the form is a resource the user's approval drops, and the flow then fails at the
+    /// token endpoint — or worse, succeeds with no audience under a permissive policy.
+    public let resource: String?
+
     /// Creates a new consent page
     ///
     /// - Parameters:
@@ -64,6 +72,7 @@ public struct ConsentPage: Sendable {
     ///   - csrfToken: Token for form protection
     ///   - codeChallenge: PKCE challenge
     ///   - codeChallengeMethod: PKCE method
+    ///   - resource: The resource indicator to carry through the form — RFC 8707
     public init(
         clientName: String,
         clientId: String,
@@ -72,7 +81,8 @@ public struct ConsentPage: Sendable {
         state: String?,
         csrfToken: String,
         codeChallenge: String?,
-        codeChallengeMethod: String?
+        codeChallengeMethod: String?,
+        resource: String? = nil
     ) {
         self.clientName = clientName
         self.clientId = clientId
@@ -82,6 +92,7 @@ public struct ConsentPage: Sendable {
         self.csrfToken = csrfToken
         self.codeChallenge = codeChallenge
         self.codeChallengeMethod = codeChallengeMethod
+        self.resource = resource
     }
 
     /// Renders the consent page as HTML
@@ -96,6 +107,7 @@ public struct ConsentPage: Sendable {
         let escapedScope = scope.map { escapeHTML($0) }
         let escapedCodeChallenge = codeChallenge.map { escapeHTML($0) }
         let escapedCodeChallengeMethod = codeChallengeMethod.map { escapeHTML($0) }
+        let escapedResource = resource.map { escapeHTML($0) }
 
         let scopeItems = (scope ?? "")
             .split(separator: " ")
@@ -230,6 +242,7 @@ public struct ConsentPage: Sendable {
                     \(escapedScope.map { "<input type=\"hidden\" name=\"scope\" value=\"\($0)\">" } ?? "")
                     \(escapedCodeChallenge.map { "<input type=\"hidden\" name=\"code_challenge\" value=\"\($0)\">" } ?? "")
                     \(escapedCodeChallengeMethod.map { "<input type=\"hidden\" name=\"code_challenge_method\" value=\"\($0)\">" } ?? "")
+                    \(escapedResource.map { "<input type=\"hidden\" name=\"resource\" value=\"\($0)\">" } ?? "")
 
                     <div class="buttons">
                         <button type="submit" name="action" value="deny" class="deny-btn">
