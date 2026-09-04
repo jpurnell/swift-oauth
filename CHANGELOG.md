@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] — 2026-09-04
+
+### Security
+
+**PKCE was not required, and now is.** `code_challenge` was optional at the authorization
+endpoint, and the token endpoint verified one only *if* the authorization code carried it — so a
+client that omitted it received a code with no challenge and redeemed it with no verifier. An
+intercepted authorization code was redeemable by whoever intercepted it, which is precisely what
+PKCE exists to prevent.
+
+`GrantType`'s documentation has stated "PKCE is required with it" since this package was
+written. The documentation was correct and the implementation did not match it — the worse of
+the two arrangements, because a reader checking the docs would conclude it was handled.
+
+**Every release from 0.0.1 through 0.14.0 carries this defect.** The same fix is backported to
+the 0.12 line as **0.12.1**, so a deployment bounded below 0.13 can take it without also taking
+mTLS or token exchange.
+
+**This is a behaviour change, not only a fix.** A client sending no `code_challenge` is now
+refused at the authorization endpoint, where the error still reaches whoever can fix it rather
+than arriving mid-flow after a code has been issued. Any client not already using PKCE must
+start; on this package's client half it is already in use. The consent path routes through the
+same request construction and is covered — consent is not a way around it.
+
+Found by auditing this package against a list of eight properties a consumer said it relies on
+and never re-checks. Seven held. This one did not, and nothing in either package would have
+failed.
+
 ## [0.14.0] — 2026-09-03
 
 RFC 8693 token exchange — the last feature before the 1.0.0 beta.
