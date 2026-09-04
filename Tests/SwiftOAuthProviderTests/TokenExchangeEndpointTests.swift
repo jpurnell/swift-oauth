@@ -16,7 +16,7 @@ struct TokenExchangeEndpointTests {
     private func makeServer() async throws -> (OAuthServer, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         return (server, storage)
     }

@@ -135,7 +135,7 @@ struct TokenEndpointResourceTests {
     @Test("A server accepts the resource it advertises, with no configuration")
     func acceptsItsOwnAdvertisedResource() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none)
+        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core)
 
         let metadata = await server.getProtectedResourceMetadata()
         let advertised = try url(metadata.resource)
@@ -148,7 +148,7 @@ struct TokenEndpointResourceTests {
     @Test("The token endpoint refuses a request naming no resource")
     func refusesUnspecifiedResource() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none)
+        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core)
 
         let policy = await server.resourcePolicy
         let error = #expect(throws: OAuthError.self) {
@@ -166,7 +166,7 @@ struct TokenEndpointResourceTests {
         let server = await OAuthServer(
             storage: storage,
             issuer: "https://auth.example.com",
-            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none,
+            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core,
             resourcePolicy: .protecting(api))
 
         let policy = await server.resourcePolicy
@@ -188,7 +188,7 @@ struct ResourceParsingTests {
 
     private func handler(issuer: String) async throws -> OAuthHTTPHandler {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], advertisedEndpoints: .none)
+        let server = await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core)
         return await OAuthHTTPHandler(server: server)
     }
 

@@ -32,7 +32,7 @@ import SwiftOAuthCore
 ///         // document that promises scopes or endpoints nobody serves is worse than one that
 ///         // promises nothing.
 ///         scopesSupported: ["files:read", "files:write"],
-///         advertisedEndpoints: .none)
+///         served: .core)
 ///
 ///     // Get server metadata
 ///     let metadata = await server.getMetadata()
@@ -64,7 +64,7 @@ public actor OAuthServer {
     private let scopesSupported: [String]?
 
     /// What this deployment actually serves, as opposed to what this package implements.
-    private let advertisedEndpoints: AdvertisedEndpoints
+    private let served: ServedCapabilities
 
     /// How long a pushed authorization request is good for — RFC 9126 §2.2 suggests
     /// "relatively short", on the order of a minute, since the client redirects immediately.
@@ -100,11 +100,11 @@ public actor OAuthServer {
     ///     documents. No default: `nil` means "advertise none", and it is a decision a caller
     ///     makes rather than inherits. This package previously invented three MCP scopes, which
     ///     one consumer advertised without ever having chosen them.
-    ///   - advertisedEndpoints: The optional endpoints this deployment actually routes. No
-    ///     default, for the same reason: a client reads the metadata as a list of things it may
-    ///     call, so advertising an endpoint nobody serves produces a discoverable 404 at the
-    ///     client rather than an error here. ``AdvertisedEndpoints/none`` is the explicit
-    ///     "serves none".
+    ///   - served: What this deployment actually serves — its grants, its client
+    ///     authentication methods and its routed endpoints. No default, because a client reads
+    ///     the metadata as a list of things it may do, and anything advertised but not served
+    ///     fails at the client rather than here. ``ServedCapabilities/core`` is the ordinary
+    ///     deployment.
     ///   - resourcePolicy: Which resources this server issues tokens for — RFC 8707. Defaults
     ///     to ``ResourceIndicatorPolicy/protecting(_:)`` over the issuer, which is the value the
     ///     server already publishes as its own resource identifier.
@@ -112,7 +112,7 @@ public actor OAuthServer {
         storage: OAuthStorage,
         issuer: String,
         scopesSupported: [String]?,
-        advertisedEndpoints: AdvertisedEndpoints,
+        served: ServedCapabilities,
         accessTokenLifetime: TimeInterval = 86400,        // 24 hours
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
@@ -121,7 +121,7 @@ public actor OAuthServer {
         self.storage = storage
         self.issuer = issuer
         self.scopesSupported = scopesSupported
-        self.advertisedEndpoints = advertisedEndpoints
+        self.served = served
         // Defaulted from the issuer, which is what this server already publishes as its
         // resource identifier in RFC 9728 metadata. Asking an operator to repeat that value
         // invites the two to drift, and a server that advertises a resource then refuses it
@@ -149,28 +149,19 @@ public actor OAuthServer {
             // not, and this is a test about drift. `clientCredentials` is absent deliberately —
             // this provider does not issue those, and advertising a grant it refuses is worse
             // than omitting one it honours.
-            grantTypesSupported: [
-                GrantType.authorizationCode.rawValue,
-                GrantType.refreshToken.rawValue,
-                GrantType.deviceCode.rawValue,
-                GrantType.tokenExchange.rawValue
-            ],
+            // What this deployment honours, not what this package implements.
+            grantTypesSupported: served.grantTypes.map(\.rawValue),
             codeChallengeMethodsSupported: [PKCE.ChallengeMethod.s256.rawValue],
-            tokenEndpointAuthMethodsSupported: [
-                ClientAuthenticationMethod.clientSecretBasic.rawValue,
-                ClientAuthenticationMethod.clientSecretPost.rawValue,
-                ClientAuthenticationMethod.none.rawValue,
-                ClientAuthenticationMethod.tlsClientAuth.rawValue,
-                ClientAuthenticationMethod.selfSignedTLSClientAuth.rawValue
-            ],
+            tokenEndpointAuthMethodsSupported:
+                served.clientAuthenticationMethods.map(\.rawValue),
             // The consumer's, or none. This package no longer invents scopes.
             scopesSupported: scopesSupported,
             // What the deployment serves, not what this package implements. Advertising an
             // endpoint the consumer does not route makes a discoverable 404, and that failure
             // lands on their clients rather than here.
-            introspectionEndpoint: advertisedEndpoints.introspection,
-            pushedAuthorizationRequestEndpoint: advertisedEndpoints.pushedAuthorizationRequest,
-            deviceAuthorizationEndpoint: advertisedEndpoints.deviceAuthorization,
+            introspectionEndpoint: served.introspection,
+            pushedAuthorizationRequestEndpoint: served.pushedAuthorizationRequest,
+            deviceAuthorizationEndpoint: served.deviceAuthorization,
             dpopSigningAlgValuesSupported: ["ES256"]
         )
     }
@@ -907,53 +898,111 @@ public actor OAuthServer {
 
 // MARK: - Server Metadata
 
-/// The optional endpoints a deployment actually serves — RFC 8414 §2.
+/// What a deployment actually serves — RFC 8414 §2.
 ///
-/// This package implements introspection, pushed authorization requests, device authorization
-/// and revocation. Whether any of them is *reachable* is a fact about the consumer's HTTP
-/// layer, not about this package, and only the consumer knows it.
+/// This package implements more than any one deployment exposes. Which endpoints are routed,
+/// which grants are reachable and which authentication methods the TLS layer can honour are all
+/// facts about the consumer, not about this package — and only the consumer knows them.
 ///
 /// The distinction matters because of who reads the metadata. A conformant client treats the
-/// document as a list of things it may call, so an endpoint advertised and not routed is a
-/// discoverable 404 — a worse failure than never advertising it, and one that surfaces at the
-/// client rather than at the server that made the claim.
+/// document as a list of things it may do, so anything advertised and not served is a failure
+/// that surfaces at the client rather than at the server that made the claim:
 ///
-/// Every field defaults to `nil`, meaning "not served". ``OAuthServer`` requires one of these
-/// with no default of its own, so a consumer states what it exposes rather than inheriting a
-/// claim about endpoints it may not route.
-public struct AdvertisedEndpoints: Sendable, Equatable {
+/// - An endpoint not routed is a discoverable 404.
+/// - A grant whose endpoint is absent is a flow that cannot be started.
+/// - An authentication method the TLS layer never requests is a handshake that cannot happen.
+///
+/// All three were real. Each was found by a consumer running the change and reading its own
+/// document, and each was reported one release after the last — which is why this is a single
+/// value rather than a parameter per field: the ways a document can over-promise are not a list
+/// anybody has finished enumerating.
+public struct ServedCapabilities: Sendable, Equatable {
 
-    /// Where this deployment serves token introspection — RFC 7662.
+    /// A declaration that cannot be honoured.
+    public enum Inconsistency: Error, Equatable {
+        /// The device grant was declared without the endpoint that begins it.
+        case deviceGrantWithoutEndpoint
+        /// No client authentication method was declared.
+        case noAuthenticationMethod
+        /// The authorization code grant was omitted.
+        case missingAuthorizationCodeGrant
+    }
+
+    /// The grants this deployment will honour.
+    public let grantTypes: [GrantType]
+
+    /// The client authentication methods its token endpoint can actually accept.
+    ///
+    /// The mTLS methods belong here only if the TLS layer requests a client certificate.
+    /// Advertising one otherwise offers a client a handshake that will never ask for what it
+    /// is being told to present.
+    public let clientAuthenticationMethods: [ClientAuthenticationMethod]
+
+    /// Where token introspection is routed — RFC 7662.
     public let introspection: String?
-
-    /// Where it serves pushed authorization requests — RFC 9126.
+    /// Where pushed authorization requests are routed — RFC 9126.
     public let pushedAuthorizationRequest: String?
-
-    /// Where it serves device authorization — RFC 8628.
+    /// Where device authorization is routed — RFC 8628.
     public let deviceAuthorization: String?
-
-    /// Where it serves token revocation — RFC 7009.
+    /// Where token revocation is routed — RFC 7009.
     public let revocation: String?
 
-    /// A deployment serving none of the optional endpoints.
+    /// The deployment every consumer of this package has: the authorization code and refresh
+    /// grants, secret-based client authentication, and no optional endpoints.
     ///
-    /// Named rather than defaulted, so choosing it is visible at the call site: a reader can
-    /// tell "serves none" from "nobody thought about it".
-    public static let none = AdvertisedEndpoints()
+    /// Named rather than defaulted, so a reader can tell "this is what we serve" from "nobody
+    /// thought about it".
+    public static let core = ServedCapabilities(
+        checkedGrantTypes: [.authorizationCode, .refreshToken],
+        clientAuthenticationMethods: [.clientSecretBasic, .clientSecretPost, .none],
+        introspection: nil, pushedAuthorizationRequest: nil,
+        deviceAuthorization: nil, revocation: nil)
 
-    /// Declares which optional endpoints this deployment serves.
+    /// Declares what this deployment serves.
     ///
-    /// - Parameters:
-    ///   - introspection: The introspection endpoint's URL, if routed.
-    ///   - pushedAuthorizationRequest: The PAR endpoint's URL, if routed.
-    ///   - deviceAuthorization: The device authorization endpoint's URL, if routed.
-    ///   - revocation: The revocation endpoint's URL, if routed.
+    /// - Throws: ``Inconsistency`` when the declaration cannot be honoured — most importantly
+    ///   the device grant without the endpoint that begins it, which produces a document
+    ///   offering a flow no client can start. Refused rather than filtered: dropping the grant
+    ///   silently would hand back a document the caller did not ask for, and quiet correction
+    ///   is how the original defect stayed invisible.
     public init(
+        grantTypes: [GrantType],
+        clientAuthenticationMethods: [ClientAuthenticationMethod],
         introspection: String? = nil,
         pushedAuthorizationRequest: String? = nil,
         deviceAuthorization: String? = nil,
         revocation: String? = nil
+    ) throws {
+        guard grantTypes.contains(.authorizationCode) else {
+            throw Inconsistency.missingAuthorizationCodeGrant
+        }
+        guard !clientAuthenticationMethods.isEmpty else {
+            throw Inconsistency.noAuthenticationMethod
+        }
+        guard !grantTypes.contains(.deviceCode) || deviceAuthorization != nil else {
+            throw Inconsistency.deviceGrantWithoutEndpoint
+        }
+        self.init(
+            checkedGrantTypes: grantTypes,
+            clientAuthenticationMethods: clientAuthenticationMethods,
+            introspection: introspection,
+            pushedAuthorizationRequest: pushedAuthorizationRequest,
+            deviceAuthorization: deviceAuthorization,
+            revocation: revocation)
+    }
+
+    /// The unchecked path, for ``core`` — whose values are written here and cannot be
+    /// inconsistent.
+    private init(
+        checkedGrantTypes: [GrantType],
+        clientAuthenticationMethods: [ClientAuthenticationMethod],
+        introspection: String?,
+        pushedAuthorizationRequest: String?,
+        deviceAuthorization: String?,
+        revocation: String?
     ) {
+        self.grantTypes = checkedGrantTypes
+        self.clientAuthenticationMethods = clientAuthenticationMethods
         self.introspection = introspection
         self.pushedAuthorizationRequest = pushedAuthorizationRequest
         self.deviceAuthorization = deviceAuthorization

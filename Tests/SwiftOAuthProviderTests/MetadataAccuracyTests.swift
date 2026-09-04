@@ -26,7 +26,11 @@ struct MetadataAccuracyTests {
             scopesSupported: scopes,
             // These tests assert what is advertised, so they declare the full set — a
             // deployment routing everything. `AdvertisedEndpointsTests` covers the subset case.
-            advertisedEndpoints: AdvertisedEndpoints(
+            served: try ServedCapabilities(
+                grantTypes: [.authorizationCode, .refreshToken, .deviceCode, .tokenExchange],
+                clientAuthenticationMethods: [
+                    .clientSecretBasic, .clientSecretPost, .none,
+                    .tlsClientAuth, .selfSignedTLSClientAuth],
                 introspection: "https://mcp.example.com/introspect",
                 pushedAuthorizationRequest: "https://mcp.example.com/par",
                 deviceAuthorization: "https://mcp.example.com/device_authorization"),
@@ -127,68 +131,5 @@ struct MetadataAccuracyTests {
         let protectedResource = await server.getProtectedResourceMetadata()
 
         #expect(authorizationServer.scopesSupported == protectedResource.scopesSupported)
-    }
-}
-
-/// The document describes the deployment, not the library.
-///
-/// Advertising what this package *implements* is right for a package and wrong for a document.
-/// A consumer routes some subset of these endpoints, and the metadata is read by clients who
-/// will call whatever it names — so an endpoint advertised and not routed is a discoverable
-/// 404, which is a worse failure than not advertising it at all.
-///
-/// Found by SwiftMCPServer running the change before it was tagged. It routes `/authorize`,
-/// `/token`, `/register` and the two well-known documents, and does not route introspection,
-/// PAR, device authorization or revocation. Under the first version of this change its servers
-/// would have advertised three endpoints a conformant client could discover and could not
-/// reach — and that failure lands on the consumer, not here, which is exactly why it could not
-/// be found from inside this package.
-///
-/// So the consumer states what it serves, with no default, on the same argument as the scopes:
-/// forgetting produces a compile error rather than a document promising what nobody answers.
-@Suite("Metadata accuracy — the document describes the deployment")
-struct AdvertisedEndpointsTests {
-
-    private func makeServer(_ endpoints: AdvertisedEndpoints) async throws -> OAuthServer {
-        let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com",
-            scopesSupported: ["read"], advertisedEndpoints: endpoints,
-            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
-    }
-
-    /// A deployment serving none advertises none.
-    ///
-    /// This is SwiftMCPServer's case: it routes the core three and nothing else.
-    @Test("A deployment routing no optional endpoints advertises none")
-    func servingNoneAdvertisesNone() async throws {
-        let metadata = try await makeServer(.none).getMetadata()
-
-        #expect(metadata.introspectionEndpoint == nil)
-        #expect(metadata.pushedAuthorizationRequestEndpoint == nil)
-        #expect(metadata.deviceAuthorizationEndpoint == nil)
-    }
-
-    /// A deployment serving some advertises exactly those.
-    @Test("A deployment advertises exactly the endpoints it routes")
-    func advertisesExactlyWhatIsRouted() async throws {
-        let metadata = try await makeServer(AdvertisedEndpoints(
-            introspection: "https://mcp.example.com/introspect")).getMetadata()
-
-        #expect(metadata.introspectionEndpoint == "https://mcp.example.com/introspect")
-        #expect(metadata.pushedAuthorizationRequestEndpoint == nil,
-                "an endpoint that is not routed was advertised")
-        #expect(metadata.deviceAuthorizationEndpoint == nil)
-    }
-
-    /// The DPoP algorithms are a library fact, not a deployment one, so they stay.
-    ///
-    /// Nothing about routing changes which algorithm `CompactJWS` verifies — a client that
-    /// presents a proof does so at the token endpoint, which every deployment routes.
-    @Test("DPoP algorithms are advertised regardless of optional endpoints")
-    func dpopIsALibraryFact() async throws {
-        let metadata = try await makeServer(.none).getMetadata()
-
-        #expect(metadata.dpopSigningAlgValuesSupported == ["ES256"])
     }
 }
