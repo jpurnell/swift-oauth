@@ -26,7 +26,7 @@ struct ServedCapabilitiesTests {
         let storage = try OAuthStorage(path: ":memory:")
         return await OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
-            scopesSupported: ["read"], served: served,
+            scopesSupported: ["read"], served: served, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
     }
 
@@ -140,7 +140,7 @@ struct MetadataFieldOwnershipTests {
         let storage = try OAuthStorage(path: ":memory:")
         return await OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
-            scopesSupported: ["read"], served: served,
+            scopesSupported: ["read"], served: served, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
     }
 
@@ -200,7 +200,7 @@ struct MetadataEncodingTests {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
-            scopesSupported: scopes, served: .core,
+            scopesSupported: scopes, served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let data = try JSONEncoder().encode(await server.getMetadata())
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])

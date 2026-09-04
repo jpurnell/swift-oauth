@@ -25,7 +25,7 @@ struct AuthorizationResourceTests {
         let api = try #require(URL(string: knownResource))
         let server = await OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
-            scopesSupported: ["read"], served: .core,
+            scopesSupported: ["read"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [api], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "app", redirectUris: ["https://app.example.com/callback"]))
@@ -87,7 +87,7 @@ struct AuthorizationResourceTests {
         let other = try #require(URL(string: "https://reports.example.com"))
         let widened = await OAuthServer(
             storage: try OAuthStorage(path: ":memory:"), issuer: "https://mcp.example.com",
-            scopesSupported: ["read"], served: .core,
+            scopesSupported: ["read"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [other], allowsUnspecified: true))
         _ = widened
 

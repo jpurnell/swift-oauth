@@ -32,7 +32,10 @@ import SwiftOAuthCore
 ///         // document that promises scopes or endpoints nobody serves is worse than one that
 ///         // promises nothing.
 ///         scopesSupported: ["files:read", "files:write"],
-///         served: .core)
+///         served: .core,
+///         // This server both issues tokens and protects the resource. A deployment whose
+///         // authorization server is elsewhere names it here instead.
+///         resourceIdentity: .colocated)
 ///
 ///     // Get server metadata
 ///     let metadata = await server.getMetadata()
@@ -65,6 +68,9 @@ public actor OAuthServer {
 
     /// What this deployment actually serves, as opposed to what this package implements.
     private let served: ServedCapabilities
+
+    /// Who this deployment is, as a protected resource.
+    private let resourceIdentity: ResourceIdentity
 
     /// How long a pushed authorization request is good for — RFC 9126 §2.2 suggests
     /// "relatively short", on the order of a minute, since the client redirects immediately.
@@ -113,6 +119,11 @@ public actor OAuthServer {
         issuer: String,
         scopesSupported: [String]?,
         served: ServedCapabilities,
+        // No default, for the reason `ResourceIdentity` itself states: one would be right for
+        // most deployments and silently wrong for the rest. Writing that in the documentation
+        // and then defaulting it anyway is the defect this whole type family exists to prevent,
+        // one level up.
+        resourceIdentity: ResourceIdentity,
         accessTokenLifetime: TimeInterval = 86400,        // 24 hours
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
@@ -122,6 +133,7 @@ public actor OAuthServer {
         self.issuer = issuer
         self.scopesSupported = scopesSupported
         self.served = served
+        self.resourceIdentity = resourceIdentity
         // Defaulted from the issuer, which is what this server already publishes as its
         // resource identifier in RFC 9728 metadata. Asking an operator to repeat that value
         // invites the two to drift, and a server that advertises a resource then refuses it
@@ -430,8 +442,12 @@ public actor OAuthServer {
     /// this resource and which scopes are available.
     public func getProtectedResourceMetadata() -> ProtectedResourceMetadata {
         ProtectedResourceMetadata(
-            resource: issuer,
-            authorizationServers: [issuer],
+            // The deployment's own account of itself. Both default to the issuer, which is
+            // correct for a server that issues and protects at one origin — and names itself
+            // as the authorization server for one that does not, sending a client to authorize
+            // against something that issues nothing.
+            resource: resourceIdentity.resource ?? issuer,
+            authorizationServers: resourceIdentity.authorizationServers ?? [issuer],
             // One source for both documents. A client may read either, and two literals would
             // drift into disagreeing about one deployment.
             scopesSupported: scopesSupported,
@@ -928,6 +944,63 @@ public actor OAuthServer {
 }
 
 // MARK: - Server Metadata
+
+/// Who this deployment is, as a protected resource — RFC 9728 §2.
+///
+/// `resource` names the API being protected; `authorization_servers` names who issues tokens
+/// for it. They are the same origin in the common shape — a server that both issues and
+/// protects — and RFC 9728 keeps them separate because they routinely are not.
+///
+/// This package supports the separated role already: `introspect` and `TokenIntrospector` exist
+/// so a resource server can validate a token it did not issue. A deployment in that shape must
+/// publish metadata naming the *external* authorization server, and a hardcoded issuer named
+/// itself — sending a client to authorize against something that issues nothing.
+///
+/// ``colocated`` is the common case, named rather than defaulted so that a reader can tell it
+/// was chosen. That is the same reason ``ServedCapabilities/core`` is named: a default here
+/// would be right for most deployments and silently wrong for the rest, which is the shape of
+/// every defect this type family exists to prevent.
+public struct ResourceIdentity: Sendable, Equatable {
+
+    /// A declaration that cannot be honoured.
+    public enum Inconsistency: Error, Equatable {
+        /// A protected resource named no authorization server.
+        case noAuthorizationServer
+    }
+
+    /// The identifier of the API being protected, or `nil` to use the server's own issuer.
+    public let resource: String?
+
+    /// The authorization servers that issue tokens for it, or `nil` for the server itself.
+    public let authorizationServers: [String]?
+
+    /// A deployment that both issues tokens and protects the resource, at one origin.
+    ///
+    /// Both fields come from the issuer. The common shape, and the one this package assumed
+    /// without saying so until now.
+    public static let colocated = ResourceIdentity(resource: nil, authorizationServers: nil)
+
+    /// Declares a resource protected by authorization servers elsewhere.
+    ///
+    /// - Parameters:
+    ///   - resource: The identifier of the API being protected.
+    ///   - authorizationServers: Who issues tokens for it. Must not be empty — a protected
+    ///     resource naming no authorization server tells a client nowhere to go.
+    /// - Throws: ``Inconsistency/noAuthorizationServer``.
+    public init(resource: String, authorizationServers: [String]) throws {
+        guard !authorizationServers.isEmpty else {
+            throw Inconsistency.noAuthorizationServer
+        }
+        self.resource = resource
+        self.authorizationServers = authorizationServers
+    }
+
+    /// The colocated case, whose values are supplied by the server rather than a caller.
+    private init(resource: String?, authorizationServers: [String]?) {
+        self.resource = resource
+        self.authorizationServers = authorizationServers
+    }
+}
 
 /// What a deployment actually serves — RFC 8414 §2.
 ///

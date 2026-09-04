@@ -33,7 +33,7 @@ struct MetadataAccuracyTests {
                     .tlsClientAuth, .selfSignedTLSClientAuth],
                 introspection: "https://mcp.example.com/introspect",
                 pushedAuthorizationRequest: "https://mcp.example.com/par",
-                deviceAuthorization: "https://mcp.example.com/device_authorization"),
+                deviceAuthorization: "https://mcp.example.com/device_authorization"), resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
     }
 

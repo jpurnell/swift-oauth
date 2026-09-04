@@ -10,7 +10,7 @@ struct DeviceAuthorizationEndpointTests {
     private func makeServer() async throws -> (OAuthServer, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
         let server = await OAuthServer(
-            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core,
+            storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         return (server, storage)
     }

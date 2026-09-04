@@ -11,7 +11,7 @@ struct OAuthServerTests {
 
     static func makeTestServer() async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(storage: storage, issuer: "https://example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core,
+        return await OAuthServer(storage: storage, issuer: "https://example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -1068,7 +1068,7 @@ extension OAuthServerTests {
         return await OAuthServer(
             storage: storage,
             issuer: "https://example.com",
-            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core,
+            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             authorizationCodeLifetime: codeLifetime,
             // This suite predates RFC 8707 and exercises grants, PKCE and code lifetimes. The
             // strict default would make every one of its authorization requests carry a
