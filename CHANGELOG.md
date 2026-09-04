@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The authorization endpoint discarded the `resource` parameter a client sent — RFC 8707.**
+  `AuthorizationRequest.resource` existed and the server validated it correctly, but neither
+  HTTP entry point populated it, so it was unconditionally `nil` for any client that speaks
+  HTTP. Under a permissive policy this is invisible; under a strict one it refuses every
+  authorization-code flow with `invalid_target`, including one whose error text tells the client
+  to send the parameter it is already sending. Fixed in four places: GET `/authorize`, the
+  consent page's construction, the hidden field it renders, and the approve action. The token
+  endpoint was never affected.
+
+  The hidden field is the substance of it. Forwarding only the POST parameter works for a client
+  that re-sends and silently drops for a browser, which posts what the page rendered — the same
+  defect through a narrower door, reachable from a real browser and not from a test that
+  supplies form fields itself.
+
+### Noted
+- **This blocked the strict resource-indicator flip**, which is the remaining policy step before
+  1.0.0. It was found by a consumer attempting that flip and backing it out, not by this
+  package's tests — the sixth such finding, and the second that a reader of the code could have
+  caught and no test could, because every consent test runs under `allowsUnspecified: true`.
+  That setting is well-reasoned and its comment is honest; the consequence was that no test of
+  the HTTP consent path had ever run under a strict policy.
+
 ## [1.0.0-beta.2] — 2026-09-04
 
 One fix, and it changes a signature — which is why it is a tag rather than a note on `main`.
