@@ -121,6 +121,17 @@ struct TokenExchangeEndpointTests {
     /// Otherwise the exchange endpoint strips a binding: a DPoP- or certificate-bound token
     /// goes in, an ordinary bearer token comes out, and everything the binding was protecting
     /// against is available to whoever holds the result.
+    ///
+    /// **A consumer depends on this refusal as its entire protection.** SwiftMCPServer
+    /// implements no exchange-like endpoint of its own and delegates every grant here, so this
+    /// check is the whole of its defence against binding-strip — it said so explicitly rather
+    /// than leave the assumption unwritten.
+    ///
+    /// Recorded because the failure mode of relaxing it is silent: nothing in this package
+    /// would break, its tests would stay green, and a downstream server would quietly lose a
+    /// guarantee it never implemented because this one made it. Anyone tempted to soften this —
+    /// to support a legitimate-looking re-binding, say — is changing a security property
+    /// somebody else is standing on, and should say so out loud first.
     @Test("A bound subject token cannot be laundered into a bearer token")
     func boundTokenCannotBeStripped() async throws {
         let (server, storage) = try await makeServer()
