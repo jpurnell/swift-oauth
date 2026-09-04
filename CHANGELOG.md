@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A resource server honoured tokens minted for other resources — RFC 8707's second half.**
+  Issuing bound an audience correctly; consuming ignored it. `validateBearerToken` returned
+  `.valid(ValidatedToken)` with `audience` populated and nothing obliged the caller to look at
+  it, so `isValid` meant "this token exists and has not expired" rather than "honour this".
+  Demonstrated on deployed servers: a token minted at one origin, planted in a second origin's
+  store so absence could not explain a refusal, accepted with `200 OK`.
+
+  The comparison is against the identifier the deployment **advertises**, not the issuer. Those
+  are one string only for a colocated deployment; assuming otherwise would refuse correct tokens
+  at any resource server whose authorization server is elsewhere — the `beta.2` defect
+  reappearing in enforcement rather than metadata.
+
+  An unbound token is still honoured. That is the permissive contract `ValidatedToken.audience`
+  documents, not a mismatch, and refusing it would break every deployment that has not adopted
+  resource indicators. Honouring a *foreign* audience now requires `acceptingAudiences: .any`.
+
+- **The token endpoint required `client_id` in the body under `client_secret_basic`** — RFC 6749
+  §2.3.1 puts the id in the header. `clientId(fromBasic:)` existed and documented exactly this;
+  the introspection endpoint called it and the token endpoint did not, so the conformant request
+  was the one refused with `invalid_request`.
+
+### Noted
+- **Why neither side caught it.** Issuing is testable with one server and is well tested here and
+  in consumers. Consuming needs two servers and a token deliberately carried between them, which
+  no single-server suite constructs. This package's conformance tests passed; so did the
+  consumer's 255.
+- **Fifth instance in one day of one shape: a value recorded and never read.** The others were a
+  custom header, the consent form dropping `resource`, a configured path wired to nothing, and
+  now the audience. One side writes, the other is assumed to read, and nothing on either side
+  fails when it does not.
+
 ## [1.0.0-beta.3] — 2026-09-04
 
 Cut to unblock the strict resource-indicator flip, which beta.2 made impossible: a consumer
