@@ -5,7 +5,11 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0-beta.3] — 2026-09-04
+
+Cut to unblock the strict resource-indicator flip, which beta.2 made impossible: a consumer
+attempting it had to back it out, because a client could not name a resource over HTTP at all.
+No API change from beta.2.
 
 ### Fixed
 - **The authorization endpoint discarded the `resource` parameter a client sent — RFC 8707.**
@@ -1024,7 +1028,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.2...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.3...HEAD
+[1.0.0-beta.3]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/jpurnell/swift-oauth/compare/v0.14.1...v1.0.0-beta.1
 [0.14.1]: https://github.com/jpurnell/swift-oauth/compare/v0.14.0...v0.14.1
