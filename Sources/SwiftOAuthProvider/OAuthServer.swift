@@ -943,6 +943,18 @@ public struct ServedCapabilities: Sendable, Equatable {
         /// No client authentication method was declared.
         case noAuthenticationMethod
         /// The authorization code grant was omitted.
+        ///
+        /// **This refusal holds a metadata field on the package side, and relaxing it moves
+        /// that field.** `response_types_supported: ["code"]` is unconditionally true only
+        /// because every deployment must offer the authorization code grant. Permit a
+        /// client-credentials-only deployment and it serves no response types at all — so the
+        /// field stops being a package fact and becomes the deployment's, exactly like the four
+        /// that moved before it.
+        ///
+        /// Identified by SwiftMCPServer while trying to falsify the rule that decides where a
+        /// field belongs. Recorded here rather than in the metadata code because this is where
+        /// someone would come to relax the constraint, and the consequence is a document that
+        /// silently over-promises somewhere else.
         case missingAuthorizationCodeGrant
     }
 
