@@ -17,6 +17,16 @@ import SwiftOAuthCore
 ///
 /// So these tests are strict on purpose. The permissive suites cannot see this defect, and that
 /// is the whole reason it survived.
+/// ## This suite has been seen to fail
+///
+/// Verified against the broken shape by reverting all four forwarding sites: **the build
+/// reported 0 errors** and three of the five tests failed — the hidden field, the consent
+/// approval, and the browser round trip on all three of its assertions. The build-error count
+/// is part of the result, not a detail: a suite that fails to compile and a suite that detects
+/// the bug are the same red in a terminal, and both of us were fooled by that today.
+///
+/// Repeat it by replacing the three `resource:` arguments in `OAuthHTTPHandler` with `nil` and
+/// deleting the hidden-field line from `ConsentPage.render()`.
 @Suite("Authorization resource over HTTP")
 struct AuthorizationResourceHTTPTests {
 
@@ -138,5 +148,90 @@ struct AuthorizationResourceHTTPTests {
         let location = response.headers["Location"] ?? ""
         #expect(location.contains("error=invalid_target"),
                 "A strict policy must refuse a request that named no resource")
+    }
+
+    // MARK: - The browser round trip
+
+    /// The fields a browser would submit: every `<input>` inside the `<form>`, decoded.
+    ///
+    /// Contributed by the SwiftMCPServer session, which used it to catch this bug from the
+    /// outside. Three weaknesses it stated when handing it over, and what was done about each:
+    ///
+    /// 1. **It did not know what a `<form>` was**, so it collected inputs anywhere on the page
+    ///    and would still have passed with the resource field rendered outside the form — one
+    ///    of the failures the string assertions already miss. Fixed rather than documented,
+    ///    because this package owns the page: the scan is bounded to the form element.
+    /// 2. **It took the last of a duplicate name**, where a browser submits both. A page
+    ///    rendering `resource` twice with different values would look correct here and send
+    ///    something ambiguous in reality. Now a duplicate throws.
+    /// 3. **It did not decode entities.** Not hypothetical: ``ConsentPage`` escapes `&`, and a
+    ///    resource identifier carrying a query string is ordinary, so an undecoded value would
+    ///    fail to match for a reason that has nothing to do with the code under test.
+    ///
+    /// It is a parser for one page whose exact markup this package emits, not a general one.
+    private func renderedFields(in html: String) throws -> [String: String] {
+        let formStart = try #require(html.range(of: "<form"), "The consent page must have a form")
+        let formEnd = try #require(
+            html.range(of: "</form>", range: formStart.upperBound..<html.endIndex),
+            "The consent form must be closed")
+        let form = String(html[formStart.upperBound..<formEnd.lowerBound])
+
+        func decode(_ value: String) -> String {
+            // Ampersand last: decoding it first would turn "&amp;lt;" into "<".
+            value.replacingOccurrences(of: "&quot;", with: "\"")
+                .replacingOccurrences(of: "&#39;", with: "'")
+                .replacingOccurrences(of: "&lt;", with: "<")
+                .replacingOccurrences(of: "&gt;", with: ">")
+                .replacingOccurrences(of: "&amp;", with: "&")
+        }
+
+        func quoted(after attribute: String, in tag: Substring) -> String? {
+            guard let range = tag.range(of: attribute) else { return nil }
+            let rest = tag[range.upperBound...]
+            guard let open = rest.firstIndex(of: "\""),
+                  let close = rest[rest.index(after: open)...].firstIndex(of: "\"")
+            else { return nil }
+            return decode(String(rest[rest.index(after: open)..<close]))
+        }
+
+        var fields: [String: String] = [:]
+        for tag in form.components(separatedBy: "<input").dropFirst() {
+            guard let name = quoted(after: "name=", in: tag[...]),
+                  let value = quoted(after: "value=", in: tag[...]) else { continue }
+            // A browser submits both of a duplicate pair. Keeping the last would hide a
+            // double-rendered hidden field, which is a real rendering bug.
+            #expect(fields[name] == nil, "The form rendered '\(name)' more than once")
+            fields[name] = value
+        }
+        return fields
+    }
+
+    @Test("A browser round trip: submit only what the page rendered")
+    func browserRoundTrip() async throws {
+        let (handler, _, clientId) = try await makeHandler()
+
+        let page = await handler.handleAuthorizationRequest(queryParams: [
+            "response_type": "code",
+            "client_id": clientId,
+            "redirect_uri": "https://client.example.com/callback",
+            "scope": "mcp:tools",
+            "state": "test-state",
+            "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "code_challenge_method": "S256",
+            "resource": Self.resource
+        ])
+
+        // The whole point: what a browser posts is what the page contains, not what the
+        // original query string held. Nothing is added here except the button that was pressed.
+        var fields = try renderedFields(in: page.body)
+        #expect(fields["resource"] == Self.resource,
+                "The form must submit the resource the authorization request named")
+        fields["action"] = "approve"
+
+        let response = await handler.handleConsentSubmission(formParams: fields)
+        let location = response.headers["Location"] ?? ""
+        #expect(location.contains("code="), "The round trip must yield an authorization code")
+        #expect(!location.contains("error=invalid_target"),
+                "invalid_target here means the browser round trip lost the resource")
     }
 }

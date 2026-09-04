@@ -22,6 +22,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   defect through a narrower door, reachable from a real browser and not from a test that
   supplies form fields itself.
 
+### Testing
+- **A browser round trip covers the consent form**: render the page, parse every `<input>` out
+  of the `<form>`, submit only those fields. It asserts what a browser does rather than what the
+  page contains — the string assertions it joins would pass if the field were rendered with the
+  wrong name, twice, or outside the form.
+
+  Contributed by the SwiftMCPServer session with three weaknesses stated on handover. All three
+  are addressed rather than inherited: the scan is bounded to the form element (fixed here
+  rather than documented, since this package owns the page), a duplicated field name now fails
+  instead of silently keeping the last, and entity decoding is real rather than theoretical —
+  ``ConsentPage`` escapes `&`, and a resource identifier carrying a query string is ordinary.
+
+  The suite has been seen to fail: reverting all four forwarding sites builds with **0 errors**
+  and fails three of five tests. That count is recorded in the suite, because a suite that fails
+  to compile and a suite that detects the bug look identical in a terminal.
+
+### Documentation
+- **``ResourceIndicatorPolicy`` now says that strict is enforced at three places, not one.**
+  RFC 8707 §2.2 puts the resource on the authorization request, the code exchange, and every
+  refresh. Migrating the first two makes the flow work end to end and a happy-path suite go
+  green, so the migration reads as finished; the refresh then fails later with a correct
+  `invalid_target`. A correct error arriving after you believed you were done is worse than a
+  wrong one arriving immediately, because the first thing it contradicts is a conclusion you
+  have already acted on. Flip it against a test that refreshes, not one that only obtains.
+
+  Reported by the SwiftMCPServer consumer, which hit exactly this while running the flip.
+
 ### Noted
 - **This blocked the strict resource-indicator flip**, which is the remaining policy step before
   1.0.0. It was found by a consumer attempting that flip and backing it out, not by this

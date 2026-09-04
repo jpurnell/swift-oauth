@@ -20,6 +20,28 @@ import SwiftOAuthCore
 /// refuses it unless told otherwise. The permissive setting is correct for a server whose
 /// tokens are already single-audience — but it is the dangerous one to get by accident, so it
 /// is the one you have to ask for.
+///
+/// ## Turning it on for an existing deployment
+///
+/// "Strict" reads as one decision and is enforced at **three** places, because RFC 8707 §2.2
+/// puts the resource on each of them. A client must send it on:
+///
+/// 1. the authorization request,
+/// 2. the token request that exchanges the code, and
+/// 3. **every refresh**.
+///
+/// The third is the one that costs a day. Migrate the first two and the flow works end to end:
+/// authorization succeeds, the exchange succeeds, a happy-path suite goes green, and the
+/// migration reads as finished. The refresh fails later — correctly, with `invalid_target`, in
+/// whatever runs long enough to reach one. A correct error arriving after you believed you were
+/// done is worse than an incorrect one arriving immediately, because the first thing it
+/// contradicts is a conclusion you have already acted on.
+///
+/// So flip it against a test that refreshes, not one that only obtains. If a refresh path
+/// exists anywhere in the deployment, it is the leg to migrate first and verify last.
+///
+/// Reported by the SwiftMCPServer consumer, which hit exactly this: four failures became two
+/// after the authorization leg was fixed, and the last was a refresh sending no resource.
 public struct ResourceIndicatorPolicy: Sendable, Hashable {
 
     /// The resources this server will issue tokens for. Anything else is `invalid_target`.
