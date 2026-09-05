@@ -5,7 +5,14 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0-beta.4] — 2026-09-04
+
+A security fix. A resource server built on `beta.3` or earlier honours access tokens minted for
+other resources, so RFC 8707's protection was absent wherever one authorization server issues
+for several APIs. **Upgrade rather than choose to.**
+
+No source break: the audience check is the new default on an existing method, and honouring a
+foreign audience is an added argument.
 
 ### Fixed
 - **A resource server honoured tokens minted for other resources — RFC 8707's second half.**
@@ -1062,7 +1069,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.3...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.4...HEAD
+[1.0.0-beta.4]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.3...v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/jpurnell/swift-oauth/compare/v0.14.1...v1.0.0-beta.1
