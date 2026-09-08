@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-beta.5] — 2026-09-08
+
+A conformance fix. A provider built on `beta.4` refuses a client that sends the resource
+identifier it was told to send, when that identifier differs only by a trailing slash.
+Deployments seeing `invalid_target` against a value that looks correct want this.
+
+No source break: the comparison changed, not the API.
+
+### Fixed
+- **A trailing slash was treated as a different resource.** `ResourceIndicatorPolicy` compared
+  with `Set<URL>.contains`, which is exact string matching wearing a type. RFC 3986 §6.2.3
+  makes an empty path equivalent to `/`, so `https://host:8081` and `https://host:8081/` are
+  the same URI — but a policy configured with the first refused the second with
+  `invalid_target`.
+
+  The client that broke was the most correct one: it read `resource` from protected-resource
+  metadata, passed it through a URL parser on the way to building the request, and got back
+  the trailing slash. `new URL()` in JavaScript, `URL` in Swift and `urllib` in Python all do
+  this, so the failure reached whichever client was most conformant and left the operator
+  suspecting the client.
+
+  Comparison is now on the RFC 3986 canonical form, applied to both sides so it does not
+  depend on which was written by hand: scheme and host lowercased (§6.2.2.1), a default port
+  elided (§6.2.3), an empty path as `/` (§6.2.3), and the fragment dropped, which RFC 8707 §2
+  forbids on a resource identifier anyway.
+
+  A **non-empty** path is deliberately untouched. `https://host/mcp` and `https://host/mcp/`
+  are different URIs, and collapsing them would widen an audience rather than repair one.
+
+- **A policy configured with a fragment matched nothing at all.** The client strips fragments
+  before sending, so such a provider refused every request for the life of the deployment with
+  no signal saying why. Both sides are canonicalised now, so the misconfiguration is harmless —
+  a fragment is never sent to a server and cannot distinguish two audiences.
+
 ## [1.0.0-beta.4] — 2026-09-04
 
 A security fix. A resource server built on `beta.3` or earlier honours access tokens minted for
@@ -1069,7 +1103,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.4...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.5...HEAD
+[1.0.0-beta.5]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.4...v1.0.0-beta.5
 [1.0.0-beta.4]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.3...v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.1...v1.0.0-beta.2
