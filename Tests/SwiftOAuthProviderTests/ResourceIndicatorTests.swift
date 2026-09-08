@@ -165,24 +165,85 @@ struct ResourceIndicatorMetadataAgreementTests {
         #expect(try policy.audience(for: [advertised]) == advertised)
     }
 
-    /// And the failure it prevents, stated as a test so the shape is on record: a policy naming
-    /// something the metadata does not refuses the very value a conformant client was told to
-    /// send.
-    @Test("A policy disagreeing with the metadata refuses a conformant client")
-    func disagreementRefusesConformantClient() async throws {
+    /// A trailing slash on an empty path is the same resource, and must be accepted.
+    ///
+    /// This is the failure that reached production: a client read
+    /// `"resource": "https://roseclub.org:8081"` from the metadata, passed it through a URL
+    /// parser on the way to building the request, and sent `https://roseclub.org:8081/`.
+    /// RFC 3986 §6.2.3 makes those the same URI. Refusing the second refused the client that
+    /// had done everything right.
+    @Test("A trailing slash on an empty path is the same resource")
+    func trailingSlashOnEmptyPathIsEquivalent() async throws {
         let server = try await Self.makeServer(issuer: "https://mcp.example.com")
         let metadata = await server.getProtectedResourceMetadata()
         // SECURITY: parses literals written in this test; no request is issued from either.
         let advertised = try #require(URL(string: metadata.resource))
-        // The same host with a trailing slash — the drift is this small.
-        let almost = try #require(URL(string: "https://mcp.example.com/"))
+        let withSlash = try #require(URL(string: "https://mcp.example.com/"))
 
-        let policy = ResourceIndicatorPolicy.protecting(almost)
+        // Either side may carry the slash; neither should matter.
+        #expect(try ResourceIndicatorPolicy.protecting(withSlash).audience(for: [advertised])
+                == advertised)
+        #expect(try ResourceIndicatorPolicy.protecting(advertised).audience(for: [withSlash])
+                == withSlash)
+    }
+
+    @Test("Case and default ports are insignificant")
+    func caseAndDefaultPortAreNormalised() throws {
+        // SECURITY: parses literals written in this test; no request is issued from any.
+        let canonical = try #require(URL(string: "https://mcp.example.com"))
+        let policy = ResourceIndicatorPolicy.protecting(canonical)
+
+        for variant in ["https://MCP.Example.COM", "https://mcp.example.com:443", "HTTPS://mcp.example.com/"] {
+            // SECURITY: parses a literal written in this test; no request is issued from it.
+            let url = try #require(URL(string: variant))
+            #expect(try policy.audience(for: [url]) == url, "\(variant) should be the same resource")
+        }
+    }
+
+    /// The normalisation must not widen the audience. A slash after a *non-empty* path can
+    /// select a different resource, so it stays significant.
+    @Test("A trailing slash on a non-empty path remains a different resource")
+    func trailingSlashOnNonEmptyPathIsSignificant() throws {
+        // SECURITY: parses literals written in this test; no request is issued from either.
+        let policy = ResourceIndicatorPolicy.protecting(try #require(URL(string: "https://mcp.example.com/mcp")))
+        let other = try #require(URL(string: "https://mcp.example.com/mcp/"))
 
         let error = #expect(throws: OAuthError.self) {
-            _ = try policy.audience(for: [advertised])
+            _ = try policy.audience(for: [other])
         }
-        #expect(error?.code == "invalid_target",
-                "a client that read the metadata and obeyed it was refused")
+        #expect(error?.code == "invalid_target")
+    }
+
+    /// The exact refusal reported from a deployment, as a regression test.
+    ///
+    /// > invalid_target: This server does not issue tokens for https://roseclub.org:8081/.
+    /// > This server issues tokens for exactly "https://roseclub.org:8081".
+    ///
+    /// The server was right that the two strings differed and wrong that it mattered.
+    @Test("The reported roseclub refusal no longer occurs")
+    func reportedTrailingSlashRefusalIsFixed() throws {
+        // SECURITY: parses literals written in this test; no request is issued from either.
+        let configured = try #require(URL(string: "https://roseclub.org:8081"))
+        let sentByClient = try #require(URL(string: "https://roseclub.org:8081/"))
+
+        let policy = ResourceIndicatorPolicy.protecting(configured)
+        #expect(try policy.audience(for: [sentByClient]) == sentByClient)
+    }
+
+    @Test("A genuinely different resource is still refused")
+    func differentResourceIsRefused() throws {
+        // SECURITY: parses literals written in this test; no request is issued from any.
+        let policy = ResourceIndicatorPolicy.protecting(try #require(URL(string: "https://mcp.example.com")))
+
+        // SECURITY: the insecure scheme under test — rewriting it to https would assert that a different resource is refused for the wrong reason.
+        let variants = ["https://mcp.example.com:8081", "https://other.example.com", "http://mcp.example.com"]
+        for variant in variants {
+            // SECURITY: parses a literal written in this test; no request is issued from it.
+            let url = try #require(URL(string: variant))
+            let error = #expect(throws: OAuthError.self) {
+                _ = try policy.audience(for: [url])
+            }
+            #expect(error?.code == "invalid_target", "\(variant) should not be accepted")
+        }
     }
 }

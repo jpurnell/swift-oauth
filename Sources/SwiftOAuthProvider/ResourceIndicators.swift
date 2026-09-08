@@ -54,6 +54,9 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
     /// already single-audience and have nothing to disambiguate.
     public let allowsUnspecified: Bool
 
+    /// The canonical form of every entry in `known`, for comparison.
+    private let knownCanonical: Set<String>
+
     /// Creates a policy.
     ///
     /// - Parameters:
@@ -63,6 +66,58 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
     public init(known: Set<URL>, allowsUnspecified: Bool = false) {
         self.known = known
         self.allowsUnspecified = allowsUnspecified
+        self.knownCanonical = Set(known.map(Self.canonical))
+    }
+
+    /// The RFC 3986 canonical form of a resource identifier, for comparison only.
+    ///
+    /// Two identifiers that differ only by the normalisations §6.2.2–§6.2.3 declare
+    /// insignificant are the same resource, and a server that treats them as different
+    /// refuses the client that behaved best. The empty path is the one that bites:
+    /// §6.2.3 makes `https://host:8081` and `https://host:8081/` the same URI, and most
+    /// URL libraries — `new URL()` in JavaScript, `URL` in Swift, `urllib` in Python —
+    /// hand back the second when given the first. A client reads
+    /// `"resource": "https://host:8081"` from protected-resource metadata, passes it
+    /// through a parser on the way to building the request, and sends a trailing slash
+    /// it never typed.
+    ///
+    /// Applied to both sides, so the comparison does not depend on which one was written
+    /// by hand.
+    ///
+    /// What is **not** normalised: a non-empty path. `https://host/mcp` and
+    /// `https://host/mcp/` are different URIs under §6.2.3 and are left that way — the
+    /// slash there may genuinely select a different resource, and collapsing it would
+    /// widen an audience rather than repair one.
+    ///
+    /// - Parameter url: The identifier to normalise.
+    /// - Returns: A string safe to compare against another canonicalised identifier.
+    static func canonical(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+        // §6.2.2.1: scheme and host are case-insensitive.
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        // §6.2.3: a port equal to the scheme's default is insignificant.
+        if let port = components.port, port == Self.defaultPort(for: components.scheme) {
+            components.port = nil
+        }
+        // §6.2.3: an empty path is equivalent to "/" for a hierarchical scheme.
+        if components.path.isEmpty {
+            components.path = "/"
+        }
+        // RFC 8707 §2: the resource MUST NOT carry a fragment, so it cannot distinguish two.
+        components.fragment = nil
+        return components.string ?? url.absoluteString
+    }
+
+    /// The default port for a scheme, or `nil` when it has none worth eliding.
+    private static func defaultPort(for scheme: String?) -> Int? {
+        switch scheme {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
     }
 
     /// A policy for a server that protects the resource it identifies itself as.
@@ -96,9 +151,10 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
         case 0:
             return "This server lists no resources it issues tokens for."
         case 1:
-            // Matched exactly, so the value is quoted and described as such. A reader who
-            // guesses that a trailing slash is equivalent has to be told otherwise, because
-            // it is not: this comparison treats them as different resources.
+            // Quoted so the value is unambiguous. The comparison is on the RFC 3986
+            // canonical form, so a difference that only §6.2.2–§6.2.3 normalisation would
+            // remove — a trailing slash on an empty path, letter case, a default port —
+            // is not what this refusal is about.
             return "This server issues tokens for exactly \"\(sorted[0])\"."
         default:
             return "This server issues tokens for exactly one of: "
@@ -150,7 +206,7 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
                 "A token can be issued for one resource; the request named \(distinct.count).")
         }
 
-        guard known.contains(resource) else {
+        guard knownCanonical.contains(Self.canonical(resource)) else {
             throw OAuthError.invalidTarget(
                 "This server does not issue tokens for \(resource.absoluteString). "
                 + acceptedDescription)

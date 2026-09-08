@@ -60,10 +60,14 @@ struct ResourceIndicatorCrossHalfTests {
     /// The client strips a fragment; the provider must still recognise what arrives.
     ///
     /// RFC 8707 §2 requires the identifier to have no fragment, and the client enforces that by
-    /// removing one. The provider compares by exact match — so if a deployment configures the
-    /// same URI with a fragment on both sides, the client sends the stripped form and the
-    /// provider is holding the unstripped one. This test says what actually happens rather than
-    /// leaving it to be found in a deployment.
+    /// removing one. The provider therefore never sees a fragment, whatever it was configured
+    /// with — so a policy holding an unstripped URI used to match nothing at all, for the life
+    /// of the deployment, with no signal saying why.
+    ///
+    /// Both sides are canonicalised now, fragment included, so the misconfiguration costs
+    /// nothing. A fragment identifies a secondary resource within a representation and is never
+    /// sent to a server; it cannot distinguish two audiences, so there is nothing to protect by
+    /// refusing it.
     @Test("A fragment is stripped by the client, and the provider sees the stripped form")
     func fragmentIsStrippedBeforeItArrives() async throws {
         let withFragment = try url("https://api.example.com/v1#section")
@@ -83,12 +87,10 @@ struct ResourceIndicatorCrossHalfTests {
         #expect(try ResourceIndicatorPolicy.protecting(stripped)
             .audience(for: [sent]) == stripped)
 
-        // And one configured with the fragment still on it does not — which is the failure a
-        // deployment would hit, recorded here rather than discovered there.
-        #expect(throws: OAuthError.self) {
-            _ = try ResourceIndicatorPolicy.protecting(withFragment)
-                .audience(for: [sent])
-        }
+        // And one configured with the fragment still on it also accepts it, rather than
+        // refusing every request it will ever receive.
+        #expect(try ResourceIndicatorPolicy.protecting(withFragment)
+            .audience(for: [sent]) == stripped)
     }
 
     /// A client that names no resource is refused by a strict provider, and the refusal names
