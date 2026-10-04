@@ -102,6 +102,11 @@ public actor OAuthServer {
     ///   - accessTokenLifetime: Access token lifetime in seconds (default: 24 hours)
     ///   - refreshTokenLifetime: Refresh token lifetime in seconds (default: 90 days)
     ///   - authorizationCodeLifetime: Auth code lifetime in seconds (default: 10 minutes)
+    ///
+    ///     Each of the three lifetimes must be finite and at least one second. This
+    ///     initializer does not check — it cannot throw — so a server built with `.nan`,
+    ///     `.infinity`, zero or a negative is constructed and then refuses, with
+    ///     `server_error`, every request that would have issued something with that lifetime.
     ///   - scopesSupported: The scopes this deployment offers, advertised in both metadata
     ///     documents. No default: `nil` means "advertise none", and it is a decision a caller
     ///     makes rather than inherits. This package previously invented three MCP scopes, which
@@ -150,6 +155,66 @@ public actor OAuthServer {
         self.accessTokenLifetime = accessTokenLifetime
         self.refreshTokenLifetime = refreshTokenLifetime
         self.authorizationCodeLifetime = authorizationCodeLifetime
+    }
+
+    // MARK: - Configured lifetimes
+
+    /// A lifetime this server was configured with, and what it bounds.
+    private enum ConfiguredLifetime {
+        case accessToken, refreshToken, authorizationCode
+
+        /// The refusal for a lifetime that cannot be used.
+        ///
+        /// Says which setting is wrong and nothing about its value. The description reaches
+        /// the client, who can do nothing with the number, and the operator who can already
+        /// has it.
+        var refusal: OAuthError {
+            switch self {
+            case .accessToken:
+                return .serverError(
+                    "This server's configured access-token lifetime is not a usable number of "
+                    + "seconds, so it cannot issue a token.")
+            case .refreshToken:
+                return .serverError(
+                    "This server's configured refresh-token lifetime is not a usable number of "
+                    + "seconds, so it cannot issue a token.")
+            case .authorizationCode:
+                return .serverError(
+                    "This server's configured authorization-code lifetime is not a usable "
+                    + "number of seconds, so it cannot issue a code.")
+            }
+        }
+    }
+
+    /// The whole seconds in a configured lifetime, or a refusal to issue with it.
+    ///
+    /// `init` takes these as `TimeInterval` and does not throw, so nothing prevents `.nan`,
+    /// `.infinity`, a negative, or the result of arithmetic that overflowed. Each is a
+    /// misconfiguration, and each used to end the process at the first token request:
+    /// `Int(lifetime)` is a trap for the first two, and by then a token whose expiry was
+    /// `Date() + NaN` had already been stored.
+    ///
+    /// Checked where a lifetime is used rather than in `init`, because `init` cannot throw
+    /// without a source break and a `precondition` there would only move the crash earlier.
+    /// **Every caller asks before it stores, spends or returns anything** — a refusal that
+    /// arrives after an authorization code was consumed has cost the client its code.
+    ///
+    /// A lifetime under one second is refused with the rest: `expires_in` is an integer on the
+    /// wire, and zero whole seconds describes something that has already expired.
+    ///
+    /// - Throws: `OAuthError.serverError(_:)` when the lifetime is NaN, infinite, less than one
+    ///   second, or too large for `Int`.
+    private func wholeSeconds(of lifetime: ConfiguredLifetime) throws -> Int {
+        let configured: TimeInterval
+        switch lifetime {
+        case .accessToken: configured = accessTokenLifetime
+        case .refreshToken: configured = refreshTokenLifetime
+        case .authorizationCode: configured = authorizationCodeLifetime
+        }
+        guard let seconds = WholeSeconds.count(in: configured), seconds > 0 else {
+            throw lifetime.refusal
+        }
+        return seconds
     }
 
     // MARK: - Server Metadata (RFC 8414)
@@ -237,11 +302,16 @@ public actor OAuthServer {
     ///   - request: What to exchange, and for what.
     ///   - clientId: The client performing the exchange.
     /// - Returns: The issued token and what kind it is.
-    /// - Throws: `OAuthError.invalidGrant(_:)` for a subject that cannot be exchanged, or
-    ///   `OAuthError.invalidScope(_:)` for a request that would widen privilege.
+    /// - Throws: `OAuthError.invalidGrant(_:)` for a subject that cannot be exchanged,
+    ///   `OAuthError.invalidScope(_:)` for a request that would widen privilege, or
+    ///   `OAuthError.serverError(_:)` if this server's configured access-token lifetime is not
+    ///   a usable number of seconds — in which case nothing is stored.
     public func exchangeToken(
         _ request: TokenExchangeRequest, clientId: String
     ) async throws -> TokenExchangeResponse {
+        // Before anything else: a server that cannot say how long its tokens last issues none.
+        let expiresIn = try wholeSeconds(of: .accessToken)
+
         guard request.subjectTokenType == .accessToken else {
             throw OAuthError.invalidRequest(
                 "This server exchanges access tokens only. \(request.subjectTokenType.rawValue) "
@@ -286,7 +356,7 @@ public actor OAuthServer {
             accessToken: issued,
             issuedTokenType: .accessToken,
             tokenType: "Bearer",
-            expiresIn: Int(accessTokenLifetime),
+            expiresIn: expiresIn,
             scope: issuedScope)
     }
 
@@ -403,10 +473,19 @@ public actor OAuthServer {
     /// - Throws: `OAuthError.authorizationPending(_:)` while the user has not finished —
     ///   the expected answer for most of the flow — or `OAuthError.expiredToken(_:)`,
     ///   or `OAuthError.invalidGrant(_:)` for a code that is unknown, not this client's, or
-    ///   already spent.
+    ///   already spent. `OAuthError.serverError(_:)` if this server's configured access- or
+    ///   refresh-token lifetime is not a usable number of seconds; the code is left unspent.
     public func redeemDeviceCode(
         _ deviceCode: String, clientId: String
     ) async throws -> TokenResponse {
+        // Before the code's state is even read, and well before it is marked spent: a device
+        // code is single-use, so a refusal after that point would cost the user the flow.
+        // Asked on every poll rather than only on the approved one, so a device learns at once
+        // that this server cannot finish the flow, instead of after the user has done their
+        // part.
+        let expiresIn = try wholeSeconds(of: .accessToken)
+        _ = try wholeSeconds(of: .refreshToken)
+
         switch try await storage.deviceCodeState(deviceCode: deviceCode, clientId: clientId) {
         case .pending:
             throw OAuthError.authorizationPending(nil)
@@ -435,7 +514,7 @@ public actor OAuthServer {
             return TokenResponse(
                 accessToken: accessToken,
                 tokenType: "Bearer",
-                expiresIn: Int(accessTokenLifetime),
+                expiresIn: expiresIn,
                 refreshToken: refreshToken,
                 scope: scope)
         }
@@ -513,7 +592,8 @@ public actor OAuthServer {
     ///
     /// - Parameter request: Authorization request parameters
     /// - Returns: Authorization response with code
-    /// - Throws: `OAuthError` if request is invalid
+    /// - Throws: `OAuthError` if request is invalid, or `OAuthError.serverError(_:)` if this
+    ///   server's configured authorization-code lifetime is not a usable number of seconds.
     public func handleAuthorizationRequest(_ request: AuthorizationRequest) async throws -> AuthorizationResponse {
         // Validate response type
         guard request.responseType == "code" else {
@@ -573,6 +653,10 @@ public actor OAuthServer {
         } else {
             effectiveScope = defaultScope
         }
+
+        // After the request is known to be well-formed — so a redirect URI that is not this
+        // client's is still reported as that — and before a code exists.
+        _ = try wholeSeconds(of: .authorizationCode)
 
         // Generate authorization code
         let code = TokenGenerator.generateAuthorizationCode()
@@ -681,7 +765,9 @@ public actor OAuthServer {
     ///
     /// - Parameter request: Token request parameters
     /// - Returns: Token response with access and refresh tokens
-    /// - Throws: `OAuthError` if request is invalid
+    /// - Throws: `OAuthError` if request is invalid, or `OAuthError.serverError(_:)` if this
+    ///   server's configured access- or refresh-token lifetime is not a usable number of
+    ///   seconds — refused before the code is consumed or anything is stored.
     public func handleTokenRequest(_ request: TokenRequest) async throws -> TokenResponse {
         switch request.grantType {
         case "authorization_code":
@@ -694,6 +780,15 @@ public actor OAuthServer {
     }
 
     private func handleAuthorizationCodeGrant(_ request: TokenRequest) async throws -> TokenResponse {
+        // Before the code is consumed. It is single-use, and consuming it on behalf of a
+        // server that then cannot issue leaves the client holding nothing.
+        //
+        // The refresh-token lifetime is checked whether or not this client will be given a
+        // refresh token. Which it is depends on a client lookup that happens after the code is
+        // spent, and a server with an unusable lifetime is misconfigured for every client.
+        let expiresIn = try wholeSeconds(of: .accessToken)
+        _ = try wholeSeconds(of: .refreshToken)
+
         guard let code = request.code else {
             throw OAuthError.invalidRequest(nil)
         }
@@ -794,7 +889,7 @@ public actor OAuthServer {
         return TokenResponse(
             accessToken: accessToken,
             tokenType: "Bearer",
-            expiresIn: Int(accessTokenLifetime),
+            expiresIn: expiresIn,
             refreshToken: refreshToken,
             scope: authCode.scope
         )
@@ -821,6 +916,10 @@ public actor OAuthServer {
     }
 
     private func handleRefreshTokenGrant(_ request: TokenRequest) async throws -> TokenResponse {
+        // Only the access-token lifetime: this grant returns the refresh token it was given
+        // and issues no new one.
+        let expiresIn = try wholeSeconds(of: .accessToken)
+
         // First check if client exists and can use refresh_token grant
         guard let client = try await storage.getClient(clientId: request.clientId) else {
             throw OAuthError.invalidClient(nil)
@@ -863,7 +962,7 @@ public actor OAuthServer {
         return TokenResponse(
             accessToken: newAccessToken,
             tokenType: "Bearer",
-            expiresIn: Int(accessTokenLifetime),
+            expiresIn: expiresIn,
             refreshToken: refreshToken, // Return same refresh token
             scope: tokenInfo.scope
         )
