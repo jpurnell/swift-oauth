@@ -1,6 +1,25 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
+// SQLite, for the provider's token store.
+//
+// On Apple platforms the SDK ships a universal libsqlite3, and the module map's `link "sqlite3"`
+// finds it. Naming pkg-config or a Homebrew provider there is worse than naming nothing:
+// SwiftPM then puts Homebrew's library directory first on the link line, and on Apple Silicon
+// that copy is arm64 only — so the x86_64 half of a universal build (what
+// `xcodebuild -destination generic/platform=macOS` produces) links against nothing and every
+// `sqlite3_*` symbol is undefined. `#if os` here is the host building the package, which is
+// the question being asked.
+#if os(Linux)
+let sqlite: Target = .systemLibrary(
+    name: "CSQLite",
+    pkgConfig: "sqlite3",
+    providers: [.apt(["libsqlite3-dev"])]
+)
+#else
+let sqlite: Target = .systemLibrary(name: "CSQLite")
+#endif
+
 // SwiftOAuth — both halves of OAuth 2.0, with storage as a protocol.
 //
 // The two roles share a name and almost no behaviour: a provider issues tokens
@@ -67,14 +86,7 @@ let package = Package(
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-        .systemLibrary(
-            name: "CSQLite",
-            pkgConfig: "sqlite3",
-            providers: [
-                .brew(["sqlite3"]),
-                .apt(["libsqlite3-dev"])
-            ]
-        ),
+        sqlite,
         .target(
             name: "SwiftOAuthProvider",
             dependencies: [

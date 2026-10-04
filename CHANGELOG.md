@@ -5,6 +5,92 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-beta.6] — 2026-10-04
+
+A build fix and three crash fixes. A universal macOS build of anything linking the provider did
+not link; and a lifetime that was not a number — in a server's configuration, or in another
+server's device authorization response — ended the process instead of producing an error.
+
+No source break: no signature changed, and `OAuthServer.init` still does not throw. There are
+behaviour changes, listed under **Changed**; the one most likely to be noticed is that a
+provider configured with a zero or negative lifetime now refuses to issue, where it used to
+issue something already expired.
+
+### Fixed
+- **A misconfigured lifetime now refuses token issuance instead of crashing.** `OAuthServer`
+  takes `accessTokenLifetime`, `refreshTokenLifetime` and `authorizationCodeLifetime` as
+  `TimeInterval`, in an initializer that cannot throw. All four token-issuing paths — the
+  authorization-code grant, the refresh grant, the device grant and token exchange — computed
+  `expires_in` as `Int(accessTokenLifetime)`. For `.nan`, `.infinity` or a value past `Int.max`
+  that conversion is not an error but a trap: the first token request ended the process. And it
+  ran last, so by then a token whose expiry was `Date() + NaN` had already been stored, and on
+  the two single-use paths the authorization code or device code had already been spent.
+
+  Each path now establishes the whole-second lifetime **before it reads, stores or spends
+  anything**, and answers `server_error` — "This server's configured access-token lifetime is
+  not a usable number of seconds, so it cannot issue a token." — when it cannot. Nothing is
+  written and no code is consumed, so the same request succeeds once the configuration is
+  corrected. The refresh-token lifetime is checked the same way on the two paths that issue a
+  refresh token, and the authorization-code lifetime before a code is minted.
+
+- **A malformed device authorization response is an error instead of a crash.**
+  `DeviceFlow.poll(interval:expiresIn:…)` computed its poll bound as
+  `Int(expiresIn / max(interval, 1)) + 1` from the authorization server's own `interval` and
+  `expires_in` (RFC 8628 §3.2). A server stating a non-finite or out-of-range value — or a
+  client decoding with non-conforming floats allowed — trapped the polling process. Both values
+  must now be finite, positive and representable; otherwise `poll` throws `server_error` naming
+  the field, **without calling `redeem`**. `server_error` rather than `invalid_request`,
+  because RFC 6749 §5.2 defines the latter as a fault in what the client sent, and here the
+  request was fine and the answer was not. The bound itself is computed with a checked
+  conversion and a checked addition.
+
+- **`TaskSleeper.sleep(for:)` no longer traps on an interval that is not a wait.** It converted
+  with `UInt64(interval * 1_000_000_000)`, which traps for NaN, infinity, any negative, and
+  anything over about 584 years. It throws `server_error` for those and sleeps otherwise.
+
+- **Error bodies are encoded rather than interpolated.** The consent endpoint and the
+  authorization endpoint's unregistered-redirect refusal built their JSON as
+  `"{\"error\": \"\(error)\", \"error_description\": \"\(description)\"}"`. Every value
+  reaching them was a literal in this package, so no malformed body was ever sent — but that
+  was a property of the call sites, not of the construction, and a description containing a
+  quote would have produced a body that either failed to parse or carried fields nobody wrote.
+  All error bodies now go through one encoder.
+
+- **A universal macOS build of anything that links the provider now links.** `CSQLite` was
+  declared with `pkgConfig: "sqlite3"` and a Homebrew provider, so SwiftPM put Homebrew's library
+  directory first on the link line. On Apple Silicon that copy is arm64 only: the x86_64 half of
+  `xcodebuild -destination generic/platform=macOS` ignored it and every `sqlite3_*` symbol was
+  undefined. `swift build` and `swift test` build one architecture and never showed it. On Apple
+  platforms the package now names no provider and links the SDK's universal `libsqlite3`; Linux
+  keeps its pkg-config hint and `apt` provider. Reproduced first with this package's own test
+  bundles (`build-for-testing`, `SwiftOAuthProviderTests` and `SwiftOAuthConformanceTests` failed
+  to link), which now build.
+
+### Changed
+- **A lifetime of zero, a negative, or under one second is refused**, on the same terms as a
+  non-finite one. Such a server used to run: it issued tokens and codes that had already
+  expired. `expires_in` is an integer on the wire and zero whole seconds is not a lifetime, so
+  these are now the misconfiguration they always were. **If a test suite builds an
+  `OAuthServer` with a negative lifetime to obtain an already-expired code or token, it will
+  now see `server_error`** — this package's own suite did exactly that, and plants the expired
+  code in storage instead.
+- **A device code polled against a misconfigured provider answers `server_error` at once**,
+  rather than `authorization_pending` until the user approves and a failure after.
+- **`DeviceFlow.poll` refuses an `interval` of zero.** It used to be treated as one second for
+  the poll bound and then waited as zero. RFC 8628 §3.2's default for an *absent* interval is
+  five seconds, and `DeviceAuthorizationResponse` applies it when decoding, so a zero reaching
+  `poll` was stated by the server, and asks a client to poll without waiting.
+- **The bytes of an error body changed; its meaning did not.** Bodies are compact with sorted
+  keys — `{"error":"invalid_request","error_description":"…"}` — where the consent endpoint's
+  had a space after each colon and comma, and the token endpoint's key order varied from run to
+  run. Any JSON parser reads both alike. A test comparing the raw string will notice.
+
+### Added
+- **`WholeSeconds`** in `SwiftOAuthCore` — `count(in:)` and `nanoseconds(in:)`, the checked
+  conversions the fixes above share. Both return `nil` for a `TimeInterval` that is NaN,
+  infinite or out of range, and neither substitutes a default: what a non-number means depends
+  on whose it was.
+
 ## [1.0.0-beta.5] — 2026-09-08
 
 A conformance fix. A provider built on `beta.4` refuses a client that sends the resource
@@ -1103,7 +1189,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.5...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.6...HEAD
+[1.0.0-beta.6]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.5...v1.0.0-beta.6
 [1.0.0-beta.5]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.4...v1.0.0-beta.5
 [1.0.0-beta.4]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.3...v1.0.0-beta.4
 [1.0.0-beta.3]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.2...v1.0.0-beta.3
