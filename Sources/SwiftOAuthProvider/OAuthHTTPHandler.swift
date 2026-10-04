@@ -196,11 +196,7 @@ public struct OAuthHTTPHandler: Sendable {
             if case .invalidRequest = error {
                 // Check if redirect_uri is invalid (not a registered URI)
                 // We return a direct error response
-                return OAuthHTTPResponse(
-                    statusCode: 400,
-                    contentType: "application/json",
-                    body: "{\"error\": \"invalid_request\", \"error_description\": \"Invalid redirect_uri\"}"
-                )
+                return jsonErrorResponse("invalid_request", "Invalid redirect_uri")
             }
 
             return errorResponse(error)
@@ -327,9 +323,42 @@ public struct OAuthHTTPHandler: Sendable {
         OAuthHTTPResponse(
             statusCode: 400,
             contentType: "application/json",
-            body: "{\"error\": \"\(error)\", \"error_description\": \"\(description)\"}"
+            body: Self.errorBody(code: error, description: description)
         )
     }
+
+    /// The body of an error response — RFC 6749 §5.2.
+    ///
+    /// Encoded, never assembled from a string literal. Interpolating a description between
+    /// two quotes is correct for exactly as long as no description contains one, and the code
+    /// that does it cannot say whether that holds. Sorted keys, so the same error is the same
+    /// bytes on every run.
+    ///
+    /// - Parameters:
+    ///   - code: The `error` field.
+    ///   - description: The `error_description` field.
+    /// - Returns: A JSON object carrying both.
+    static func errorBody(code: String, description: String) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        do {
+            let data = try encoder.encode(
+                OAuthErrorResponse(error: code, errorDescription: description))
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            // Two strings cannot fail to encode. If that stops being true the response still
+            // has to be valid JSON, so it is a constant rather than anything built from the
+            // values that could not be encoded.
+            #if canImport(os)
+            Logger(subsystem: "com.swiftoauth.provider", category: "OAuthHTTPHandler")
+                .error("Error body not encodable: \(error.localizedDescription, privacy: .public)")
+            #endif
+            return unencodableErrorBody
+        }
+    }
+
+    /// What is sent if an error body cannot be encoded: a literal, with nothing spliced in.
+    private static let unencodableErrorBody = #"{"error":"server_error"}"#
 
     // MARK: - Token Endpoint
 
@@ -661,28 +690,11 @@ public struct OAuthHTTPHandler: Sendable {
             statusCode = 403
         }
 
-        let body: [String: String] = [
-            "error": error.code,
-            "error_description": error.detail ?? error.standardDescription
-        ]
-
-        do {
-            let data = try JSONEncoder().encode(body)
-            return OAuthHTTPResponse(
-                statusCode: statusCode,
-                contentType: "application/json",
-                body: String(data: data, encoding: .utf8) ?? "{}"
-            )
-        } catch {
-            #if canImport(os)
-            logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
-            #endif
-            return OAuthHTTPResponse(
-                statusCode: statusCode,
-                contentType: "application/json",
-                body: "{\"error\": \"\(error)\"}"
-            )
-        }
+        return OAuthHTTPResponse(
+            statusCode: statusCode,
+            contentType: "application/json",
+            body: Self.errorBody(
+                code: error.code, description: error.detail ?? error.standardDescription))
     }
 }
 

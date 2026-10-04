@@ -35,17 +35,45 @@ struct AuthorizationResourceHTTPTests {
     /// pass its negative case for the wrong reason.
     static let resource = "https://mcp.example.com"
 
+    /// Asks the policy itself, not the HTTP layer.
+    ///
+    /// This used to post a consent form carrying the constant and an invalid CSRF token, and
+    /// assert that the redirect did not say `invalid_target`. It could not fail. An invalid
+    /// CSRF token is refused before the resource policy is consulted — the handler answers
+    /// 400 with a JSON `invalid_request` body and **no `Location` header at all** — and the
+    /// assertion read the missing header as `""`, which contains nothing. A drifted constant
+    /// produced the same 400 and the same pass.
+    ///
+    /// The policy the server was built with is public, so the question is put to it directly:
+    /// the resource the suite names is the audience that policy binds.
     @Test("The suite's resource constant matches the policy the server is built with")
     func constantMatchesPolicy() async throws {
+        let (server, _) = try makeServer()
+        // SECURITY: parses this suite's own constant resource identifier; nothing is fetched from it.
+        let named = try #require(URL(string: Self.resource))
+
+        let audience = try await server.resourcePolicy.audience(for: [named])
+
+        #expect(audience == named,
+                "The suite constant has drifted from the policy in makeServer()")
+    }
+
+    /// What the request the test above used to send really gets back, pinned so the reason
+    /// that test was vacuous stays visible: a refusal for the CSRF token, and no redirect.
+    @Test("An invalid CSRF token is refused before the resource is considered")
+    func invalidCSRFIsRefusedWithoutRedirect() async throws {
         let (handler, _, clientId) = try await makeHandler()
+
         let response = await handler.handleConsentSubmission(formParams: [
             "action": "approve", "client_id": clientId,
             "redirect_uri": "https://client.example.com/callback",
             "csrf_token": "not-a-valid-token", "resource": Self.resource])
-        // Whatever else fails here, it must not be the target: the constant names the resource
-        // the server actually protects.
-        #expect(!(response.headers["Location"] ?? "").contains("error=invalid_target"),
-                "The suite constant has drifted from the policy in makeServer()")
+
+        #expect(response.statusCode == 400)
+        #expect(response.contentType == "application/json")
+        #expect(response.headers == [:])
+        #expect(response.body
+                == #"{"error":"invalid_request","error_description":"Invalid or expired csrf token"}"#)
     }
 
     /// A server that issues tokens for exactly one resource and refuses a request naming none.
