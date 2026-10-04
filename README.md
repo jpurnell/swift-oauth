@@ -48,7 +48,7 @@ problem, which is what stops each caller reinventing them slightly differently.
 ## Installation
 
 ```swift
-.package(url: "https://github.com/jpurnell/swift-oauth.git", exact: "1.0.0-beta.4")
+.package(url: "https://github.com/jpurnell/swift-oauth.git", exact: "1.0.0-beta.6")
 ```
 
 Pinned exactly, because SwiftPM's version ranges do not select prereleases: a `from:` range
@@ -60,13 +60,13 @@ Linux (CI runs `swift:6.2`).
 
 ## Status
 
-**1.0.0-beta.4.** The full OAuth 2.1 surface: authorization code with mandatory PKCE, refresh
+**1.0.0-beta.6.** The full OAuth 2.1 surface: authorization code with mandatory PKCE, refresh
 with rotation, client credentials, the device grant (RFC 8628), token exchange (RFC 8693),
 introspection (RFC 7662), revocation (RFC 7009), dynamic registration (RFC 7591), PAR (RFC
 9126), JAR (RFC 9101), DPoP (RFC 9449), mTLS-bound tokens (RFC 8705), resource indicators (RFC
 8707), and both metadata documents (RFC 8414, RFC 9728).
 
-469 tests; the quality gate runs 45 checkers with no errors and no warnings; Linux CI green.
+499 tests; the quality gate runs its 41 selected checkers with no errors and no warnings; Linux CI green.
 
 Three adoptions exercised it rather than a test suite alone: LedgeOS on the client half,
 SwiftMCPServer and SwiftMCPClient on the provider half. Eight defects in this package were found by a

@@ -467,28 +467,40 @@ struct OAuthServerTests {
             }
         }
 
+        /// The expired code is planted in storage rather than minted by a server configured
+        /// with a negative lifetime, which is how this test used to arrange it. A negative
+        /// lifetime is a misconfiguration and such a server now refuses to issue a code at all
+        /// (`LifetimeConfigurationTests`), so the old arrangement would test that refusal
+        /// instead of this one.
         @Test("Rejects expired authorization code")
         func rejectsExpiredAuthCode() async throws {
-            let server = try await OAuthServerTests.makeTestServer(codeLifetime: -60) // Expired immediately
+            let storage = try OAuthStorage(path: ":memory:")
+            let server = OAuthServer(
+                storage: storage, issuer: "https://example.com",
+                scopesSupported: ["mcp:tools"], served: .core, resourceIdentity: .colocated,
+                resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
 
             let client = try await server.registerClient(ClientRegistrationRequest(
                 clientName: "Expired Code Test",
                 redirectUris: ["http://localhost/callback"]
             ))
 
-            let authResponse = try await server.handleAuthorizationRequest(AuthorizationRequest(
-                responseType: "code",
+            let issued = Date().addingTimeInterval(-660)
+            let expired = AuthorizationCode(
+                code: "expired-code",
                 clientId: client.clientId,
                 redirectUri: "http://localhost/callback",
-                scope: nil,
-                state: nil,
+                scope: "mcp:tools",
                 codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
-                codeChallengeMethod: "S256"
-            ))
+                codeChallengeMethod: "S256",
+                expiresAt: issued.addingTimeInterval(600),
+                createdAt: issued)
+            #expect(expired.isExpired == true)
+            try await storage.saveAuthorizationCode(expired)
 
             let tokenRequest = TokenRequest(
                 grantType: "authorization_code",
-                code: authResponse.code,
+                code: expired.code,
                 redirectUri: "http://localhost/callback",
                 clientId: client.clientId,
                 clientSecret: client.clientSecret,
@@ -1057,25 +1069,6 @@ struct OAuthServerTests {
 
             #expect(isValid == false)
         }
-    }
-}
-
-// MARK: - Test Helper Extension
-
-extension OAuthServerTests {
-    static func makeTestServer(codeLifetime: TimeInterval = 600) async throws -> OAuthServer {
-        let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(
-            storage: storage,
-            issuer: "https://example.com",
-            scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
-            authorizationCodeLifetime: codeLifetime,
-            // This suite predates RFC 8707 and exercises grants, PKCE and code lifetimes. The
-            // strict default would make every one of its authorization requests carry a
-            // resource indicator that has nothing to do with what it tests; the strict path has
-            // its own coverage in AuthorizationResourceTests.
-            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true)
-        )
     }
 }
 

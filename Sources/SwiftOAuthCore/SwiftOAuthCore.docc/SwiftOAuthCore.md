@@ -73,3 +73,7 @@ machine-to-machine APIs. A provider built on this package still rejects it —
 ### Generating tokens
 
 - ``TokenGenerator``
+
+### Lifetimes as integers
+
+- ``WholeSeconds``

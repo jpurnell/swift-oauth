@@ -18,8 +18,18 @@ public struct TaskSleeper: DeviceFlowSleeper {
     public init() {}
 
     /// Waits, using the cooperative task clock.
+    ///
+    /// - Parameter interval: Seconds to wait. Zero returns at once.
+    /// - Throws: `OAuthError.serverError(_:)` when `interval` is NaN, infinite, negative, or
+    ///   too long to express in nanoseconds. The interval a device flow waits is the one the
+    ///   authorization server stated, so a value that is not a wait is that server's fault,
+    ///   and is reported rather than converted — the conversion is a trap, not an error.
+    ///   Also throws `CancellationError` if the task is cancelled while waiting.
     public func sleep(for interval: TimeInterval) async throws {
-        try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+        guard let nanoseconds = WholeSeconds.nanoseconds(in: interval) else {
+            throw OAuthError.serverError("The polling interval is not a usable number of seconds.")
+        }
+        try await Task.sleep(nanoseconds: nanoseconds)
     }
 }
 
@@ -43,8 +53,10 @@ public enum DeviceFlow {
     ///   - redeem: One attempt at the token endpoint.
     /// - Returns: The tokens, once the user approves.
     /// - Throws: `OAuthError.accessDenied(_:)` if the user refused,
-    ///   `OAuthError.expiredToken(_:)` if the code died or the local bound was reached, or
-    ///   whatever `redeem` threw for a failure that is not a polling state.
+    ///   `OAuthError.expiredToken(_:)` if the code died or the local bound was reached,
+    ///   `OAuthError.serverError(_:)` if `interval` or `expiresIn` is not a positive, finite
+    ///   number of seconds — in which case `redeem` is never called — or whatever `redeem`
+    ///   threw for a failure that is not a polling state.
     public static func poll(
         interval: TimeInterval,
         expiresIn: TimeInterval,
@@ -52,13 +64,27 @@ public enum DeviceFlow {
         elapsed: @Sendable () async -> TimeInterval,
         redeem: @Sendable () async throws -> TokenResponse
     ) async throws -> TokenResponse {
+        // Both values are another server's JSON, and are checked before anything is done
+        // with them. Unchecked, a NaN or an out-of-range value reaches an integer conversion
+        // below, which does not fail but stops the process.
+        try requireUsable(interval, field: "interval")
+        try requireUsable(expiresIn, field: "expires_in")
+
         var schedule = DevicePollSchedule(interval: interval)
 
         // The most polls that can fit in the code's lifetime, plus one. `while true` with
         // exits scattered through the body is a loop whose termination has to be argued;
         // this is one whose bound can be read. The `elapsed` check below still ends it early
         // when real time has passed — this is the backstop, not the mechanism.
-        let maximumPolls = max(1, Int(expiresIn / max(interval, 1)) + 1)
+        //
+        // A sub-second interval is counted as one second here, so the bound never exceeds the
+        // lifetime in seconds. That makes the quotient no larger than `expiresIn`, which was
+        // just shown to be representable; the conversion and the addition are checked anyway,
+        // because "cannot happen" is an argument and a trap is not an error.
+        let (maximumPolls, overflowed) = try wholeSeconds(
+            expiresIn / max(interval, 1), field: "expires_in"
+        ).addingReportingOverflow(1)
+        guard !overflowed else { throw malformed("expires_in") }
 
         for _ in 0..<maximumPolls {
             do {
@@ -82,5 +108,42 @@ public enum DeviceFlow {
 
         throw OAuthError.expiredToken(
             "The device code's lifetime elapsed before the user finished.")
+    }
+
+    // MARK: - What the authorization server stated
+
+    /// Refuses a value from the device authorization response that is not a positive number
+    /// of seconds.
+    ///
+    /// Zero is refused along with the rest. RFC 8628 §3.2 makes `expires_in` REQUIRED and
+    /// defines it as a lifetime, and a zero `interval` asks a client to poll without waiting —
+    /// the specification's own default when the field is absent is five seconds, and the
+    /// decoder applies that default, so a zero here was stated rather than omitted.
+    private static func requireUsable(_ value: TimeInterval, field: String) throws {
+        // NaN fails this comparison, as every comparison with NaN does.
+        guard value > 0 else { throw malformed(field) }
+        // Infinity and anything past `Int.max` pass it, and are refused here.
+        _ = try wholeSeconds(value, field: field)
+    }
+
+    /// The whole seconds in a value the authorization server stated.
+    private static func wholeSeconds(_ value: TimeInterval, field: String) throws -> Int {
+        guard let seconds = WholeSeconds.count(in: value) else { throw malformed(field) }
+        return seconds
+    }
+
+    /// The error for a device authorization response this client cannot act on.
+    ///
+    /// `server_error`, not `invalid_request`. RFC 6749 §5.2 defines `invalid_request` as a
+    /// fault in what the *client* sent, and a caller reading it would go looking for one; the
+    /// request here was fine and the server's answer was not. `server_error` is the code for
+    /// a server that "encountered an unexpected condition", it is what
+    /// `OAuthError.init(code:description:)` already uses for a response this package cannot
+    /// interpret, and it is transient — which is right, since asking again is the one thing
+    /// that might yield a sane response.
+    private static func malformed(_ field: String) -> OAuthError {
+        .serverError(
+            "The authorization server's device authorization response has an \(field) that "
+            + "is not a usable number of seconds.")
     }
 }
