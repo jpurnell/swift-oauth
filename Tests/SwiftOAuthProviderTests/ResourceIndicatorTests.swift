@@ -18,7 +18,6 @@ struct ResourceIndicatorPolicyTests {
 
     /// Built rather than stored, so the fixtures need no force unwrap.
     private func url(_ string: String) throws -> URL {
-        // SECURITY: parses a literal written in this test; no request is ever issued from it.
         try #require(URL(string: string), "not a URL: \(string)")
     }
 
@@ -158,7 +157,6 @@ struct ResourceIndicatorMetadataAgreementTests {
         let server = try await Self.makeServer(issuer: "https://mcp.example.com")
         let metadata = await server.getProtectedResourceMetadata()
 
-        // SECURITY: parses the identifier this server published about itself.
         let advertised = try #require(URL(string: metadata.resource))
         let policy = ResourceIndicatorPolicy.protecting(advertised)
 
@@ -176,7 +174,6 @@ struct ResourceIndicatorMetadataAgreementTests {
     func trailingSlashOnEmptyPathIsEquivalent() async throws {
         let server = try await Self.makeServer(issuer: "https://mcp.example.com")
         let metadata = await server.getProtectedResourceMetadata()
-        // SECURITY: parses literals written in this test; no request is issued from either.
         let advertised = try #require(URL(string: metadata.resource))
         let withSlash = try #require(URL(string: "https://mcp.example.com/"))
 
@@ -189,12 +186,10 @@ struct ResourceIndicatorMetadataAgreementTests {
 
     @Test("Case and default ports are insignificant")
     func caseAndDefaultPortAreNormalised() throws {
-        // SECURITY: parses literals written in this test; no request is issued from any.
         let canonical = try #require(URL(string: "https://mcp.example.com"))
         let policy = ResourceIndicatorPolicy.protecting(canonical)
 
         for variant in ["https://MCP.Example.COM", "https://mcp.example.com:443", "HTTPS://mcp.example.com/"] {
-            // SECURITY: parses a literal written in this test; no request is issued from it.
             let url = try #require(URL(string: variant))
             #expect(try policy.audience(for: [url]) == url, "\(variant) should be the same resource")
         }
@@ -204,7 +199,6 @@ struct ResourceIndicatorMetadataAgreementTests {
     /// select a different resource, so it stays significant.
     @Test("A trailing slash on a non-empty path remains a different resource")
     func trailingSlashOnNonEmptyPathIsSignificant() throws {
-        // SECURITY: parses literals written in this test; no request is issued from either.
         let policy = ResourceIndicatorPolicy.protecting(try #require(URL(string: "https://mcp.example.com/mcp")))
         let other = try #require(URL(string: "https://mcp.example.com/mcp/"))
 
@@ -222,7 +216,6 @@ struct ResourceIndicatorMetadataAgreementTests {
     /// The server was right that the two strings differed and wrong that it mattered.
     @Test("The reported roseclub refusal no longer occurs")
     func reportedTrailingSlashRefusalIsFixed() throws {
-        // SECURITY: parses literals written in this test; no request is issued from either.
         let configured = try #require(URL(string: "https://roseclub.org:8081"))
         let sentByClient = try #require(URL(string: "https://roseclub.org:8081/"))
 
@@ -232,13 +225,11 @@ struct ResourceIndicatorMetadataAgreementTests {
 
     @Test("A genuinely different resource is still refused")
     func differentResourceIsRefused() throws {
-        // SECURITY: parses literals written in this test; no request is issued from any.
         let policy = ResourceIndicatorPolicy.protecting(try #require(URL(string: "https://mcp.example.com")))
 
         // SECURITY: the insecure scheme under test — rewriting it to https would assert that a different resource is refused for the wrong reason.
         let variants = ["https://mcp.example.com:8081", "https://other.example.com", "http://mcp.example.com"]
         for variant in variants {
-            // SECURITY: parses a literal written in this test; no request is issued from it.
             let url = try #require(URL(string: variant))
             let error = #expect(throws: OAuthError.self) {
                 _ = try policy.audience(for: [url])

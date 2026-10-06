@@ -192,7 +192,6 @@ struct DiscoveryResourceTests {
 
     @Test("A discovered resource identifier reaches the configuration")
     func resourceReachesConfiguration() throws {
-        // SECURITY: a literal written in this test; nothing is fetched from it.
         let identifier = try #require(URL(string: "https://api.example.com"))
 
         let configuration = try metadata().configuration(

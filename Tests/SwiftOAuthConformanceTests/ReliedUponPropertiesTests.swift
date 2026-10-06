@@ -173,7 +173,6 @@ struct ReliedUponPropertiesTests {
     /// was never minted for.
     @Test("An unknown resource is refused, or a token works where it should not")
     func resourceIndicatorIsValidated() throws {
-        // SECURITY: literals written in this test; nothing is fetched from them.
         let api = try #require(URL(string: "https://api.example.com"))
         let stranger = try #require(URL(string: "https://elsewhere.example.com"))
         let policy = ResourceIndicatorPolicy.protecting(api)

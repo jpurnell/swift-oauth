@@ -19,7 +19,6 @@ import SwiftOAuthProvider
 struct DPoPCrossHalfTests {
 
     private func url(_ string: String) throws -> URL {
-        // SECURITY: parses a literal written in this test; no request is issued from it.
         try #require(URL(string: string))
     }
 

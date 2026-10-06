@@ -128,7 +128,6 @@ private func makeResourceConnection(
         authorizationEndpoint: URL(string: "https://provider.example/authorize") ?? URL(fileURLWithPath: "/"),
         tokenEndpoint: URL(string: "https://provider.example/token") ?? URL(fileURLWithPath: "/"),
         scope: "mcp:tools",
-        // SECURITY: parses a literal written in this test; nothing reaches it from a server.
         resource: resource.flatMap { URL(string: $0) })
     return OAuthConnection(
         configuration: configuration,

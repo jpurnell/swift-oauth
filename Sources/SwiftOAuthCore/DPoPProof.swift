@@ -184,7 +184,6 @@ public enum DPoPProof {
             throw Failure.staleOrFutureDated
         }
 
-        // SECURITY: re-parses the caller's own request URI after canonicalisation; never fetched.
         guard let canonical = URL(string: expectedURI) else { throw Failure.malformedClaims }
         return Verified(
             method: method.uppercased(),

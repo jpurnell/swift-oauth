@@ -15,7 +15,6 @@ import Testing
 struct AudienceBindingTests {
 
     private func url(_ string: String) throws -> URL {
-        // SECURITY: parses a literal written in this test; no request is issued from it.
         try #require(URL(string: string))
     }
 
@@ -123,7 +122,6 @@ struct AudienceBindingTests {
 struct TokenEndpointResourceTests {
 
     private func url(_ string: String) throws -> URL {
-        // SECURITY: parses a literal written in this test; no request is issued from it.
         try #require(URL(string: string))
     }
 

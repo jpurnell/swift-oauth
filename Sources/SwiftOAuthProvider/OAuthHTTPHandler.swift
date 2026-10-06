@@ -404,8 +404,6 @@ public struct OAuthHTTPHandler: Sendable {
                 // Read separately because it may repeat. A value that is not a URL is dropped
                 // rather than rejected here — the policy refuses what it does not know, and it
                 // is the one place that decision belongs.
-                //
-                // SECURITY: parses client-supplied identifiers; nothing is fetched from them.
                 resource: Self.formValues(for: "resource", in: body).compactMap { URL(string: $0) }
             )
 

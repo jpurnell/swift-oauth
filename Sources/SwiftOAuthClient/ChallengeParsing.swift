@@ -57,7 +57,6 @@ public struct BearerChallenge: Sendable, Equatable {
             .map(String.init) ?? []
         // The pointer is parsed, not followed. Fetching it here would make reading a header
         // into a network request to an address the header chose.
-        // SECURITY: parses a URL from a server header; it is returned to the caller, never fetched.
         resourceMetadata = parameters["resource_metadata"].flatMap { URL(string: $0) }
     }
 

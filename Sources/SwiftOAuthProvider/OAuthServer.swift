@@ -149,7 +149,6 @@ public actor OAuthServer {
         // invites the two to drift, and a server that advertises a resource then refuses it
         // breaks the most conformant clients first — they read the metadata and obeyed it.
         self.resourcePolicy = resourcePolicy
-            // SECURITY: parses this server's own configured issuer; nothing is fetched from it.
             ?? URL(string: issuer).map { ResourceIndicatorPolicy.protecting($0) }
             ?? ResourceIndicatorPolicy(known: [], allowsUnspecified: true)
         self.accessTokenLifetime = accessTokenLifetime
@@ -437,7 +436,6 @@ public actor OAuthServer {
             deviceCode: deviceCode, userCode: userCode, clientId: clientId,
             scope: scope, expiresAt: expiresAt)
 
-        // SECURITY: builds this server's own verification URL from its configured issuer.
         let verificationURI = URL(string: issuer + "/device")
             ?? URL(fileURLWithPath: "/device")
 
@@ -672,8 +670,6 @@ public actor OAuthServer {
         // Fixing the audience onto the code also closes a subtler hole: with it decided at
         // redemption, a client could name the resource the user saw here and a different one at
         // `/token`, and nothing on the code contradicted it.
-        //
-        // SECURITY: parses a client-supplied identifier; nothing is fetched from it.
         let requestedResource = request.resource.flatMap { URL(string: $0) }
         let audience = try resourcePolicy.audience(for: requestedResource.map { [$0] } ?? [])
 

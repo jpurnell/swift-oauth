@@ -21,7 +21,6 @@ struct AuthorizationResourceTests {
         knownResource: String = "https://api.example.com"
     ) async throws -> (OAuthServer, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
-        // SECURITY: a literal written in this test; nothing is fetched from it.
         let api = try #require(URL(string: knownResource))
         let server = await OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",

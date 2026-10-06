@@ -673,7 +673,6 @@ public actor OAuthStorage {
         // nothing" — the honest answer, since it never was.
         let audience = sqlite3_column_text(stmt, 4)
             .map { String(cString: $0) }
-            // SECURITY: parses a value this server wrote itself when it issued the token.
             .flatMap { URL(string: $0) }
 
         if revoked {
@@ -1233,7 +1232,6 @@ public actor OAuthStorage {
         // the honest answer, since it never was.
         let audience = sqlite3_column_text(stmt, 9)
             .map { String(cString: $0) }
-            // SECURITY: parses a value this server wrote itself when it issued the code.
             .flatMap { URL(string: $0) }
 
         return AuthorizationCode(

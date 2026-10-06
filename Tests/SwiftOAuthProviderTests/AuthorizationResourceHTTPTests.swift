@@ -49,7 +49,6 @@ struct AuthorizationResourceHTTPTests {
     @Test("The suite's resource constant matches the policy the server is built with")
     func constantMatchesPolicy() async throws {
         let (server, _) = try makeServer()
-        // SECURITY: parses this suite's own constant resource identifier; nothing is fetched from it.
         let named = try #require(URL(string: Self.resource))
 
         let audience = try await server.resourcePolicy.audience(for: [named])

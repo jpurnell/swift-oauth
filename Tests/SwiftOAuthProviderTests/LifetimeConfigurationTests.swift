@@ -85,7 +85,6 @@ struct LifetimeConfigurationTests {
         }
 
         func remove() {
-            // SECURITY: removes only the uniquely-named temp file this fixture just created.
             try?FileManager.default.removeItem(atPath: path)
         }
 
