@@ -22,7 +22,7 @@ struct AuthorizationResourceTests {
     ) async throws -> (OAuthServer, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
         let api = try #require(URL(string: knownResource))
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
             scopesSupported: ["read"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [api], allowsUnspecified: true))
@@ -84,7 +84,7 @@ struct AuthorizationResourceTests {
         // A second resource this server also serves — so the refusal is about *this code*,
         // not about the resource being unknown.
         let other = try #require(URL(string: "https://reports.example.com"))
-        let widened = await OAuthServer(
+        let widened = OAuthServer(
             storage: try OAuthStorage(path: ":memory:"), issuer: "https://mcp.example.com",
             scopesSupported: ["read"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [other], allowsUnspecified: true))

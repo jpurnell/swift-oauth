@@ -19,7 +19,7 @@ struct IntrospectionEndpointTests {
         issuer: String = "https://mcp.example.com"
     ) async throws -> (server: OAuthServer, storage: OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
-        return (await OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated), storage)
+        return (OAuthServer(storage: storage, issuer: issuer, scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated), storage)
     }
 
     private func url(_ string: String) throws -> URL {
@@ -75,7 +75,8 @@ struct IntrospectionEndpointTests {
     /// learns nothing either way, which is the point.
     @Test("An unknown token is inactive rather than an error")
     func unknownTokenIsInactive() async throws {
-        let (server, storage) = try await makeServer()
+        // Nothing is seeded: the storage half of the pair has no part in this test.
+        let (server, _) = try await makeServer()
 
         let result = try await server.introspect(token: "never-existed")
 
@@ -130,11 +131,11 @@ struct IntrospectionHTTPTests {
     private func makeHandler() async throws
         -> (OAuthHTTPHandler, OAuthStorage, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated)
+        let server = OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated)
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "prober",
             redirectUris: ["https://app.example.com/callback"]))
-        return (await OAuthHTTPHandler(server: server), storage, client)
+        return (OAuthHTTPHandler(server: server), storage, client)
     }
 
     /// An authenticated caller gets the answer.

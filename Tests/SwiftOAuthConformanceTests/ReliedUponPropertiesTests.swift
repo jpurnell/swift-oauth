@@ -27,7 +27,7 @@ struct ReliedUponPropertiesTests {
 
     private func makeServer() async throws -> (OAuthServer, OAuthStorage, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
@@ -83,10 +83,10 @@ struct ReliedUponPropertiesTests {
     @Test("A token request authenticates its client, or anyone redeems anyone's code")
     func tokenEndpointAuthenticatesTheClient() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
-        let handler = await OAuthHTTPHandler(server: server)
+        let handler = OAuthHTTPHandler(server: server)
         let client = try await server.registerClient(ClientRegistrationRequest(
             clientName: "rp", redirectUris: ["https://app.example.com/callback"]))
 
@@ -136,10 +136,10 @@ struct ReliedUponPropertiesTests {
     @Test("A bound token is refused as a bearer token, or the binding is discarded")
     func boundTokensRefusedAsBearer() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
-        let handler = await OAuthHTTPHandler(server: server)
+        let handler = OAuthHTTPHandler(server: server)
 
         try await storage.saveAccessToken(
             token: "dpop-bound", clientId: "c", scope: nil,

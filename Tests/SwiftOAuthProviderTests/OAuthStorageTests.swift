@@ -20,9 +20,12 @@ struct OAuthStorageTests {
     struct InitializationTests {
 
         @Test("Creates in-memory database")
-        func createsInMemoryDatabase() throws {
+        func createsInMemoryDatabase() async throws {
             let storage = try OAuthStorageTests.makeTestStorage()
-            #expect(true, "Storage created successfully: \(type(of: storage))")
+            // A fresh in-memory database answers a query and holds nothing. Reaching this line
+            // already shows the initialiser did not throw; the read shows the schema is usable.
+            let client = try await storage.getClient(clientId: "never-registered")
+            #expect(client == nil)
         }
 
         @Test("Creates file-based database")
@@ -541,9 +544,12 @@ struct OAuthStorageTests {
             async let revoke: Void = storage.revokeAccessToken(token: token)
 
             // Both should complete without crashing
-            let result = try await validate
+            // The racing read may land on either side of the revoke, so its answer is not
+            // asserted. What is fixed is the state once both have finished: revoked.
+            _ = try await validate
             _ = try await revoke
-            #expect(true, "Concurrent validate (\(result)) and revoke completed without data race")
+            let afterwards = try await storage.validateAccessToken(token: token)
+            #expect(!afterwards.isValid)
         }
     }
 }

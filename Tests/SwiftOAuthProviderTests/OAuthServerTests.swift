@@ -11,7 +11,7 @@ struct OAuthServerTests {
 
     static func makeTestServer() async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(storage: storage, issuer: "https://example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
+        return OAuthServer(storage: storage, issuer: "https://example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             // These suites predate RFC 8707 and exercise other things — grants, PKCE, consent, wire
             // shapes. Strict resource indicators would make every one of them carry a `resource`
             // parameter that has nothing to do with what they test. The strict default has its own
@@ -143,11 +143,10 @@ struct OAuthServerTests {
                 redirectUris: [] // Empty is invalid
             )
 
-            do {
+            // The specific error, not merely that one was thrown: a registration refused
+            // because storage failed would have satisfied a bare `catch` just as well.
+            await #expect(throws: OAuthError.invalidRequest(nil)) {
                 _ = try await server.registerClient(request)
-                Issue.record("Should have thrown error for empty redirect URIs")
-            } catch {
-                #expect(true, "Correctly rejected empty redirect URIs")
             }
         }
     }

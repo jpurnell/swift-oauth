@@ -24,7 +24,7 @@ struct ServedCapabilitiesTests {
 
     private func makeServer(_ served: ServedCapabilities) async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(
+        return OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
             scopesSupported: ["read"], served: served, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
@@ -138,7 +138,7 @@ struct MetadataFieldOwnershipTests {
 
     private func makeServer(_ served: ServedCapabilities) async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(
+        return OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
             scopesSupported: ["read"], served: served, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
@@ -198,7 +198,7 @@ struct MetadataEncodingTests {
 
     private func encoded(scopes: [String]?) async throws -> [String: Any] {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
             scopesSupported: scopes, served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))

@@ -21,7 +21,7 @@ struct PKCERequiredTests {
 
     private func makeServer() async throws -> (OAuthServer, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
@@ -95,7 +95,7 @@ struct TokenEndpointPKCETests {
     @Test("A stored code with no challenge is refused at the token endpoint")
     func storedCodeWithoutChallengeIsRefused() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(

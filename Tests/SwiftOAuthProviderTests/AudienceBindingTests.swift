@@ -133,7 +133,7 @@ struct TokenEndpointResourceTests {
     @Test("A server accepts the resource it advertises, with no configuration")
     func acceptsItsOwnAdvertisedResource() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated)
+        let server = OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated)
 
         let metadata = await server.getProtectedResourceMetadata()
         let advertised = try url(metadata.resource)
@@ -146,7 +146,7 @@ struct TokenEndpointResourceTests {
     @Test("The token endpoint refuses a request naming no resource")
     func refusesUnspecifiedResource() async throws {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated)
+        let server = OAuthServer(storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated)
 
         let policy = await server.resourcePolicy
         let error = #expect(throws: OAuthError.self) {
@@ -161,7 +161,7 @@ struct TokenEndpointResourceTests {
     func explicitPolicyOverrides() async throws {
         let storage = try OAuthStorage(path: ":memory:")
         let api = try url("https://api.example.com")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage,
             issuer: "https://auth.example.com",
             scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,

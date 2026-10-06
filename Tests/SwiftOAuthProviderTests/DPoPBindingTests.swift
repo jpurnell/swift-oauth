@@ -15,7 +15,7 @@ struct DPoPBindingTests {
 
     private func makeServer() async throws -> (OAuthServer, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         return (server, storage)
@@ -124,10 +124,10 @@ struct BoundTokenSchemeTests {
 
     private func makeHandler() async throws -> (OAuthHTTPHandler, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
-        return (await OAuthHTTPHandler(server: server), storage)
+        return (OAuthHTTPHandler(server: server), storage)
     }
 
     /// An ordinary bearer token still works. The refusal must be narrow, or every existing
@@ -189,10 +189,10 @@ struct CertificateBoundTokenTests {
 
     private func makeHandler() async throws -> (OAuthHTTPHandler, OAuthStorage) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
-        return (await OAuthHTTPHandler(server: server), storage)
+        return (OAuthHTTPHandler(server: server), storage)
     }
 
     /// A token issued against a certificate records its thumbprint.

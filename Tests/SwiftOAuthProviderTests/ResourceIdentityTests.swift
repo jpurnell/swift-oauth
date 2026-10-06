@@ -23,7 +23,7 @@ struct ResourceIdentityTests {
 
     private func makeServer(_ identity: ResourceIdentity) async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(
+        return OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
             scopesSupported: ["read"], served: .core, resourceIdentity: identity,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))

@@ -21,7 +21,7 @@ struct MetadataAccuracyTests {
 
     private func makeServer(scopes: [String]? = ["read"]) async throws -> OAuthServer {
         let storage = try OAuthStorage(path: ":memory:")
-        return await OAuthServer(
+        return OAuthServer(
             storage: storage, issuer: "https://mcp.example.com",
             scopesSupported: scopes,
             // These tests assert what is advertised, so they declare the full set — a

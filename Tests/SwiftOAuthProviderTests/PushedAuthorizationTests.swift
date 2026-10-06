@@ -18,7 +18,7 @@ struct PushedAuthorizationTests {
 
     private func makeServer() async throws -> (OAuthServer, ClientRegistrationResponse) {
         let storage = try OAuthStorage(path: ":memory:")
-        let server = await OAuthServer(
+        let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
         let client = try await server.registerClient(ClientRegistrationRequest(
