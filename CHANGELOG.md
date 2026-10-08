@@ -87,6 +87,15 @@ consumer can meet — each is under **Changed**, with what to do about it.
   times anything a conforming server sends and still small enough to be no cost to hold. It is
   not configurable; no deployment was found that would need it to be.
 
+  **On Linux the cut-off is late, not exact.** swift-corelibs-foundation hands body data to
+  a delegate on one queue while libcurl goes on reading on another, and cannot pause a
+  transfer (its own comment in `_HTTPURLProtocol.didReceiveResponse` says so), so
+  cancellation takes effect some tens of milliseconds after the limit is passed. The caller
+  gets `OAuthResponseTooLarge` at the limit and nothing received is kept by this package,
+  but what arrives in that interval is received and discarded: over loopback in CI, 49 to
+  67 MiB. Over a real network it is that interval's worth of the link. It is bounded, and it
+  is not 1 MiB. On Apple platforms the server had sent well under half of what it offered.
+
   On Linux this required sending differently. swift-corelibs-foundation delivers body data
   incrementally only to a *session's* delegate: a task made with a completion handler is
   buffered whole in memory before the handler runs (`_NativeProtocol
@@ -254,8 +263,9 @@ consumer can meet — each is under **Changed**, with what to do about it.
   certificate, installs it in the container's bundle, and the tests use the ordinary public
   transports. Where that has not been done the tests report as skipped, and the CI job fails
   if they were.
-- `ResponseSizeWireTests`: a 64 MiB chunked body cut off for each kind of request, asserting
-  on the *server's* count of bytes sent; a declared length refused at the headers; the exact
+- `ResponseSizeWireTests`: a 1 GiB chunked body cut off for each kind of request, asserting
+  on the *server's* count of bytes sent (64 MiB at first; raised when Linux CI showed the
+  cut-off there lags by about that much over loopback); a declared length refused at the headers; the exact
   boundary; an oversized error body. Run against the unchanged transports: "the server sent
   67108864 of 67108864 bytes".
 - `DefaultSessionIsolationTests`: a cookie not returned; a stored credential not offered; a

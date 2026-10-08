@@ -19,9 +19,18 @@ struct ResponseSizeWireTests {
 
     static let limit = OAuthResponseTooLarge.maximumResponseBytes
 
-    /// Enough to be unmistakable, and an end so that a client which reads it all produces a
-    /// failed assertion rather than an exhausted machine.
-    static let offered = 64 * limit
+    /// A gibibyte: enough to be unmistakable, and an end so that a client which reads it all
+    /// produces a failed assertion rather than an exhausted machine.
+    ///
+    /// It was 64 MiB, which is enough on Apple platforms and was not on Linux. There the
+    /// count is kept by a delegate that swift-corelibs-foundation calls on a queue of its
+    /// own, behind the queue libcurl reads on, and a cancellation crosses back the same way
+    /// — so the transfer stops some tens of milliseconds after the limit is passed, not at
+    /// it. Over loopback that is tens of megabytes: CI measured 49 to 67 MiB sent before the
+    /// connection closed, with the right error already thrown. The lag is real and is the
+    /// platform's (it cannot pause a transfer; see `_HTTPURLProtocol.didReceiveResponse`), so
+    /// the test offers enough that stopping late and not stopping are different results.
+    static let offered = 1_024 * limit
 
     private static func endpoint(on server: RedirectWireServer) throws -> URL {
         try #require(server.url(path: "/oauth/endpoint"))
