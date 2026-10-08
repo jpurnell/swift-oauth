@@ -40,14 +40,37 @@ public final class RedirectWireServer: Sendable {
         case answer
         /// Answer with this redirect status and this `Location`.
         case redirect(status: Int, location: String)
+        /// Record the request and never answer it.
+        case silence
+    }
+
+    /// What has arrived.
+    struct Log: Sendable {
+        var requests: [Request] = []
+    }
+
+    /// What a test may need to wait for, as a stream.
+    ///
+    /// A stream rather than a stored continuation because iterating one ends when the waiting
+    /// task is cancelled — so a test whose event never comes is stopped by its time limit
+    /// instead of hanging the run.
+    struct Signals: Sendable {
+        let arrivals: AsyncStream<Void>
+        let arrived: AsyncStream<Void>.Continuation
+
+        init() {
+            (arrivals, arrived) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        }
     }
 
     private let channel: any Channel
-    private let recorded: NIOLockedValueBox<[Request]>
+    private let recorded: NIOLockedValueBox<Log>
+    private let signals: Signals
 
-    private init(channel: any Channel, recorded: NIOLockedValueBox<[Request]>) {
+    private init(channel: any Channel, recorded: NIOLockedValueBox<Log>, signals: Signals) {
         self.channel = channel
         self.recorded = recorded
+        self.signals = signals
     }
 
     /// Starts a server on a port the kernel assigns.
@@ -58,7 +81,8 @@ public final class RedirectWireServer: Sendable {
     public static func start(
         _ behaviour: @escaping @Sendable () -> Behaviour
     ) async throws -> RedirectWireServer {
-        let recorded = NIOLockedValueBox<[Request]>([])
+        let recorded = NIOLockedValueBox(Log())
+        let signals = Signals()
         let bootstrap = ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
             .serverChannelOption(.backlog, value: 16)
             .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
@@ -66,11 +90,11 @@ public final class RedirectWireServer: Sendable {
                 channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.configureHTTPServerPipeline()
                     try channel.pipeline.syncOperations.addHandler(
-                        RecordingHandler(behaviour: behaviour, recorded: recorded))
+                        RecordingHandler(behaviour: behaviour, recorded: recorded, signals: signals))
                 }
             }
         let channel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
-        return RedirectWireServer(channel: channel, recorded: recorded)
+        return RedirectWireServer(channel: channel, recorded: recorded, signals: signals)
     }
 
     /// The port the kernel assigned, or `0` if the channel has no address.
@@ -81,6 +105,14 @@ public final class RedirectWireServer: Sendable {
     /// This server's origin, as an error is expected to name it.
     public var origin: String {
         "http://127.0.0.1:\(port)"
+    }
+
+    /// Returns once a request has arrived. For one waiter at a time.
+    ///
+    /// An event, not a pause: a test that needs a request to be in flight before it acts waits
+    /// here rather than sleeping for an interval that is long enough on an idle machine.
+    public func waitForRequest() async {
+        for await _ in signals.arrivals { return }
     }
 
     /// A URL on this server.
@@ -101,7 +133,7 @@ public final class RedirectWireServer: Sendable {
 
     /// Every request received so far, in order.
     public var requests: [Request] {
-        recorded.withLockedValue { $0 }
+        recorded.withLockedValue { $0.requests }
     }
 
     /// Stops listening.
@@ -116,16 +148,19 @@ private final class RecordingHandler: ChannelInboundHandler {
     typealias OutboundOut = HTTPServerResponsePart
 
     private let behaviour: @Sendable () -> RedirectWireServer.Behaviour
-    private let recorded: NIOLockedValueBox<[RedirectWireServer.Request]>
+    private let recorded: NIOLockedValueBox<RedirectWireServer.Log>
+    private let signals: RedirectWireServer.Signals
     private var head: HTTPRequestHead?
     private var body = ""
 
     init(
         behaviour: @escaping @Sendable () -> RedirectWireServer.Behaviour,
-        recorded: NIOLockedValueBox<[RedirectWireServer.Request]>
+        recorded: NIOLockedValueBox<RedirectWireServer.Log>,
+        signals: RedirectWireServer.Signals
     ) {
         self.behaviour = behaviour
         self.recorded = recorded
+        self.signals = signals
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -143,7 +178,8 @@ private final class RecordingHandler: ChannelInboundHandler {
             }
             let request = RedirectWireServer.Request(
                 method: head.method.rawValue, target: head.uri, headers: headers, body: body)
-            recorded.withLockedValue { $0.append(request) }
+            recorded.withLockedValue { $0.requests.append(request) }
+            signals.arrived.yield()
             respond(context: context)
         }
     }
@@ -153,6 +189,9 @@ private final class RecordingHandler: ChannelInboundHandler {
         let status: HTTPResponseStatus
         let payload: String
         switch behaviour() {
+        case .silence:
+            // Left open. The client is the one that ends this exchange.
+            return
         case .answer:
             status = .ok
             payload = #"{"access_token":"issued","token_type":"Bearer","expires_in":3600,"active":true}"#

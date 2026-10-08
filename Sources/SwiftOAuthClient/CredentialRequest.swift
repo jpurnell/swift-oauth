@@ -95,7 +95,7 @@ enum CredentialRequest {
     ///   `OAuthError.serverError(_:)` if the answer is not HTTP, or whatever the session
     ///   threw.
     static func send(_ request: URLRequest, on session: URLSession) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request, delegate: RedirectRefuser())
+        let (data, response) = try await load(request, on: session)
         guard let http = response as? HTTPURLResponse else {
             throw OAuthError.serverError("the response was not HTTP")
         }
@@ -112,6 +112,60 @@ enum CredentialRequest {
                 destination: destination(of: location, from: request.url))
         }
         return (data, http)
+    }
+
+    /// Runs one data task with the refusing delegate set on the task itself.
+    ///
+    /// Not `session.data(for:delegate:)`, which is the obvious spelling and is not portable:
+    /// swift-corelibs-foundation accepts the `delegate` argument there and then decides a
+    /// redirect by reading `task.delegate`, which that call never sets — so on Linux the
+    /// delegate is never asked and the redirect is followed. Measured in this package's CI
+    /// (`swift:6.2`, curl 8.5.0), that sent the `Authorization: Basic` header, client secret
+    /// included, to the second origin at all five statuses. Assigning `task.delegate` before
+    /// the task is resumed is honoured on both platforms.
+    ///
+    /// - Parameters:
+    ///   - request: The request.
+    ///   - session: The session to create the task on.
+    /// - Returns: The body and the response — the `3xx` itself when a redirect was declined.
+    /// - Throws: Whatever the task failed with. If the calling task is cancelled the data
+    ///   task is cancelled with it, and what is thrown is the task's own
+    ///   `URLError(.cancelled)`.
+    private static func load(_ request: URLRequest, on session: URLSession) async throws -> (Data, URLResponse) {
+        // One element at most: the completion handler is called once.
+        let (answers, answer) = AsyncThrowingStream<(Data, URLResponse), any Error>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
+
+        let task = session.dataTask(with: request) { data, response, error in
+            if let error {
+                answer.finish(throwing: error)
+            } else if let data, let response {
+                answer.yield((data, response))
+                answer.finish()
+            } else {
+                answer.finish(throwing: OAuthError.serverError("the request produced no response"))
+            }
+        }
+        task.delegate = RedirectRefuser()
+        task.resume()
+
+        // The answer is awaited by a task of its own, so that cancelling the caller does not
+        // end the wait by itself. It ends when the data task does: cancellation is passed to
+        // the data task, whose completion handler then reports it. A bridge that stopped
+        // waiting without stopping the transfer would leave the request running, credentials
+        // and all, for a caller that had gone.
+        // lifecycle: completes when the data task's completion handler finishes the stream
+        let delivery = Task {
+            for try await result in answers {
+                return result
+            }
+            throw OAuthError.serverError("the request produced no response")
+        }
+        return try await withTaskCancellationHandler {
+            try await delivery.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     /// The origin a `Location` resolves to.
@@ -152,7 +206,7 @@ enum CredentialRequest {
 /// Declines every redirect.
 ///
 /// A task delegate rather than a session delegate, so it applies to one request on whatever
-/// session carries it. It holds no state: the `3xx` it declines to follow is returned to the
+/// session carries it — and takes precedence over a delegate that session has of its own. It holds no state: the `3xx` it declines to follow is returned to the
 /// caller as the task's response, and that response says everything there is to report.
 private final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
 

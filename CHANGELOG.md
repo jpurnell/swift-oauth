@@ -26,8 +26,14 @@ No signature changed. One public type is added, and there are behaviour changes,
   | `307`, `308` | A `POST` with the **whole form body**: `code` and `code_verifier`; `refresh_token`; the `token` being revoked or introspected; and with `client_secret_post`, `client_id` and `client_secret`. |
   | `301`, `302`, `303` | A `GET` with no body. |
 
-  `URLSession` removed the `Authorization` header in all thirty cases, so a
-  `client_secret_basic` secret did not cross; everything in the body did. And in every case
+  That is Foundation on macOS, which removed the `Authorization` header in all thirty cases:
+  a `client_secret_basic` secret did not cross, and everything in the body did. On Linux
+  (swift-corelibs-foundation in `swift:6.2`, curl 8.5.0, measured in CI) it is the other way
+  round: the body was dropped at every status — a `307`/`308` arrived as a `POST` with
+  `Content-Length: 0` — and the **`Authorization: Basic` header, client secret included, was
+  delivered to the second origin at all five statuses**, in each of the twenty cases that
+  send one. So what a redirect disclosed depended on the platform, and on each it was a
+  credential. And in every case
   the call *returned normally*: the second server's `200` was decoded as the endpoint's own
   answer, so a redirect could also choose the token response the client stored (CWE-200,
   CWE-522).
@@ -39,6 +45,12 @@ No signature changed. One public type is added, and there are behaviour changes,
   origin too, where a `301`/`302`/`303` would have arrived as a body-less `GET` that cannot
   mean what the `POST` meant. The refusal is attached to each request rather than to a
   session, so a session passed to `URLSessionTokenTransport(session:)` is held to it as well.
+
+  It is attached by assigning the data task's `delegate` before the task starts, not through
+  `URLSession.data(for:delegate:)`. On Linux that call accepts a delegate and never consults
+  it for a redirect — swift-corelibs-foundation reads `task.delegate`, which the call does
+  not set — so the first form of this fix passed every test on macOS and followed every
+  redirect in Linux CI. A calling task that is cancelled cancels the transfer with it.
 
   The specifications provide for nothing else. RFC 6749 §3.2 (token endpoint), RFC 7009 §2.1
   (revocation) and RFC 7662 §2.1 (introspection) define the request as a `POST` to the
@@ -79,8 +91,9 @@ No signature changed. One public type is added, and there are behaviour changes,
 - `CredentialRedirectWireTests`: each request × each of the five statuses against two
   loopback servers, asserting the second received nothing and the error names its origin
   only; the same within one origin; the same on a caller-supplied session; and each request
-  delivered when it is not redirected. Written first and run against the unchanged
-  transports: 220 issues. `MTLSRedirectWireTests`: the five statuses on a client built from
+  delivered when it is not redirected; and cancellation reaching the transfer. Written first
+  and run against the unchanged transports: 220 issues on macOS, and 220 again on Linux
+  against the form of the fix that only held on macOS. `MTLSRedirectWireTests`: the five statuses on a client built from
   the mTLS configuration; 10 issues before the change.
 - `RedirectWireStub`, a test-support target in no product, holds the recording server.
   `swift-nio` is named as a package dependency for it; it was already resolved through

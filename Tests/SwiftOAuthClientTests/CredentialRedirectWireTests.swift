@@ -199,6 +199,33 @@ struct CredentialRedirectWireTests {
         try await server.stop()
     }
 
+    /// The request is made by a hand-built bridge from a data task to `async`, because the
+    /// task has to exist before it starts for its delegate to be set. A bridge that stopped
+    /// *waiting* on cancellation without stopping the *transfer* would leave a request the
+    /// caller abandoned on the wire until the session timed it out.
+    ///
+    /// The error is the evidence. `URLError.cancelled` is produced by the data task's own
+    /// completion handler and by nothing else here, so receiving it means the task itself
+    /// was cancelled.
+    @Test("Cancelling the caller cancels the transfer", .timeLimit(.minutes(1)))
+    func cancellationEndsTheRequest() async throws {
+        let server = try await RedirectWireServer.start { .silence }
+        let endpoint = try Self.endpoint(on: server)
+
+        let exchange = Task {
+            try await Self.perform(.codeExchangeBasic, endpoint: endpoint)
+        }
+        // The request is on the wire and will never be answered.
+        await server.waitForRequest()
+        exchange.cancel()
+
+        let failure = await #expect(throws: URLError.self) {
+            try await exchange.value
+        }
+        #expect(failure?.code == .cancelled)
+        try await server.stop()
+    }
+
     /// What one recorded request held, for a failure message: enough to say which credential
     /// crossed, without the test output becoming a place they are printed in full.
     static func summary(_ request: RedirectWireServer.Request) -> String {
