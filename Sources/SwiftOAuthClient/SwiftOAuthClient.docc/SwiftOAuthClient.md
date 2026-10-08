@@ -58,6 +58,29 @@ file it could not read.
 ``URLSessionTokenTransport`` is the implementation an application wants; a test supplies
 its own and gets deterministic responses.
 
+### A redirect is not followed
+
+Every request this module makes itself — a code exchange, a refresh, a revocation, an
+introspection — is a `POST` carrying something that must reach one host only: a client
+secret, an authorization code and its PKCE verifier, a refresh token, a token being asked
+about. If the endpoint answers `301`, `302`, `303`, `307` or `308`, the request is not
+repeated anywhere, on another origin or on the same one. The call throws
+``OAuthRedirectRefused``, which names the origin the redirect pointed at and the status, and
+nothing is sent there.
+
+That is true of ``URLSessionTokenTransport`` with the default session and with one you
+supply, and of ``URLSessionIntrospectionTransport``. It is not something a transport of your
+own inherits: a ``TokenTransport`` you write decides for itself, and should decide the same
+way.
+
+``OAuthConnection/disconnect()`` treats revocation as best-effort and discards its error, so
+a redirected revocation is refused silently there: the local credential is removed, nothing
+is sent to the redirect's destination, and the token stays valid at the provider until it
+expires.
+
+RFC 6749 §3.2, RFC 7009 §2.1 and RFC 7662 §2.1 define these requests as a `POST` to the
+endpoint and describe no redirect as an answer to one.
+
 ## Topics
 
 ### Holding a connection
@@ -101,6 +124,7 @@ its own and gets deterministic responses.
 
 - ``TokenTransport``
 - ``URLSessionTokenTransport``
+- ``OAuthRedirectRefused``
 
 ### Test doubles
 

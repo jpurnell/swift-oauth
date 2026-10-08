@@ -5,6 +5,96 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The client half followed redirects on every request that carries a credential. It no longer
+follows any.
+
+No signature changed. One public type is added, and there are behaviour changes, listed under
+**Changed**.
+
+### Security
+- **A token, refresh, revocation or introspection request is no longer redirected.**
+  `URLSessionTokenTransport` and `URLSessionIntrospectionTransport` sent their requests on a
+  `URLSession` left to follow redirects, which it does to any origin. Measured between two
+  loopback servers — the first answering every request with a redirect to the second, the
+  second recording what reached it — for a code exchange (with `client_secret_basic`,
+  `client_secret_post` and as a public client), a refresh, a revocation and an introspection:
+
+  | Status | What reached the second origin |
+  |---|---|
+  | `307`, `308` | A `POST` with the **whole form body**: `code` and `code_verifier`; `refresh_token`; the `token` being revoked or introspected; and with `client_secret_post`, `client_id` and `client_secret`. |
+  | `301`, `302`, `303` | A `GET` with no body. |
+
+  `URLSession` removed the `Authorization` header in all thirty cases, so a
+  `client_secret_basic` secret did not cross; everything in the body did. And in every case
+  the call *returned normally*: the second server's `200` was decoded as the endpoint's own
+  answer, so a redirect could also choose the token response the client stored (CWE-200,
+  CWE-522).
+
+  Every such request now goes through one function, which declines the redirect. Nothing is
+  sent to the destination — no body, no header, no request at all — and the call throws
+  `OAuthRedirectRefused`, naming the redirect's status and the destination's origin
+  (`scheme://host[:port]`, never its path or query). This holds within the endpoint's own
+  origin too, where a `301`/`302`/`303` would have arrived as a body-less `GET` that cannot
+  mean what the `POST` meant. The refusal is attached to each request rather than to a
+  session, so a session passed to `URLSessionTokenTransport(session:)` is held to it as well.
+
+  The specifications provide for nothing else. RFC 6749 §3.2 (token endpoint), RFC 7009 §2.1
+  (revocation) and RFC 7662 §2.1 (introspection) define the request as a `POST` to the
+  endpoint, and none describes a redirect as an answer to one. RFC 9700 §4.12 concerns a
+  different hop — the user agent leaving the authorization endpoint — but states the
+  mechanism: a `307` repeats a `POST` with its body and so discloses the credentials in it.
+
+- **The HTTP client configuration for mTLS no longer follows redirects.**
+  `MTLSTokenTransport.clientConfiguration()` returned an `AsyncHTTPClient` configuration at
+  that library's default: follow up to five redirects, wherever they point. A token request
+  made on it and answered `307` or `308` was re-posted to the second origin with its body
+  (measured: `POST`, 61 of 61 bytes); `301`/`302`/`303` sent a `GET`. The configuration is now
+  built with `redirectConfiguration = .disallow`, so the `3xx` is the response and nothing
+  further is sent.
+
+### Changed
+- A `3xx` carrying a `Location`, from a token, revocation or introspection endpoint, throws
+  `OAuthRedirectRefused`. Before, the redirect was followed and the call reported whatever the
+  destination answered. A deployment whose configured endpoint redirects — `http` to `https`,
+  a host that moved — worked before and fails now; configure the endpoint the redirect names.
+  There is no opt-out.
+- `OAuthConnection.disconnect()` already discards a failed revocation, and discards this one:
+  a redirected revocation removes the local credential, sends nothing to the redirect's
+  destination, and leaves the token valid at the provider until it expires.
+- `URLSessionIntrospectionTransport` reports a response that is not HTTP as
+  `OAuthError.serverError("the response was not HTTP")`, as the token transport does. It used
+  to report status `0`, which `TokenIntrospector` then described as "answered 0".
+- A client built from `MTLSTokenTransport.clientConfiguration()` returns a `3xx` as the
+  response instead of following it.
+
+### Added
+- `OAuthRedirectRefused` (`SwiftOAuthClient`): `status`, `endpoint` and `destination`, the
+  last two as origins. A separate error type rather than a new `OAuthError` case, because
+  `OAuthError` is the closed set of RFC 6749 §5.2 wire codes and a case added to it would
+  break every exhaustive `switch` over it.
+
+### Testing
+- `CredentialRedirectWireTests`: each request × each of the five statuses against two
+  loopback servers, asserting the second received nothing and the error names its origin
+  only; the same within one origin; the same on a caller-supplied session; and each request
+  delivered when it is not redirected. Written first and run against the unchanged
+  transports: 220 issues. `MTLSRedirectWireTests`: the five statuses on a client built from
+  the mTLS configuration; 10 issues before the change.
+- `RedirectWireStub`, a test-support target in no product, holds the recording server.
+  `swift-nio` is named as a package dependency for it; it was already resolved through
+  AsyncHTTPClient.
+
+### Noted
+- `https` → `http` was not measured in this package: it needs a TLS stub the tests here do
+  not have. It does not need its own rule — no redirect is followed, whatever its scheme.
+- This package makes no request of its own for discovery (RFC 8414), protected-resource
+  metadata (RFC 9728), dynamic registration (RFC 7591), pushed authorization (RFC 9126) or
+  device authorization (RFC 8628 §3.1) on the client side; it supplies the types and leaves
+  the HTTP to the caller, who decides what a redirect does there. The provider's
+  `ClientIDMetadataFetcher` already refuses every redirect its transport reports.
+
 ## [1.0.0-beta.6] — 2026-10-04
 
 A build fix and three crash fixes. A universal macOS build of anything linking the provider did

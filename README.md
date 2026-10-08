@@ -66,7 +66,7 @@ introspection (RFC 7662), revocation (RFC 7009), dynamic registration (RFC 7591)
 9126), JAR (RFC 9101), DPoP (RFC 9449), mTLS-bound tokens (RFC 8705), resource indicators (RFC
 8707), and both metadata documents (RFC 8414, RFC 9728).
 
-499 tests; the quality gate runs its 41 selected checkers with no errors and no warnings; Linux CI green.
+504 tests; the quality gate runs its 41 selected checkers with no errors and no warnings; Linux CI green.
 
 Three adoptions exercised it rather than a test suite alone: LedgeOS on the client half,
 SwiftMCPServer and SwiftMCPClient on the provider half. Eight defects in this package were found by a
