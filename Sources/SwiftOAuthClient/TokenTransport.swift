@@ -33,6 +33,19 @@ public protocol TokenTransport: Sendable {
 }
 
 /// A transport over `URLSession`.
+///
+/// ## Redirects are not followed
+///
+/// A token, refresh or revocation request carries a client secret, an authorization code and
+/// its PKCE verifier, or a refresh token. If the endpoint answers with a redirect, the request
+/// is **not** repeated anywhere — not on another origin and not on the same one — and
+/// ``exchange(endpoint:parameters:credentials:method:)`` throws ``OAuthRedirectRefused``
+/// naming the origin the redirect pointed at. This holds for a session you supply as much as
+/// for the default: the refusal is attached to each request, not to the session.
+///
+/// RFC 6749 §3.2 and RFC 7009 §2.1 define these requests as a `POST` to the endpoint and
+/// describe no redirect as an answer to one.
+///
 /// `URLSession` is thread-safe and documented as such, but corelibs-foundation does not mark
 /// it `Sendable` — so the stored property passes the check on Apple platforms and fails on
 /// Linux alone. The value is immutable and never mutated after init.
@@ -43,7 +56,8 @@ public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
 
     /// Creates a transport.
     ///
-    /// - Parameter session: The session to use. Defaults to `.shared`.
+    /// - Parameter session: The session to use. Defaults to `.shared`. Whatever its
+    ///   configuration or delegate, a redirect is not followed on it.
     public init(session: URLSession = .shared) {
         self.session = session
     }
@@ -56,7 +70,8 @@ public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
     ///   - credentials: Used for client authentication.
     ///   - method: How the credentials should be presented.
     /// - Returns: The provider's token response.
-    /// - Throws: `OAuthError` for anything the provider rejected, or a transport error.
+    /// - Throws: `OAuthError` for anything the provider rejected, ``OAuthRedirectRefused`` if
+    ///   the endpoint answered with a redirect — which is not followed — or a transport error.
     public func exchange(
         endpoint: URL,
         parameters: [String: String],
@@ -96,10 +111,9 @@ public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
 
         request.httpBody = Data(Self.formEncode(body).utf8)
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw OAuthError.serverError("the response was not HTTP")
-        }
+        // Through the one door every credential-bearing request uses, which follows no
+        // redirect: see `CredentialRequest`.
+        let (data, http) = try await CredentialRequest.send(request, on: session)
 
         guard (200..<300).contains(http.statusCode) else {
             // A provider returns its reason in the body; the status alone does not

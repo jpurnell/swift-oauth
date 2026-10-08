@@ -61,6 +61,10 @@ let package = Package(
         // `TLSConfiguration` does expose `certificateChain` and `privateKey`, and
         // AsyncHTTPClient accepts one — so mutual TLS means a NIO-backed transport or nothing.
         .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.19.0"),
+        // For the tests only: the loopback servers the redirect tests are run against. Already
+        // in the graph through AsyncHTTPClient, so naming it adds nothing to what is resolved;
+        // it is named because a target may only import what its package declares.
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.62.0"),
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0")
     ],
     targets: [
@@ -114,6 +118,20 @@ let package = Package(
             resources: [.copy("SwiftOAuthClient.docc")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // Test support, in no product: two loopback servers, one redirecting to the other, the
+        // second recording whatever reaches it. A target rather than a file because the client
+        // and mTLS test targets both need it.
+        .target(
+            name: "RedirectWireStub",
+            dependencies: [
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio")
+            ],
+            path: "Tests/RedirectWireStub",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "SwiftOAuthCoreTests",
             dependencies: ["SwiftOAuthCore"],
@@ -121,7 +139,11 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftOAuthMTLSTests",
-            dependencies: ["SwiftOAuthMTLS"],
+            dependencies: [
+                "SwiftOAuthMTLS",
+                "RedirectWireStub",
+                .product(name: "AsyncHTTPClient", package: "async-http-client")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
@@ -141,7 +163,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftOAuthClientTests",
-            dependencies: ["SwiftOAuthClient"],
+            dependencies: ["SwiftOAuthClient", "RedirectWireStub"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

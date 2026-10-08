@@ -100,12 +100,26 @@ public struct TokenIntrospector: Sendable {
 }
 
 /// The default transport, over `URLSession`.
+///
+/// The request carries this resource server's client secret and the token being asked about,
+/// so a redirect is not followed: ``post(url:body:authorization:)`` throws
+/// ``OAuthRedirectRefused`` naming the origin it pointed at, and nothing is sent there.
+/// RFC 7662 §2.1 defines the request as a `POST` to the introspection endpoint and describes
+/// no redirect as an answer to one.
 public struct URLSessionIntrospectionTransport: IntrospectionTransport {
 
     /// Creates a transport.
     public init() {}
 
     /// Posts the form body and returns the response with its status.
+    ///
+    /// - Parameters:
+    ///   - url: The introspection endpoint.
+    ///   - body: The form-encoded body.
+    ///   - authorization: The `Authorization` header value, if any.
+    /// - Returns: The response body and its HTTP status.
+    /// - Throws: ``OAuthRedirectRefused`` if the endpoint answered with a redirect, or a
+    ///   transport error.
     public func post(url: URL, body: String, authorization: String?) async throws -> (Data, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -113,8 +127,9 @@ public struct URLSessionIntrospectionTransport: IntrospectionTransport {
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
         request.httpBody = Data(body.utf8)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        return (data, status)
+        // Through the one door every credential-bearing request uses, which follows no
+        // redirect: see `CredentialRequest`.
+        let (data, response) = try await CredentialRequest.send(request, on: .shared)
+        return (data, response.statusCode)
     }
 }
