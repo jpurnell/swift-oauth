@@ -85,6 +85,11 @@ public struct MTLSIdentity: Sendable {
 /// NIOSSL's `TLSConfiguration` does expose `certificateChain` and `privateKey`, and
 /// AsyncHTTPClient accepts one. So mutual TLS means a NIO-backed transport, which is why this
 /// target exists and why it is separate: a consumer that does not need mTLS does not link NIO.
+///
+/// Despite the name, this is not a `TokenTransport`: it supplies the
+/// ``authenticationMethod`` and the ``clientConfiguration()`` for a request **you** make. What
+/// that leaves in your hands — redirect following and the size of the response you read — is
+/// set out on ``clientConfiguration()``.
 public struct MTLSTokenTransport: Sendable {
 
     private let identity: MTLSIdentity
@@ -112,8 +117,30 @@ public struct MTLSTokenTransport: Sendable {
     /// the token request as a `POST` to the token endpoint and describes no redirect as an
     /// answer to one.
     ///
-    /// A caller that re-enables following on the returned value has taken that decision
-    /// itself; nothing in this package asks for it.
+    /// ## What this type does not do for you
+    ///
+    /// This type **vends a configuration; it does not make the request.** Nothing in this
+    /// package constructs an `HTTPClient` or sends a token request over one — `SwiftOAuthMTLS`
+    /// has no code path that could set these for you a second time. So two protections that
+    /// `URLSessionTokenTransport` enforces on every request are, on the
+    /// mTLS path, properties of a value you hold and can change:
+    ///
+    /// - **Redirects.** The returned configuration has `redirectConfiguration = .disallow`.
+    ///   It is a `var` on a struct: assigning `.follow(max:allowCycles:)` to it, or building
+    ///   the client from a different configuration and copying only `tlsConfiguration` across,
+    ///   brings back the behaviour described above, with a client certificate attached.
+    ///   **Do not.** Build the `HTTPClient` from the value this returns, unmodified in that
+    ///   respect, and treat a `3xx` from the token endpoint as a failure — it is the response
+    ///   you will get.
+    /// - **Response size.** `AsyncHTTPClient` hands back a body stream and reads as much of
+    ///   it as you ask for. Ask for a bounded amount —
+    ///   `response.body.collect(upTo: OAuthResponseTooLarge.maximumResponseBytes)` — and
+    ///   never iterate the body to its end into a buffer; a token endpoint that does not stop
+    ///   sending is then cut off at a megabyte, as it is on the `URLSession` transports.
+    ///
+    /// The same goes for anything else a token request should not inherit from a general
+    /// client: do not share this client's cookie handling or connection pool with requests to
+    /// other hosts, and do not send the request anywhere but the endpoint you configured.
     ///
     /// - Returns: A configuration whose TLS layer presents the client certificate, and which
     ///   follows no redirect.

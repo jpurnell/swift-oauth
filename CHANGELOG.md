@@ -8,10 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 The client half followed redirects on every request that carries a credential. It no longer
-follows any.
+follows any. And what it does with the *answer* to such a request is now bounded: in size, in
+what the session remembers afterwards, and in what `disconnect()` lets go unreported.
 
-No signature changed. One public type is added, and there are behaviour changes, listed under
-**Changed**.
+Nothing public is removed or renamed. There are additions, and there are behaviour changes a
+consumer can meet — each is under **Changed**, with what to do about it.
 
 ### Security
 - **A token, refresh, revocation or introspection request is no longer redirected.**
@@ -66,15 +67,132 @@ No signature changed. One public type is added, and there are behaviour changes,
   built with `redirectConfiguration = .disallow`, so the `3xx` is the response and nothing
   further is sent.
 
+- **A response body was read to its end, whatever its length (CWE-400, CWE-770).** A token,
+  refresh, revocation or introspection endpoint that kept sending was buffered whole: the
+  transports asked `URLSession` for the complete body and decoded it afterwards. Measured
+  against a loopback server offering 64 MiB with no `Content-Length`: all 67,108,864 bytes
+  were received before the call failed with "could not be decoded" — and for a revocation,
+  whose body is not decoded, before it *succeeded*.
+
+  The body is now received a piece at a time and the transfer is **cancelled** once it passes
+  `OAuthResponseTooLarge.maximumResponseBytes` — 1 MiB (1,048,576 bytes). The call throws the
+  new `OAuthResponseTooLarge`, naming the endpoint's origin and the limit, and nothing of what
+  was received is returned. A `Content-Length` past the limit is refused at the headers,
+  before any body is read. The count is of bytes as delivered, after `Content-Encoding` is
+  undone, so a small compressed body that expands past the limit is stopped as well. An error
+  response is bounded like any other. Exactly 1,048,576 bytes is accepted; one more is not.
+
+  1 MiB because these endpoints answer with a short JSON object — a token response is a few
+  hundred bytes, one carrying a signed JWT a few thousand — so the limit is several hundred
+  times anything a conforming server sends and still small enough to be no cost to hold. It is
+  not configurable; no deployment was found that would need it to be.
+
+  On Linux this required sending differently. swift-corelibs-foundation delivers body data
+  incrementally only to a *session's* delegate: a task made with a completion handler is
+  buffered whole in memory before the handler runs (`_NativeProtocol
+  .createTransferBodyDataDrain`), and a task delegate is never handed data for a task made
+  without one (`URLSession.behaviour(for:)`). So on Linux each request is made on a
+  short-lived session built from the given session's `configuration`. See **Changed**.
+
+- **The default session was `URLSession.shared`, so the process's cookies and stored
+  credentials applied to token requests (CWE-522, CWE-565).** Measured on macOS:
+
+  - A `Set-Cookie` in one token response was returned as a `Cookie` on the next token request
+    — and stored in the jar every other request on the shared session uses.
+  - A `401` carrying `WWW-Authenticate: Basic` was answered **from the process's credential
+    store**: with a default credential stored for that host and realm, a second request was
+    sent with an `Authorization: Basic` header this package never wrote. A password kept for a
+    host by anything in the process was sent to that host's token endpoint.
+
+  `URLSessionTokenTransport()` and `URLSessionIntrospectionTransport()` now send on a session
+  of this package's own: ephemeral, `httpCookieStorage`, `urlCredentialStorage` and `urlCache`
+  all `nil`, cookies neither accepted nor set, and the cache policy "reload, ignoring local
+  cache". A session a caller supplies is used as configured.
+
+- **`OAuthConnection.disconnect()` discarded a failed revocation, so a token could stay valid
+  at the provider while the caller believed it revoked.** The revocation was made with `try?`.
+  An unreachable provider, a refused client, a `503`, a redirect: each removed the local
+  credential and returned normally, exactly as a confirmed revocation does. It now throws the
+  new `OAuthRevocationFailed` — *after* removing the local credential, which still happens
+  whatever the provider does. A stored credential that cannot be read is reported the same
+  way (no token to send, so nothing was revoked) instead of being silently skipped.
+
+  Reading RFC 7009 for this found a second fault under the first. §2.2: "The content of the
+  response body is ignored by the client as all necessary information is conveyed in the
+  response code." `disconnect()` sent the revocation through `TokenTransport.exchange`, which
+  decodes a *token response* — so against a conforming server, which answers a bare `200`,
+  every successful revocation ended in "the token response could not be decoded", and `try?`
+  hid that too. Surfacing errors without fixing this would have reported every success as a
+  failure. `TokenTransport` gains `revoke(endpoint:parameters:credentials:method:)`, which
+  `URLSessionTokenTransport` implements by reading the status alone: any `2xx` is
+  confirmation, anything else throws.
+
+- **On Linux, a `401` carrying `WWW-Authenticate: Basic` is now delivered as the answer it
+  is.** RFC 6749 §5.2 has a server refuse a failed `client_secret_basic` authentication that
+  way, so this is what a wrong client secret looks like. swift-corelibs-foundation turns the
+  header into an authentication challenge, and its default handling of a challenge with no
+  credential on offer does nothing (`attemptProceedingWithDefaultCredential` has no `else`
+  branch) — the task is neither retried nor completed, after its timeout timer has already
+  been cancelled. The receiver now declines such a challenge, which ends the task, and hands
+  on the `401` and body that had already arrived; a credential the caller's own configured
+  storage proposes is still left to the default handling. **Provenance:** the hang is read
+  from the Foundation source (`swift-6.2-RELEASE`, `URLSessionTask.swift`), not measured —
+  this package has no Linux machine but CI, and the change and its test
+  (`BasicChallengeTests`, with a one-minute limit) went in together. On Apple platforms the
+  same response was already delivered, and the test passes there without the change.
+
+- **A `3xx` with no `Location` was reported as a server error.** With the redirect declined,
+  a `3xx` that named nowhere fell through to each caller's handling of an unexpected status —
+  `server_error: HTTP 302`, "The introspection endpoint answered 302." — with nothing to say a
+  redirect had been attempted. It now throws `OAuthRedirectRefused` with `destination` set to
+  the new `OAuthRedirectRefused.noLocation`, and a description that says the redirect named
+  nowhere.
+
 ### Changed
 - A `3xx` carrying a `Location`, from a token, revocation or introspection endpoint, throws
   `OAuthRedirectRefused`. Before, the redirect was followed and the call reported whatever the
   destination answered. A deployment whose configured endpoint redirects — `http` to `https`,
   a host that moved — worked before and fails now; configure the endpoint the redirect names.
   There is no opt-out.
-- `OAuthConnection.disconnect()` already discards a failed revocation, and discards this one:
-  a redirected revocation removes the local credential, sends nothing to the redirect's
-  destination, and leaves the token valid at the provider until it expires.
+- **`OAuthConnection.disconnect()` throws `OAuthRevocationFailed` when the provider has a
+  revocation endpoint and the revocation was not confirmed.** It used to return normally. The
+  local credential is removed first in every case, so after this error the connection *is*
+  disconnected on this device. **Migration:** code that treats any throw from `disconnect()`
+  as "still connected" should catch `OAuthRevocationFailed` first and treat it as
+  "disconnected here; not confirmed at the provider" — `step` says whether a request was made,
+  `underlying` what it failed with. A redirected revocation arrives this way too, wrapping
+  `OAuthRedirectRefused`. A provider with no `revocationEndpoint` is unchanged: nothing is
+  revoked, nothing is thrown, as documented.
+- **A custom `TokenTransport` is asked to `revoke` rather than to `exchange` on disconnect.**
+  The requirement has a default implementation that calls `exchange` and discards the result,
+  so existing conformances compile and behave as before. But a custom transport whose
+  `exchange` requires a decodable token response will now have its decoding failure
+  *reported* by `disconnect()` where it used to be discarded. **Migration:** implement
+  `revoke`, returning normally for a `2xx` whatever the body.
+- **A revocation answered `2xx` with no token response is success.** With
+  `URLSessionTokenTransport` it was a discarded decoding failure before; the effect at the
+  provider is the same, the report is now accurate.
+- **The default session is no longer `URLSession.shared`.** `URLSessionTokenTransport()` and
+  `URLSessionIntrospectionTransport()` keep no cookies, stored credentials or cache. A
+  deployment that depended on a cookie set by its token endpoint being returned, on a proxy
+  or `401` challenge being answered from `URLCredentialStorage.shared`, or on a protocol
+  class registered for the shared session, worked before and does not now. **Migration:**
+  pass the session you want — `URLSessionTokenTransport(session: .shared)` is the old
+  behaviour exactly. `URLSessionTokenTransport.init(session:)` no longer has a default
+  argument; `init()` replaces the call that relied on it, so no call site changes.
+- **A response body over 1 MiB throws `OAuthResponseTooLarge`** from a token, refresh,
+  revocation or introspection request. It used to be read whole.
+- **On Linux, a session passed to `init(session:)` contributes its configuration and not its
+  delegate.** The request is made on a short-lived session built from
+  `session.configuration` — timeouts, proxy, cookie and credential storage, protocol classes
+  all as given — because that is the only arrangement in which swift-corelibs-foundation
+  hands over a response body a piece at a time. A session delegate set on the supplied
+  session is not consulted for these requests on Linux. On Apple platforms the supplied
+  session is used directly and its delegate keeps deciding what it decided before (server
+  trust, for one).
+- **Any `3xx` throws `OAuthRedirectRefused`**, with or without a `Location`. Without one it
+  was `OAuthError.serverError("HTTP 3xx")` from the token transport and
+  `OAuthError.serverError("The introspection endpoint answered 3xx.")` from the introspector.
 - `URLSessionIntrospectionTransport` reports a response that is not HTTP as
   `OAuthError.serverError("the response was not HTTP")`, as the token transport does. It used
   to report status `0`, which `TokenIntrospector` then described as "answered 0".
@@ -85,7 +203,19 @@ No signature changed. One public type is added, and there are behaviour changes,
 - `OAuthRedirectRefused` (`SwiftOAuthClient`): `status`, `endpoint` and `destination`, the
   last two as origins. A separate error type rather than a new `OAuthError` case, because
   `OAuthError` is the closed set of RFC 6749 §5.2 wire codes and a case added to it would
-  break every exhaustive `switch` over it.
+  break every exhaustive `switch` over it. `OAuthRedirectRefused.noLocation` is what
+  `destination` holds for a `3xx` that carried no `Location`.
+- `OAuthResponseTooLarge` (`SwiftOAuthClient`): `endpoint` (an origin) and `limit`, with
+  `OAuthResponseTooLarge.maximumResponseBytes` — `1_048_576` — as the limit this package
+  applies.
+- `OAuthRevocationFailed` (`SwiftOAuthClient`): `step` (`.readingStoredCredential` or
+  `.revocationRequest`) and `underlying`. Its description names the kind of failure and never
+  the token. A separate type rather than a `ConnectionError` case, for the same reason as
+  above.
+- `TokenTransport.revoke(endpoint:parameters:credentials:method:)`, a protocol requirement
+  with a default implementation, and `URLSessionTokenTransport.revoke(…)` implementing it per
+  RFC 7009 §2.2.
+- `URLSessionTokenTransport.init()` and `URLSessionIntrospectionTransport.init(session:)`.
 
 ### Testing
 - `CredentialRedirectWireTests`: each request × each of the five statuses against two
@@ -102,9 +232,61 @@ No signature changed. One public type is added, and there are behaviour changes,
   `swift-nio` is named as a package dependency for it; it was already resolved through
   AsyncHTTPClient.
 
+- **`https` → `http` is now measured.** `TLSDowngradeWireTests`: a loopback server speaking
+  TLS answers each of five requests with each of five statuses, naming a plaintext server;
+  the plaintext server must receive nothing. `MTLSRedirectWireTests` does the same on a
+  client built from the mTLS configuration. With the refusal switched off to check the tests
+  can fail: the plaintext server received a `GET` for `301`/`302`/`303` and, on the
+  `AsyncHTTPClient` path, `POST /elsewhere body=61B` — the authorization code, in the clear —
+  for `307`/`308`.
+
+  The TLS server presents a certificate minted for the run, so no private key is committed.
+  `swift-nio-ssl`, `swift-certificates` and `swift-asn1` are named as package dependencies for
+  the test-support target that does this; all three were already resolved through
+  AsyncHTTPClient and none reaches a library target by this declaration.
+
+  How the client comes to trust that certificate differs by platform. On Apple platforms it
+  is an **internal** seam — `TestServerTrust`, reachable only through internal initialisers,
+  so not from any configuration a caller of the public API can build — which accepts the
+  named certificate and nothing else; tests pin that it refuses another certificate and that
+  a transport built the public way does not have it. swift-corelibs-foundation gives a
+  request no say in trust at all, so on Linux there is no seam: the CI job generates a
+  certificate, installs it in the container's bundle, and the tests use the ordinary public
+  transports. Where that has not been done the tests report as skipped, and the CI job fails
+  if they were.
+- `ResponseSizeWireTests`: a 64 MiB chunked body cut off for each kind of request, asserting
+  on the *server's* count of bytes sent; a declared length refused at the headers; the exact
+  boundary; an oversized error body. Run against the unchanged transports: "the server sent
+  67108864 of 67108864 bytes".
+- `DefaultSessionIsolationTests`: a cookie not returned; a stored credential not offered; a
+  supplied session's cookie jar honoured; a supplied session's delegate not shown the body.
+- `DisconnectTests`: refusal, `503`, redirect and an unreadable store each reported with the
+  local credential gone; a bare `200` accepted for three bodies.
+- `RedirectWithoutLocationTests`: three kinds of request × six statuses.
+
 ### Noted
-- `https` → `http` was not measured in this package: it needs a TLS stub the tests here do
-  not have. It does not need its own rule — no redirect is followed, whatever its scheme.
+- **The `swift-nio` floor is raised from 2.62.0 to 2.70.0, because 2.62.0 never built.** The
+  lowest version of every dependency the manifest admits was resolved together in a scratch
+  copy and built. Against `swift-nio` 2.62.0 the test-support target fails — "type
+  'ChannelOption' has no member 'backlog'", and the same for `socketOption`; the leading-dot
+  spellings arrived in 2.70.0. With `swift-nio` 2.70.0, `async-http-client` 1.19.0,
+  `swift-nio-ssl` 2.25.0, `swift-certificates` 1.0.0, `swift-asn1` 1.0.0 and `swift-crypto`
+  3.0.0 — each the lowest its range allows — the package builds and its whole suite passes.
+  `swift-nio` is used by the tests only, so no library code changed for this; a consumer whose
+  graph held `swift-nio` below 2.70.0 will now be asked to resolve a newer one.
+- `MTLSTokenTransport` vends an `HTTPClient.Configuration` and makes no request, so on the
+  mTLS path the redirect rule and the size limit are properties of a value the caller holds.
+  Nothing in this package constructs an `HTTPClient`, so there is no second place to set
+  them. `clientConfiguration()` now says so, with what to do: build the client from the
+  returned value, and read the body with `collect(upTo:)`.
+- Apple's Foundation sends a request **twice** when a `401` carries `WWW-Authenticate: Basic`,
+  with or without a credential to add. Measured here: two identical `POST`s, body included.
+  RFC 6749 §5.2 has a server answer a failed `client_secret_basic` authentication exactly
+  that way, so a wrong client secret costs two token requests. Both go to the configured
+  endpoint, so nothing is disclosed that the first did not already send. Not changed: the
+  only way to stop it is for this package to answer the authentication challenge itself, and
+  a task delegate that does so is asked *instead of* a caller's session delegate — which
+  would take server-trust decisions away from a caller who pins certificates.
 - This package makes no request of its own for discovery (RFC 8414), protected-resource
   metadata (RFC 9728), dynamic registration (RFC 7591), pushed authorization (RFC 9126) or
   device authorization (RFC 8628 §3.1) on the client side; it supplies the types and leaves

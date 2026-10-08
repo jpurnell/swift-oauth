@@ -73,13 +73,35 @@ supply, and of ``URLSessionIntrospectionTransport``. It is not something a trans
 own inherits: a ``TokenTransport`` you write decides for itself, and should decide the same
 way.
 
-``OAuthConnection/disconnect()`` treats revocation as best-effort and discards its error, so
-a redirected revocation is refused silently there: the local credential is removed, nothing
-is sent to the redirect's destination, and the token stays valid at the provider until it
-expires.
+A `3xx` with no `Location` is the same answer with less in it, and is reported the same way,
+with ``OAuthRedirectRefused/destination`` set to ``OAuthRedirectRefused/noLocation``.
 
 RFC 6749 §3.2, RFC 7009 §2.1 and RFC 7662 §2.1 define these requests as a `POST` to the
 endpoint and describe no redirect as an answer to one.
+
+### The answer is bounded, and nothing is remembered
+
+No more than ``OAuthResponseTooLarge/maximumResponseBytes`` — 1 MiB — of a response is read.
+The body is received a piece at a time and the transfer is cancelled when it passes the limit,
+so a server that does not stop sending costs a megabyte; the call throws
+``OAuthResponseTooLarge``.
+
+``URLSessionTokenTransport/init()`` and ``URLSessionIntrospectionTransport/init()`` send on a
+session that keeps no cookies, no stored credentials and no cache. `URLSession.shared` keeps
+all three for the whole process: a token endpoint's cookie came back on the next token
+request, and a `401` challenge was answered from the credential store. Pass a session of your
+own to ``URLSessionTokenTransport/init(session:)`` if you want one that remembers — on Linux
+its configuration is used and its delegate is not.
+
+### Disconnecting tells you what the provider did
+
+``OAuthConnection/disconnect()`` always removes the local credential. If the provider has a
+revocation endpoint and did not confirm the revocation — unreachable, refused, redirected, a
+`503` — it then throws ``OAuthRevocationFailed``: disconnected here, not confirmed there, and
+the token may be valid at the provider until it expires. RFC 7009 §2.2 makes a `200` the
+whole answer and has the client ignore the body, so a transport of your own should implement
+``TokenTransport/revoke(endpoint:parameters:credentials:method:)`` rather than leave
+revocation to an exchange that expects a token response.
 
 ## Topics
 
@@ -125,6 +147,8 @@ endpoint and describe no redirect as an answer to one.
 - ``TokenTransport``
 - ``URLSessionTokenTransport``
 - ``OAuthRedirectRefused``
+- ``OAuthResponseTooLarge``
+- ``OAuthRevocationFailed``
 
 ### Test doubles
 

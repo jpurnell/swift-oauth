@@ -124,4 +124,44 @@ struct MTLSRedirectWireTests {
         try await first.stop()
         try await second.stop()
     }
+
+    /// The case that matters most, and the one a plaintext pair of servers cannot show: the
+    /// token endpoint is `https`, and the redirect names an `http` origin. Following it would
+    /// post the authorization code in the clear.
+    ///
+    /// The client is the one `clientConfiguration()` describes, differing only in what its TLS
+    /// layer trusts: the certificate the loopback server was just given.
+    @Test(
+        "A redirect from https to http is handed back, and nothing is sent in the clear",
+        arguments: [301, 302, 303, 307, 308])
+    func downgradeIsNotFollowed(status: Int) async throws {
+        let certificate = try LoopbackCertificate.mint()
+        let plaintext = try await RedirectWireServer.start { .answer }
+        let location = "\(plaintext.origin)/elsewhere"
+        let secure = try await RedirectWireServer.start(tls: certificate) {
+            .redirect(status: status, location: location)
+        }
+
+        let client = HTTPClient(
+            eventLoopGroupProvider: .singleton,
+            configuration: MTLSTokenTransport.clientConfiguration(
+                tls: try certificate.clientConfiguration()))
+
+        let endpoint = try #require(secure.url(path: "/token"))
+        #expect(endpoint.scheme == "https")
+        var request = HTTPClientRequest(url: endpoint.absoluteString)
+        request.method = .POST
+        request.headers.add(name: "Content-Type", value: "application/x-www-form-urlencoded")
+        request.body = .bytes(ByteBuffer(string: "grant_type=authorization_code&code=\(Self.codeFixture)"))
+
+        let response = try await client.execute(request, timeout: .seconds(10))
+        try await client.shutdown()
+
+        #expect(response.status.code == UInt(status), "the redirect itself is the answer")
+        #expect(secure.requests.count == 1, "the request did not reach the TLS server")
+        #expect(plaintext.requests.isEmpty, "the plaintext origin received \(plaintext.requests.map { "\($0.method) \($0.target) body=\($0.body.utf8.count)B" })")
+
+        try await secure.stop()
+        try await plaintext.stop()
+    }
 }
