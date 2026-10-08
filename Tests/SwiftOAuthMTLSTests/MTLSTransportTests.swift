@@ -1,4 +1,8 @@
+import AsyncHTTPClient
 import Foundation
+import NIOCore
+import NIOSSL
+import RedirectWireStub
 import Testing
 @testable import SwiftOAuthCore
 @testable import SwiftOAuthMTLS
@@ -75,5 +79,49 @@ struct MTLSTransportTests {
         let transport = MTLSTokenTransport(identity: identity)
 
         #expect(transport.authenticationMethod == .selfSignedTLSClientAuth)
+    }
+}
+
+/// What the HTTP client an mTLS token request is made on does with a redirect.
+///
+/// `clientConfiguration()` is handed to `AsyncHTTPClient`, whose default is to follow up to
+/// five redirects wherever they point — re-posting the body on a `307` or `308`. A token
+/// request on that client would carry the authorization code, its verifier and the refresh
+/// token to whatever origin a `Location` named. The configuration this package builds turns
+/// following off, and these tests ask the second of two servers what reached it.
+@Suite("RFC 8705 — the mTLS client does not follow redirects")
+struct MTLSRedirectWireTests {
+
+    static let codeFixture = "fixture-authorization-code"
+
+    @Test("A redirected token request is handed back, not followed", arguments: [301, 302, 303, 307, 308])
+    func redirectIsNotFollowed(status: Int) async throws {
+        let second = try await RedirectWireServer.start { .answer }
+        let location = "\(second.origin)/elsewhere"
+        let first = try await RedirectWireServer.start { .redirect(status: status, location: location) }
+
+        // The configuration `clientConfiguration()` returns, built from the same function —
+        // without a certificate, which a plaintext loopback exchange never presents and which
+        // this test would otherwise have to mint.
+        let client = HTTPClient(
+            eventLoopGroupProvider: .singleton,
+            configuration: MTLSTokenTransport.clientConfiguration(
+                tls: TLSConfiguration.makeClientConfiguration()))
+
+        let endpoint = try #require(first.url(path: "/token"))
+        var request = HTTPClientRequest(url: endpoint.absoluteString)
+        request.method = .POST
+        request.headers.add(name: "Content-Type", value: "application/x-www-form-urlencoded")
+        request.body = .bytes(ByteBuffer(string: "grant_type=authorization_code&code=\(Self.codeFixture)"))
+
+        let response = try await client.execute(request, timeout: .seconds(10))
+        try await client.shutdown()
+
+        #expect(response.status.code == UInt(status), "the redirect itself is the answer")
+        #expect(second.requests.isEmpty, "the second origin received \(second.requests.map { "\($0.method) \($0.target) body=\($0.body.utf8.count)B" })")
+        #expect(first.requests.count == 1)
+
+        try await first.stop()
+        try await second.stop()
     }
 }

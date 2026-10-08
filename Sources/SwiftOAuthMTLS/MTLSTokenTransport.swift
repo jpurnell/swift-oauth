@@ -104,9 +104,34 @@ public struct MTLSTokenTransport: Sendable {
 
     /// The HTTP client configuration this transport requires.
     ///
-    /// - Returns: A configuration whose TLS layer presents the client certificate.
+    /// The configuration turns redirect following **off**. `AsyncHTTPClient` otherwise follows
+    /// up to five redirects to any origin, re-posting the body on a `307` or `308` — which for
+    /// a token request is the authorization code, its PKCE verifier or the refresh token,
+    /// delivered to wherever a `Location` named. A client built from this configuration hands
+    /// a `3xx` back as the response instead, and sends nothing further. RFC 6749 §3.2 defines
+    /// the token request as a `POST` to the token endpoint and describes no redirect as an
+    /// answer to one.
+    ///
+    /// A caller that re-enables following on the returned value has taken that decision
+    /// itself; nothing in this package asks for it.
+    ///
+    /// - Returns: A configuration whose TLS layer presents the client certificate, and which
+    ///   follows no redirect.
     /// - Throws: If the certificate or key could not be read.
     public func clientConfiguration() throws -> HTTPClient.Configuration {
-        HTTPClient.Configuration(tlsConfiguration: try identity.tlsConfiguration())
+        Self.clientConfiguration(tls: try identity.tlsConfiguration())
+    }
+
+    /// The configuration for a given TLS layer: the one place it is built.
+    ///
+    /// Separate from ``clientConfiguration()`` so the redirect rule can be exercised on the
+    /// wire without a certificate to parse.
+    ///
+    /// - Parameter tls: The TLS configuration to connect with.
+    /// - Returns: A configuration that follows no redirect.
+    static func clientConfiguration(tls: TLSConfiguration) -> HTTPClient.Configuration {
+        var configuration = HTTPClient.Configuration(tlsConfiguration: tls)
+        configuration.redirectConfiguration = .disallow
+        return configuration
     }
 }
