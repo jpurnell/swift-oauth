@@ -95,6 +95,9 @@ No signature changed. One public type is added, and there are behaviour changes,
   and run against the unchanged transports: 220 issues on macOS, and 220 again on Linux
   against the form of the fix that only held on macOS. `MTLSRedirectWireTests`: the five statuses on a client built from
   the mTLS configuration; 10 issues before the change.
+- `RedirectOriginNamingTests`: a table of `Location` spellings — userinfo, a named port, mixed
+  case, scheme-relative, relative, an IPv6 literal, no host — each reduced to an origin.
+  Written after the function it covers, so it pins behaviour rather than having driven it.
 - `RedirectWireStub`, a test-support target in no product, holds the recording server.
   `swift-nio` is named as a package dependency for it; it was already resolved through
   AsyncHTTPClient.
