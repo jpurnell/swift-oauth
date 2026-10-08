@@ -64,7 +64,23 @@ let package = Package(
         // For the tests only: the loopback servers the redirect tests are run against. Already
         // in the graph through AsyncHTTPClient, so naming it adds nothing to what is resolved;
         // it is named because a target may only import what its package declares.
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.62.0"),
+        //
+        // 2.70.0, because that is the lowest version the stub compiles against, found by
+        // resolving the lowest version of everything this manifest admits and building. The
+        // floor used to read 2.62.0 and had never been built: `ChannelOption.backlog` and
+        // `.socketOption(_:)` as leading-dot members arrived in 2.70.0, and against 2.62.0
+        // the stub fails with "type 'ChannelOption' has no member 'backlog'".
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.70.0"),
+        // For the tests only, and for the same reason as `swift-nio` above: already resolved
+        // through AsyncHTTPClient, and named because the test-support target imports them. The
+        // redirect rule has to be shown to hold from `https` to `http`, which needs a loopback
+        // server that speaks TLS (`swift-nio-ssl`) and a certificate for it to present —
+        // minted at run time (`swift-certificates`, `swift-asn1`) so no private key is ever
+        // committed. None of the three reaches a library target through this declaration;
+        // `SwiftOAuthMTLS` already gets NIOSSL through AsyncHTTPClient.
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/swift-asn1.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0")
     ],
     targets: [
@@ -127,7 +143,11 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "NIOConcurrencyHelpers", package: "swift-nio")
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "X509", package: "swift-certificates"),
+                .product(name: "SwiftASN1", package: "swift-asn1"),
+                .product(name: "Crypto", package: "swift-crypto")
             ],
             path: "Tests/RedirectWireStub",
             swiftSettings: [.swiftLanguageMode(.v6)]

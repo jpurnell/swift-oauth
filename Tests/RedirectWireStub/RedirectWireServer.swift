@@ -3,6 +3,7 @@ import NIOConcurrencyHelpers
 import NIOCore
 import NIOHTTP1
 import NIOPosix
+import NIOSSL
 
 /// A loopback HTTP server that either redirects every request or answers it, and records every
 /// request whole.
@@ -42,11 +43,24 @@ public final class RedirectWireServer: Sendable {
         case redirect(status: Int, location: String)
         /// Record the request and never answer it.
         case silence
+        /// Answer with this status, these headers and this body, whatever they are.
+        ///
+        /// `Content-Length` is added from the body unless `headers` names one — so a test can
+        /// have the server declare a length it then does not send.
+        case respond(status: Int, headers: [String: String], body: String)
+        /// Answer `200` and then send `total` bytes in `chunk`-sized pieces with no
+        /// `Content-Length`, stopping when the client goes away.
+        ///
+        /// What an endless body looks like to a client, with an end so that a client which
+        /// reads all of it is a failed assertion rather than a machine out of memory.
+        case stream(chunk: Int, total: Int)
     }
 
-    /// What has arrived.
+    /// What has arrived, and what was sent back.
     struct Log: Sendable {
         var requests: [Request] = []
+        var bodyBytesWritten = 0
+        var connectionsClosed = 0
     }
 
     /// What a test may need to wait for, as a stream.
@@ -57,20 +71,27 @@ public final class RedirectWireServer: Sendable {
     struct Signals: Sendable {
         let arrivals: AsyncStream<Void>
         let arrived: AsyncStream<Void>.Continuation
+        let closures: AsyncStream<Void>
+        let closed: AsyncStream<Void>.Continuation
 
         init() {
             (arrivals, arrived) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            (closures, closed) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         }
     }
 
     private let channel: any Channel
     private let recorded: NIOLockedValueBox<Log>
     private let signals: Signals
+    private let scheme: String
 
-    private init(channel: any Channel, recorded: NIOLockedValueBox<Log>, signals: Signals) {
+    private init(
+        channel: any Channel, recorded: NIOLockedValueBox<Log>, signals: Signals, scheme: String
+    ) {
         self.channel = channel
         self.recorded = recorded
         self.signals = signals
+        self.scheme = scheme
     }
 
     /// Starts a server on a port the kernel assigns.
@@ -81,20 +102,40 @@ public final class RedirectWireServer: Sendable {
     public static func start(
         _ behaviour: @escaping @Sendable () -> Behaviour
     ) async throws -> RedirectWireServer {
+        try await start(tls: nil, behaviour)
+    }
+
+    /// Starts a server on a port the kernel assigns, speaking TLS if given an identity.
+    ///
+    /// - Parameters:
+    ///   - tls: The certificate to present, or `nil` for plaintext.
+    ///   - behaviour: What to do with each request.
+    /// - Returns: The running server.
+    public static func start(
+        tls: LoopbackCertificate?,
+        _ behaviour: @escaping @Sendable () -> Behaviour
+    ) async throws -> RedirectWireServer {
         let recorded = NIOLockedValueBox(Log())
         let signals = Signals()
+        let context = try tls.map { try $0.serverContext() }
         let bootstrap = ServerBootstrap(group: MultiThreadedEventLoopGroup.singleton)
             .serverChannelOption(.backlog, value: 16)
             .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.eventLoop.makeCompletedFuture {
+                    if let context {
+                        try channel.pipeline.syncOperations.addHandler(
+                            NIOSSLServerHandler(context: context))
+                    }
                     try channel.pipeline.syncOperations.configureHTTPServerPipeline()
                     try channel.pipeline.syncOperations.addHandler(
                         RecordingHandler(behaviour: behaviour, recorded: recorded, signals: signals))
                 }
             }
         let channel = try await bootstrap.bind(host: "127.0.0.1", port: 0).get()
-        return RedirectWireServer(channel: channel, recorded: recorded, signals: signals)
+        return RedirectWireServer(
+            channel: channel, recorded: recorded, signals: signals,
+            scheme: tls == nil ? "http" : "https")
     }
 
     /// The port the kernel assigned, or `0` if the channel has no address.
@@ -104,7 +145,19 @@ public final class RedirectWireServer: Sendable {
 
     /// This server's origin, as an error is expected to name it.
     public var origin: String {
-        "http://127.0.0.1:\(port)"
+        "\(scheme)://127.0.0.1:\(port)"
+    }
+
+    /// Returns once a connection to this server has closed. For one waiter at a time.
+    ///
+    /// What a test of a cut-off transfer waits for before asking how much was sent.
+    public func waitForDisconnect() async {
+        for await _ in signals.closures { return }
+    }
+
+    /// How many body bytes the server managed to write, across every response so far.
+    public var bodyBytesWritten: Int {
+        recorded.withLockedValue { $0.bodyBytesWritten }
     }
 
     /// Returns once a request has arrived. For one waiter at a time.
@@ -121,10 +174,11 @@ public final class RedirectWireServer: Sendable {
     /// connects to is a literal in this file and never something assembled from a string.
     ///
     /// - Parameter path: The path, with its leading slash.
-    /// - Returns: `http://127.0.0.1:<port><path>`, or `nil` if the path is not one.
+    /// - Returns: `http://127.0.0.1:<port><path>` — `https` for a TLS server — or `nil` if
+    ///   the path is not one.
     public func url(path: String) -> URL? {
         var components = URLComponents()
-        components.scheme = "http"
+        components.scheme = scheme
         components.host = "127.0.0.1"
         components.port = port
         components.path = path
@@ -184,6 +238,45 @@ private final class RecordingHandler: ChannelInboundHandler {
         }
     }
 
+    func channelInactive(context: ChannelHandlerContext) {
+        recorded.withLockedValue { $0.connectionsClosed += 1 }
+        signals.closed.yield()
+        context.fireChannelInactive()
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: any Error) {
+        // A client that hangs up mid-response is what several tests are about; the write that
+        // was in flight fails, and there is nothing to do but let the channel go.
+        context.close(promise: nil)
+    }
+
+    /// Sends `remaining` bytes in pieces, each written only once the one before it has left.
+    ///
+    /// Stops at the first failed write, which is what a client closing the connection
+    /// produces — so a client that stops reading stops the server, and the count says where.
+    private func stream(context: ChannelHandlerContext, chunk: Int, remaining: Int) {
+        guard remaining > 0, chunk > 0 else {
+            let channel = context.channel
+            context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
+                channel.close(promise: nil)
+            }
+            return
+        }
+        let size = min(chunk, remaining)
+        var buffer = context.channel.allocator.buffer(capacity: size)
+        buffer.writeRepeatingByte(UInt8(ascii: "a"), count: size)
+        let recorded = self.recorded
+        // The handler and its context belong to this event loop, and the write's future
+        // completes on it; the box says so to the compiler and checks it at run time.
+        let here = NIOLoopBound((handler: self, context: context), eventLoop: context.eventLoop)
+        context.writeAndFlush(wrapOutboundOut(.body(.byteBuffer(buffer)))).whenComplete { result in
+            guard case .success = result else { return }
+            recorded.withLockedValue { $0.bodyBytesWritten += size }
+            here.value.handler.stream(
+                context: here.value.context, chunk: chunk, remaining: remaining - size)
+        }
+    }
+
     private func respond(context: ChannelHandlerContext) {
         var headers = HTTPHeaders()
         let status: HTTPResponseStatus
@@ -192,6 +285,20 @@ private final class RecordingHandler: ChannelInboundHandler {
         case .silence:
             // Left open. The client is the one that ends this exchange.
             return
+        case .stream(let chunk, let total):
+            headers.add(name: "Content-Type", value: "application/json")
+            headers.add(name: "Connection", value: "close")
+            context.write(
+                wrapOutboundOut(.head(HTTPResponseHead(version: .http1_1, status: .ok, headers: headers))),
+                promise: nil)
+            stream(context: context, chunk: chunk, remaining: total)
+            return
+        case .respond(let code, let extra, let body):
+            status = HTTPResponseStatus(statusCode: code)
+            payload = body
+            for (name, value) in extra {
+                headers.add(name: name, value: value)
+            }
         case .answer:
             status = .ok
             payload = #"{"access_token":"issued","token_type":"Bearer","expires_in":3600,"active":true}"#
@@ -201,7 +308,9 @@ private final class RecordingHandler: ChannelInboundHandler {
             payload = ""
             headers.add(name: "Location", value: location)
         }
-        headers.add(name: "Content-Length", value: String(payload.utf8.count))
+        if !headers.contains(name: "Content-Length") {
+            headers.add(name: "Content-Length", value: String(payload.utf8.count))
+        }
         headers.add(name: "Connection", value: "close")
 
         context.write(
@@ -209,7 +318,11 @@ private final class RecordingHandler: ChannelInboundHandler {
             promise: nil)
         var buffer = context.channel.allocator.buffer(capacity: payload.utf8.count)
         buffer.writeString(payload)
-        context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+        let recorded = self.recorded
+        let count = payload.utf8.count
+        context.write(wrapOutboundOut(.body(.byteBuffer(buffer)))).whenSuccess {
+            recorded.withLockedValue { $0.bodyBytesWritten += count }
+        }
         // The channel, not the context: the context is confined to its event loop and may not
         // be captured by a closure that could run elsewhere.
         let channel = context.channel
