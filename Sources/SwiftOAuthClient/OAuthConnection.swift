@@ -291,22 +291,60 @@ public actor OAuthConnection {
     /// Forgets this connection, and revokes it at the provider where possible.
     ///
     /// The local credential is removed **even if revocation fails**: a user who asked to
-    /// disconnect should not remain connected because the provider was unreachable. Where
-    /// the provider offers no revocation endpoint, the access token stays valid at the
-    /// provider until it expires, and there is nothing a client can do about that.
+    /// disconnect should not remain connected because the provider was unreachable. After
+    /// this returns *or throws ``OAuthRevocationFailed``*, nothing is stored for the
+    /// connection.
+    ///
+    /// What it returns tells you about the provider's half:
+    ///
+    /// - **Returns normally** when the provider confirmed the revocation, when nothing was
+    ///   stored, or when ``ProviderConfiguration/revocationEndpoint`` is `nil`. In that last
+    ///   case nothing was revoked: the provider offers no way to ask, the token stays valid
+    ///   there until it expires, and there is nothing a client can do about that.
+    /// - **Throws ``OAuthRevocationFailed``** when the provider has a revocation endpoint and
+    ///   the revocation was not confirmed — it was unreachable, it refused, it redirected, or
+    ///   the stored credential could not be read so there was no token to send. The local
+    ///   credential is gone; the token may still be valid at the provider.
+    /// - **Throws the storage's own error** when the credential could not be removed. Nothing
+    ///   has been revoked in that case and the connection is still stored; call again.
+    ///
+    /// Until this version a failed revocation was discarded and the method returned normally,
+    /// so a caller could not tell "signed out" from "signed out of this device". Code that
+    /// treats any throw from `disconnect()` as "still connected" should catch
+    /// ``OAuthRevocationFailed`` first.
+    ///
+    /// The refresh token is what is sent. RFC 7009 §2.1: a server that revokes a refresh token
+    /// "SHOULD also invalidate all access tokens based on the same authorization grant" —
+    /// should, so an access token may outlive this call at a provider that does not.
+    ///
+    /// - Throws: ``OAuthRevocationFailed``, or the storage's error from removing.
     public func disconnect() async throws {
-        // silent: a credential we cannot read is one we cannot revoke; removal still proceeds
-        let stored = try? await storage.credential(for: connection)
+        // Read before removing, and remove whatever the read did: a credential that cannot be
+        // read is one that cannot be revoked, and it still has to go.
+        let stored: StoredCredential?
+        do {
+            stored = try await storage.credential(for: connection)
+        } catch {
+            try await storage.remove(connection)
+            // With no endpoint there was never going to be a revocation, so nothing failed.
+            guard configuration.revocationEndpoint != nil else { return }
+            throw OAuthRevocationFailed(step: .readingStoredCredential, underlying: error)
+        }
         try await storage.remove(connection)
 
         guard let endpoint = configuration.revocationEndpoint, let stored else { return }
-        // The local credential is already gone; an unreachable provider must not undo that.
-        // silent: revocation is best-effort, and its failure changes nothing the caller can act on
-        _ = try? await transport.exchange(
-            endpoint: endpoint,
-            parameters: ["token": stored.refreshToken, "token_type_hint": "refresh_token"],
-            credentials: credentials,
-            method: configuration.authenticationMethod)
+
+        // The local credential is already gone; an unreachable provider does not undo that.
+        // It is reported, because the caller is otherwise left believing the token is dead.
+        do {
+            try await transport.revoke(
+                endpoint: endpoint,
+                parameters: ["token": stored.refreshToken, "token_type_hint": "refresh_token"],
+                credentials: credentials,
+                method: configuration.authenticationMethod)
+        } catch {
+            throw OAuthRevocationFailed(step: .revocationRequest, underlying: error)
+        }
     }
 
     // MARK: - Refreshing

@@ -56,6 +56,30 @@ jobs:
       - name: Preflight
         run: swift --version
 
+      # A TLS certificate for the loopback stub, trusted by the container before the tests
+      # start. The redirect rule has to be shown to hold from `https` to `http`, which needs a
+      # server `URLSession` will complete a handshake with — and on Linux `URLSession` cannot
+      # be told what to trust: swift-corelibs-foundation verifies against the system bundle
+      # and deliberately offers no variable or delegate to change that outside Android. So the
+      # certificate goes into the bundle, here, and the tests are told where it and its key
+      # are. Generated per run and never leaves this container; the key signs nothing but a
+      # certificate for 127.0.0.1 valid for one day.
+      #
+      # Without this step those tests are reported as skipped, not as passed, and the last
+      # step below fails the job if they were.
+      - name: Install a loopback TLS certificate
+        run: |
+          apt-get install -y -qq openssl ca-certificates
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 \
+            -subj "/CN=swift-oauth loopback test server" \
+            -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" \
+            -addext "extendedKeyUsage=serverAuth" \
+            -keyout /tmp/swift-oauth-test-tls.key \
+            -out /usr/local/share/ca-certificates/swift-oauth-test-tls.crt
+          update-ca-certificates
+          echo "SWIFT_OAUTH_TEST_TLS_CERT=/usr/local/share/ca-certificates/swift-oauth-test-tls.crt" >> "$GITHUB_ENV"
+          echo "SWIFT_OAUTH_TEST_TLS_KEY=/tmp/swift-oauth-test-tls.key" >> "$GITHUB_ENV"
+
       - name: Build
         run: swift build
 
@@ -63,5 +87,22 @@ jobs:
       # test target to exclude: what is Apple-only is the *logging* inside a store whose
       # behaviour is tested identically on both platforms, so a Linux run that passes fewer
       # tests than a Mac one would itself be a finding.
+      # Through `tee`, so the last step can read what ran. `pipefail` keeps a failing suite
+      # failing.
       - name: Test
-        run: swift test
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test-output.txt
+
+      # A skipped test is green, and the https-to-http tests skip themselves when the
+      # certificate above is missing. So the job checks that they ran and passed here, by
+      # name: this is the only place they run against swift-corelibs-foundation at all.
+      - name: The https-to-http tests ran
+        shell: bash
+        run: |
+          grep -E 'Test "An https endpoint redirecting to http is refused, and nothing is sent in the clear" with [0-9]+ test cases passed' test-output.txt
+          if grep -E 'Test "An https (endpoint|request).*skipped' test-output.txt; then
+            echo "the https-to-http tests were skipped" >&2
+            exit 1
+          fi

@@ -106,10 +106,46 @@ public struct TokenIntrospector: Sendable {
 /// ``OAuthRedirectRefused`` naming the origin it pointed at, and nothing is sent there.
 /// RFC 7662 §2.1 defines the request as a `POST` to the introspection endpoint and describes
 /// no redirect as an answer to one.
-public struct URLSessionIntrospectionTransport: IntrospectionTransport {
+///
+/// ``init()`` sends on a session of this package's own that keeps no cookies, stored
+/// credentials or cache — it was `URLSession.shared` until this version. ``init(session:)``
+/// uses yours, as configured; on Linux its configuration is used and its delegate is not, as
+/// ``URLSessionTokenTransport`` describes. Either way no more than
+/// ``OAuthResponseTooLarge/maximumResponseBytes`` of an answer is read.
+// Justification: URLSession is thread-safe; the stored session is immutable after init.
+public struct URLSessionIntrospectionTransport: IntrospectionTransport, @unchecked Sendable {
 
-    /// Creates a transport.
-    public init() {}
+    private let session: URLSession
+
+    /// A certificate to accept in tests; always `nil` for a transport a caller can build.
+    private let trust: TestServerTrust?
+
+    /// Creates a transport on this package's own session, which keeps no cookies, stored
+    /// credentials or cache between requests.
+    public init() {
+        self.session = CredentialRequest.isolatedSession
+        self.trust = nil
+    }
+
+    /// Creates a transport on a session you supply.
+    ///
+    /// - Parameter session: The session to use, with whatever cookie storage, credential
+    ///   storage and cache its configuration has. A redirect is not followed on it and a
+    ///   response past the size limit is not read.
+    public init(session: URLSession) {
+        self.session = session
+        self.trust = nil
+    }
+
+    #if !canImport(FoundationNetworking)
+    /// Creates a transport that accepts a named server certificate. **Tests only.**
+    ///
+    /// - Parameter trust: The certificates to accept.
+    init(trusting trust: TestServerTrust) {
+        self.session = CredentialRequest.isolatedSession
+        self.trust = trust
+    }
+    #endif
 
     /// Posts the form body and returns the response with its status.
     ///
@@ -118,8 +154,9 @@ public struct URLSessionIntrospectionTransport: IntrospectionTransport {
     ///   - body: The form-encoded body.
     ///   - authorization: The `Authorization` header value, if any.
     /// - Returns: The response body and its HTTP status.
-    /// - Throws: ``OAuthRedirectRefused`` if the endpoint answered with a redirect, or a
-    ///   transport error.
+    /// - Throws: ``OAuthRedirectRefused`` if the endpoint answered with a redirect,
+    ///   ``OAuthResponseTooLarge`` if it sent more than this package reads, or a transport
+    ///   error.
     public func post(url: URL, body: String, authorization: String?) async throws -> (Data, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -129,7 +166,7 @@ public struct URLSessionIntrospectionTransport: IntrospectionTransport {
 
         // Through the one door every credential-bearing request uses, which follows no
         // redirect: see `CredentialRequest`.
-        let (data, response) = try await CredentialRequest.send(request, on: .shared)
+        let (data, response) = try await CredentialRequest.send(request, on: session, trust: trust)
         return (data, response.statusCode)
     }
 }

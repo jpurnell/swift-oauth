@@ -57,9 +57,10 @@ struct CredentialRedirectWireTests {
             clientSecret: clientPassphraseFixture)
     }
 
-    /// Makes one request of the given kind against `endpoint`, on `session`.
-    static func perform(_ kind: Kind, endpoint: URL, session: URLSession = .shared) async throws {
-        let transport = URLSessionTokenTransport(session: session)
+    /// Makes one request of the given kind against `endpoint` — on `session`, or on the
+    /// transport's own default when none is given.
+    static func perform(_ kind: Kind, endpoint: URL, session: URLSession? = nil) async throws {
+        let transport = session.map { URLSessionTokenTransport(session: $0) } ?? URLSessionTokenTransport()
         let codeExchange = [
             "grant_type": GrantType.authorizationCode.rawValue,
             "code": codeFixture,
@@ -88,7 +89,7 @@ struct CredentialRedirectWireTests {
                 ],
                 credentials: credentials(), method: .clientSecretBasic)
         case .revocation:
-            _ = try await transport.exchange(
+            try await transport.revoke(
                 endpoint: endpoint,
                 parameters: ["token": refreshFixture, "token_type_hint": "refresh_token"],
                 credentials: credentials(), method: .clientSecretBasic)
@@ -96,7 +97,9 @@ struct CredentialRedirectWireTests {
             let introspector = TokenIntrospector(
                 endpoint: endpoint,
                 credentials: .init(
-                    clientId: clientIdentifierFixture, clientSecret: clientPassphraseFixture))
+                    clientId: clientIdentifierFixture, clientSecret: clientPassphraseFixture),
+                transport: session.map { URLSessionIntrospectionTransport(session: $0) }
+                    ?? URLSessionIntrospectionTransport())
             _ = try await introspector.introspect(token: inspectedFixture)
         }
     }
