@@ -102,7 +102,7 @@ public actor OAuthStorage {
     /// `dpop_proofs` for RFC 9449; version 5 added `access_tokens.certificate_thumbprint`
     /// for RFC 8705; version 6 added `authorization_codes.audience`, closing the RFC 8707
     /// authorization-endpoint gap 0.8.0 left open; version 7 replaced every plaintext
-    /// `clients.client_secret` with its SHA-256.
+    /// `clients.client_secret` with its SHA-256 and added `clients.scope_ceiling`.
     public static let currentSchemaVersion = 7
 
     /// Static helper to initialize database schema (runs before actor isolation)
@@ -325,9 +325,16 @@ public actor OAuthStorage {
         // bump inside it: a crash part-way through must leave either every secret plaintext
         // at version 6 or every secret hashed at version 7. Anything between would be hashed
         // a second time on the next open, locking those clients out for good.
+        //
+        // The same version adds `clients.scope_ceiling`: the most a client may be granted,
+        // set by an operator. Existing clients have none, which is what they had.
         if version < 7 && targetVersion >= 7 {
             try executeStatic(db: db, sql: "BEGIN IMMEDIATE")
             do {
+                if try !columnExists(db: db, table: "clients", column: "scope_ceiling") {
+                    try executeStatic(
+                        db: db, sql: "ALTER TABLE clients ADD COLUMN scope_ceiling TEXT")
+                }
                 try hashPlaintextClientSecrets(db: db)
                 try executeStatic(db: db, sql: "PRAGMA user_version = 7")
                 try executeStatic(db: db, sql: "COMMIT")
@@ -455,8 +462,8 @@ public actor OAuthStorage {
         try execute("""
             INSERT INTO clients
             (client_id, client_secret, client_name, redirect_uris, grant_types,
-             token_endpoint_auth_method, registration_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+             token_endpoint_auth_method, registration_date, scope_ceiling)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(client_id) DO UPDATE SET
                 client_secret = CASE
                     WHEN excluded.token_endpoint_auth_method = 'none' THEN NULL
@@ -466,7 +473,8 @@ public actor OAuthStorage {
                 redirect_uris = excluded.redirect_uris,
                 grant_types = excluded.grant_types,
                 token_endpoint_auth_method = excluded.token_endpoint_auth_method,
-                registration_date = excluded.registration_date
+                registration_date = excluded.registration_date,
+                scope_ceiling = excluded.scope_ceiling
         """, parameters: [
             client.clientId,
             client.clientSecret.map(Self.sha256Hex) as Any,
@@ -474,7 +482,8 @@ public actor OAuthStorage {
             redirectUris,
             grantTypes,
             client.tokenEndpointAuthMethod,
-            client.registrationDate.timeIntervalSince1970
+            client.registrationDate.timeIntervalSince1970,
+            client.scopeCeiling.map { $0.sorted().joined(separator: " ") } as Any
         ])
     }
 
@@ -1310,6 +1319,9 @@ public actor OAuthStorage {
         let grantTypesJson = String(cString: sqlite3_column_text(stmt, 4))
         let tokenEndpointAuthMethod = String(cString: sqlite3_column_text(stmt, 5))
         let registrationDate = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 6))
+        let scopeCeiling = sqlite3_column_text(stmt, 7).map {
+            Set(String(cString: $0).split(separator: " ").map(String.init))
+        }
 
         let redirectUris: [String] = try decodeJSON(redirectUrisJson, as: [String].self)
         let grantTypes: [String] = try decodeJSON(grantTypesJson, as: [String].self)
@@ -1321,7 +1333,8 @@ public actor OAuthStorage {
             redirectUris: redirectUris,
             grantTypes: grantTypes,
             tokenEndpointAuthMethod: tokenEndpointAuthMethod,
-            registrationDate: registrationDate
+            registrationDate: registrationDate,
+            scopeCeiling: scopeCeiling
         )
     }
 

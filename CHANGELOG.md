@@ -235,6 +235,16 @@ consumer can meet — each is under **Changed**, with what to do about it.
   response instead of following it.
 
 ### Added
+- **`OAuthServer.createServiceClient(name:scopes:authentication:)`** creates a client for
+  `client_credentials`, with the scopes it may ever be granted. An operator calls it; nothing
+  over HTTP does. It returns `ServiceClientCredentials`, the only time the secret exists
+  outside the process that will use it. A public client, an empty scope set, or a scope the
+  deployment does not offer is refused with `invalid_client_metadata`.
+- **`RegisteredClient.scopeCeiling`**: the most a client may be granted, in any flow. When
+  set, `/authorize` (checked before the consent page), the device flow and
+  `client_credentials` refuse a scope beyond it with `invalid_scope`, and a request naming no
+  scope gets the whole ceiling. Dynamic registration sets none, so existing clients behave as
+  before. Stored in `clients.scope_ceiling`, added by schema version 7.
 - `OAuthRedirectRefused` (`SwiftOAuthClient`): `status`, `endpoint` and `destination`, the
   last two as origins. A separate error type rather than a new `OAuthError` case, because
   `OAuthError` is the closed set of RFC 6749 §5.2 wire codes and a case added to it would

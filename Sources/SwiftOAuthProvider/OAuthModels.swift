@@ -11,7 +11,7 @@ import SwiftOAuthCore
 /// ## Topics
 ///
 /// ### Creating Clients
-/// - ``init(clientId:clientSecret:clientName:redirectUris:grantTypes:tokenEndpointAuthMethod:registrationDate:applicationType:)``
+/// - ``init(clientId:clientSecret:clientName:redirectUris:grantTypes:tokenEndpointAuthMethod:registrationDate:applicationType:scopeCeiling:)``
 ///
 /// ### Client Properties
 /// - ``clientId``
@@ -21,6 +21,7 @@ import SwiftOAuthCore
 /// - ``grantTypes``
 /// - ``tokenEndpointAuthMethod``
 /// - ``registrationDate``
+/// - ``scopeCeiling``
 ///
 /// ## MCP Schema
 ///
@@ -69,6 +70,15 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
     /// a web one, which is the conflict MCP `2026-07-28` requires clients to declare against.
     public let applicationType: ApplicationType
 
+    /// The most this client may ever be granted, in any flow — or `nil` for no ceiling.
+    ///
+    /// Set by an operator; dynamic registration never sets one, which leaves those clients
+    /// as they were. When set, a request for any scope outside it is refused with
+    /// `invalid_scope`, and a request naming no scope is granted the whole ceiling. It binds
+    /// the authorization code and device flows as well as `client_credentials`: otherwise a
+    /// scope reserved for one service could be obtained by any client a person approves.
+    public let scopeCeiling: Set<String>?
+
     /// Creates a new registered client
     /// - Parameters:
     ///   - clientId: Unique identifier for the client
@@ -81,6 +91,7 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
     ///   - applicationType: Whether the client is a web or native application. Defaults to
     ///     ``ApplicationType/web`` per RFC 7591, which is also the correct reading of a record
     ///     written before this field existed.
+    ///   - scopeCeiling: The most this client may be granted, or `nil` for no ceiling.
     public init(
         clientId: String,
         clientSecret: String?,
@@ -89,7 +100,8 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         grantTypes: [String],
         tokenEndpointAuthMethod: String,
         registrationDate: Date,
-        applicationType: ApplicationType = .web
+        applicationType: ApplicationType = .web,
+        scopeCeiling: Set<String>? = nil
     ) {
         self.clientId = clientId
         self.clientSecret = clientSecret
@@ -99,6 +111,7 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         self.tokenEndpointAuthMethod = tokenEndpointAuthMethod
         self.registrationDate = registrationDate
         self.applicationType = applicationType
+        self.scopeCeiling = scopeCeiling
     }
 
     // MARK: - Codable
@@ -112,6 +125,7 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         case tokenEndpointAuthMethod = "token_endpoint_auth_method"
         case registrationDate = "registration_date"
         case applicationType = "application_type"
+        case scopeCeiling = "scope_ceiling"
     }
 
     /// Decodes a registered client, defaulting `application_type` when it is absent.
@@ -132,6 +146,29 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
         registrationDate = try container.decode(Date.self, forKey: .registrationDate)
         applicationType =
             try container.decodeIfPresent(ApplicationType.self, forKey: .applicationType) ?? .web
+        scopeCeiling = try container.decodeIfPresent(Set<String>.self, forKey: .scopeCeiling)
+    }
+}
+
+// MARK: - ServiceClientCredentials
+
+/// What an operator receives on creating a service client — the only time the secret exists
+/// outside the process that will use it.
+///
+/// Storage keeps a hash of the secret, so losing this value means rotating it.
+public struct ServiceClientCredentials: Sendable, Equatable {
+    /// The client's identifier.
+    public let clientId: String
+    /// The client's secret. Not retrievable later.
+    public let clientSecret: String
+    /// Everything this client may be granted.
+    public let scopes: Set<String>
+
+    /// Creates the credentials record.
+    public init(clientId: String, clientSecret: String, scopes: Set<String>) {
+        self.clientId = clientId
+        self.clientSecret = clientSecret
+        self.scopes = scopes
     }
 }
 

@@ -428,6 +428,14 @@ public actor OAuthServer {
     public func authorizeDevice(
         clientId: String, scope: String?
     ) async throws -> DeviceAuthorizationResponse {
+        // A client with a ceiling is held to it here too; the user approving on another device
+        // cannot grant what the client was never allowed.
+        var scope = scope
+        if let client = try await storage.getClient(clientId: clientId),
+           client.scopeCeiling != nil {
+            scope = try Self.scope(scope, within: client)
+        }
+
         let deviceCode = TokenGenerator.generateDeviceCode()
         let userCode = TokenGenerator.generateUserCode()
         let expiresAt = Date().addingTimeInterval(deviceCodeLifetime)
@@ -591,6 +599,81 @@ public actor OAuthServer {
         )
     }
 
+    // MARK: - Service Clients
+
+    /// Creates a client that obtains tokens with `client_credentials` — RFC 6749 §4.4.
+    ///
+    /// For a machine acting as itself, with no user present. Not reachable over HTTP:
+    /// `/register` refuses this grant, because anyone who can reach it can register, and a
+    /// machine identity is something an operator decides to create.
+    ///
+    /// - Parameters:
+    ///   - name: A name for the operator's benefit.
+    ///   - scopes: Everything this client may ever be granted. Must not be empty, and must be
+    ///     scopes this deployment offers when it names any.
+    ///   - authentication: How it authenticates at the token endpoint. A secret-based method;
+    ///     a public client could obtain tokens with its id alone.
+    /// - Returns: The client's id and secret. **The secret is returned only here**: storage
+    ///   keeps a hash of it.
+    /// - Throws: `OAuthError.invalidClientMetadata(_:)` for a declaration that cannot be
+    ///   honoured, or a storage error.
+    public func createServiceClient(
+        name: String,
+        scopes: Set<String>,
+        authentication: ClientAuthenticationMethod = .clientSecretBasic
+    ) async throws -> ServiceClientCredentials {
+        guard authentication == .clientSecretBasic || authentication == .clientSecretPost else {
+            throw OAuthError.invalidClientMetadata(
+                "A service client authenticates with a secret: client_secret_basic or client_secret_post.")
+        }
+        guard !scopes.isEmpty else {
+            throw OAuthError.invalidClientMetadata(
+                "A service client needs at least one scope; an unscoped credential is what this replaces.")
+        }
+        if let offered = scopesSupported {
+            let unoffered = scopes.subtracting(offered)
+            guard unoffered.isEmpty else {
+                throw OAuthError.invalidClientMetadata(
+                    "Not offered by this deployment: \(unoffered.sorted().joined(separator: " ")).")
+            }
+        }
+
+        let clientId = TokenGenerator.generateClientId()
+        let clientSecret = TokenGenerator.generateClientSecret()
+        try await storage.saveClient(RegisteredClient(
+            clientId: clientId, clientSecret: clientSecret, clientName: name,
+            redirectUris: [], grantTypes: [GrantType.clientCredentials.rawValue],
+            tokenEndpointAuthMethod: authentication.rawValue, registrationDate: Date(),
+            scopeCeiling: scopes))
+
+        return ServiceClientCredentials(
+            clientId: clientId, clientSecret: clientSecret, scopes: scopes)
+    }
+
+    /// The scope to grant `client` for a request naming `requested`, held to its ceiling.
+    ///
+    /// - Returns: `requested` when the client has no ceiling or it lies within it; the whole
+    ///   ceiling, space-separated and sorted, when nothing was requested and there is one;
+    ///   `nil` when nothing was requested and there is none.
+    /// - Throws: `OAuthError.invalidScope(_:)` for a request beyond the ceiling. Refused
+    ///   rather than narrowed: a client asking for more than it holds is misconfigured, and
+    ///   should hear about it rather than receive a token that fails somewhere else.
+    static func scope(_ requested: String?, within client: RegisteredClient) throws -> String? {
+        let asked = Set((requested ?? "").split(separator: " ").map(String.init))
+        guard let ceiling = client.scopeCeiling else {
+            return asked.isEmpty ? nil : requested
+        }
+        guard !asked.isEmpty else {
+            return ceiling.sorted().joined(separator: " ")
+        }
+        let beyond = asked.subtracting(ceiling)
+        guard beyond.isEmpty else {
+            throw OAuthError.invalidScope(
+                "Beyond what this client may be granted: \(beyond.sorted().joined(separator: " ")).")
+        }
+        return asked.sorted().joined(separator: " ")
+    }
+
     // MARK: - Authorization Endpoint
 
     /// Handles an authorization request
@@ -649,11 +732,16 @@ public actor OAuthServer {
             throw OAuthError.invalidRequest(nil)
         }
 
-        // Normalize scope: default to all MCP scopes when not provided or empty.
-        // Accept any scope the client requests per RFC 6749 §3.3.
+        // A client with a ceiling gets what it asked for within it, or the whole ceiling.
+        //
+        // One without keeps the old behaviour: any requested scope, and the MCP default when
+        // none is named. That default is FullSpecConformance §18's defect and is removed
+        // separately, because SwiftMCPServer depends on it.
         let defaultScope = "mcp:tools mcp:resources mcp:prompts"
         let effectiveScope: String
-        if let scope = request.scope, !scope.trimmingCharacters(in: .whitespaces).isEmpty {
+        if client.scopeCeiling != nil, let bounded = try Self.scope(request.scope, within: client) {
+            effectiveScope = bounded
+        } else if let scope = request.scope, !scope.trimmingCharacters(in: .whitespaces).isEmpty {
             effectiveScope = scope
         } else {
             effectiveScope = defaultScope
@@ -725,8 +813,10 @@ public actor OAuthServer {
             throw OAuthError.invalidRequest(nil)
         }
 
-        // Scope validation: accept any scope the client requests.
-        // Unknown scopes are passed through per RFC 6749 §3.3.
+        // A client with a ceiling is refused here, before the user sees a consent page for
+        // a grant that cannot be issued. Without one, any scope is passed through per
+        // RFC 6749 §3.3.
+        _ = try Self.scope(request.scope, within: client)
 
         return client
     }
