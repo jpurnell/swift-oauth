@@ -550,6 +550,6 @@ struct ServiceClientLifecycleTests {
         await #expect(throws: OAuthError.self) {
             try await server.retireServiceClient(clientId: registered.clientId)
         }
-        #expect(try await storage.getClient(clientId: registered.clientId) != nil)
+        #expect(try await storage.getClient(clientId: registered.clientId)?.clientName == "App")
     }
 }
