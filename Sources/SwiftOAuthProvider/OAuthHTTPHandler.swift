@@ -674,6 +674,9 @@ public struct OAuthHTTPHandler: Sendable {
             statusCode = 400
         case .invalidGrant, .unauthorizedClient, .unsupportedGrantType:
             statusCode = 400
+        case .invalidClientMetadata:
+            // RFC 7591 §3.2.2 specifies 400 for a refused registration.
+            statusCode = 400
         case .serverError:
             statusCode = 500
         case .temporarilyUnavailable:

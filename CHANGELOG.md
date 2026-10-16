@@ -158,6 +158,14 @@ consumer can meet — each is under **Changed**, with what to do about it.
   nowhere.
 
 ### Changed
+- **`OAuthError` has a new case, `invalidClientMetadata(_:)`** (`invalid_client_metadata`,
+  RFC 7591 §3.2.2), answered with a 400. An exhaustive `switch` over `OAuthError` needs one
+  more arm. `OAuthError(code:)` decodes it instead of folding it into `serverError`.
+- **`/register` refuses `client_credentials` in `grant_types`** with
+  `invalid_client_metadata`. It used to store the request as given; that was harmless only
+  because the token endpoint refused the grant. Anyone who can reach `/register` can
+  register, so a client that obtains tokens with no user present is created by an operator
+  instead.
 - **Client secrets are stored as SHA-256 hashes, and `getClient(clientId:)` no longer returns
   them.** `OAuthStorage` kept every confidential client's secret in plaintext beside tokens it
   already hashed, so a copy of the database handed over every client's credential. Schema

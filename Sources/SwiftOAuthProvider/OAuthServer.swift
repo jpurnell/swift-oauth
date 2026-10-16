@@ -543,11 +543,18 @@ public actor OAuthServer {
     ///
     /// - Parameter request: Client registration request
     /// - Returns: Registered client with generated credentials
-    /// - Throws: `OAuthError.invalidRequest(nil)` if request is invalid
+    /// - Throws: `OAuthError.invalidRequest(nil)` if request is invalid, and
+    ///   `OAuthError.invalidClientMetadata(_:)` for a request naming `client_credentials`.
+    ///   Anyone who can reach this endpoint can register, so a client able to obtain tokens
+    ///   with no user present is created by an operator instead (`createServiceClient`).
     public func registerClient(_ request: ClientRegistrationRequest) async throws -> ClientRegistrationResponse {
         // Validate request
         guard !request.redirectUris.isEmpty else {
             throw OAuthError.invalidRequest(nil)
+        }
+        guard !request.grantTypes.contains(GrantType.clientCredentials.rawValue) else {
+            throw OAuthError.invalidClientMetadata(
+                "client_credentials clients are created by an operator, not through registration.")
         }
 
         // Generate credentials

@@ -103,7 +103,8 @@ struct OAuthErrorTests {
         (.invalidScope(nil), "invalid_scope"),
         (.serverError(nil), "server_error"),
         (.temporarilyUnavailable(nil), "temporarily_unavailable"),
-        (.accessDenied(nil), "access_denied")
+        (.accessDenied(nil), "access_denied"),
+        (.invalidClientMetadata(nil), "invalid_client_metadata")
     ])
     func codesMatchSpec(error: OAuthError, code: String) {
         #expect(error.code == code)

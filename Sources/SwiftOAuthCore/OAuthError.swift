@@ -65,6 +65,14 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
     /// The device code expired before the user finished — RFC 8628 §3.5.
     case expiredToken(String?)
 
+    /// A registration request's metadata is invalid, or asks for something this server will
+    /// not register — RFC 7591 §3.2.2.
+    ///
+    /// The registration endpoint's own code, distinct from ``invalidRequest(_:)``: the request
+    /// was well formed, and what it described is what was refused. A client told only
+    /// `invalid_request` would look for a syntax error that is not there.
+    case invalidClientMetadata(String?)
+
     /// The wire value, per RFC 6749 §5.2.
     public var code: String {
         switch self {
@@ -81,6 +89,7 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case .authorizationPending: return "authorization_pending"
         case .slowDown: return "slow_down"
         case .expiredToken: return "expired_token"
+        case .invalidClientMetadata: return "invalid_client_metadata"
         }
     }
 
@@ -91,7 +100,8 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
              .unauthorizedClient(let d), .unsupportedGrantType(let d),
              .invalidScope(let d), .serverError(let d),
              .temporarilyUnavailable(let d), .accessDenied(let d), .invalidTarget(let d),
-             .authorizationPending(let d), .slowDown(let d), .expiredToken(let d):
+             .authorizationPending(let d), .slowDown(let d), .expiredToken(let d),
+             .invalidClientMetadata(let d):
             return d
         }
     }
@@ -130,6 +140,8 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
             return "The authorization server is temporarily unable to handle the request."
         case .accessDenied:
             return "The resource owner or authorization server denied the request."
+        case .invalidClientMetadata:
+            return "The client metadata is invalid or asks for something this server will not register."
         }
     }
 
@@ -157,6 +169,7 @@ public enum OAuthError: Error, Sendable, Equatable, Codable {
         case "authorization_pending": self = .authorizationPending(description)
         case "slow_down": self = .slowDown(description)
         case "expired_token": self = .expiredToken(description)
+        case "invalid_client_metadata": self = .invalidClientMetadata(description)
         default: self = .serverError(description.map { "\(code): \($0)" } ?? code)
         }
     }
