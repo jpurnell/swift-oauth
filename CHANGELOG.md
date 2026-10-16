@@ -158,6 +158,14 @@ consumer can meet — each is under **Changed**, with what to do about it.
   nowhere.
 
 ### Changed
+- **`ServedCapabilities` refuses a grant the provider does not issue.** Declaring
+  `.clientCredentials` used to succeed, and the metadata then advertised a grant the token
+  endpoint answered with `unsupported_grant_type`. It now throws
+  `Inconsistency.grantNotImplemented(_:)`. That is a new case, so an exhaustive `switch` over
+  `Inconsistency` needs one more arm. **Migration:** a deployment that listed
+  `.clientCredentials` was advertising something it could not do; remove it. The provider
+  will issue this grant as an opt-in later in this release
+  (`project/plans/proposals/ProviderClientCredentials.md`).
 - A `3xx` carrying a `Location`, from a token, revocation or introspection endpoint, throws
   `OAuthRedirectRefused`. Before, the redirect was followed and the call reported whatever the
   destination answered. A deployment whose configured endpoint redirects — `http` to `https`,

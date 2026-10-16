@@ -1157,7 +1157,19 @@ public struct ServedCapabilities: Sendable, Equatable {
         /// someone would come to relax the constraint, and the consequence is a document that
         /// silently over-promises somewhere else.
         case missingAuthorizationCodeGrant
+        /// A grant was declared that this provider does not issue.
+        ///
+        /// `GrantType` names every grant the client half can *request*, which is more than
+        /// the provider issues. Declaring one of the others produced metadata advertising a
+        /// grant the token endpoint then refused.
+        case grantNotImplemented(GrantType)
     }
+
+    /// The grants ``OAuthServer`` can actually issue. Anything else in `GrantType` exists for
+    /// the client half, and declaring it here would advertise a refusal.
+    static let implementedGrants: Set<GrantType> = [
+        .authorizationCode, .refreshToken, .deviceCode, .tokenExchange
+    ]
 
     /// The grants this deployment will honour.
     public let grantTypes: [GrantType]
@@ -1226,6 +1238,9 @@ public struct ServedCapabilities: Sendable, Equatable {
         }
         guard !clientAuthenticationMethods.isEmpty else {
             throw Inconsistency.noAuthenticationMethod
+        }
+        if let unissued = grantTypes.first(where: { !Self.implementedGrants.contains($0) }) {
+            throw Inconsistency.grantNotImplemented(unissued)
         }
         guard !grantTypes.contains(.deviceCode) || deviceAuthorization != nil else {
             throw Inconsistency.deviceGrantWithoutEndpoint

@@ -107,6 +107,21 @@ struct ServedCapabilitiesTests {
                 grantTypes: [.refreshToken], clientAuthenticationMethods: [.clientSecretBasic])
         }
     }
+
+    /// **A grant this provider does not issue cannot be declared.**
+    ///
+    /// `GrantType` names every grant the *client* half can request, which is more than the
+    /// provider issues. This declaration used to succeed, and the metadata then advertised
+    /// `client_credentials` while the token endpoint answered `unsupported_grant_type` — a
+    /// document that over-promises, which is the failure this type exists to prevent.
+    @Test("Declaring a grant the provider does not issue is refused")
+    func unimplementedGrantIsRefused() throws {
+        #expect(throws: ServedCapabilities.Inconsistency.grantNotImplemented(.clientCredentials)) {
+            _ = try ServedCapabilities(
+                grantTypes: [.authorizationCode, .clientCredentials],
+                clientAuthenticationMethods: [.clientSecretBasic])
+        }
+    }
 }
 
 /// Which metadata fields are the deployment's to declare, and which are the library's.
