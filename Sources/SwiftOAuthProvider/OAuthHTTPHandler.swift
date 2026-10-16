@@ -404,7 +404,8 @@ public struct OAuthHTTPHandler: Sendable {
                 // Read separately because it may repeat. A value that is not a URL is dropped
                 // rather than rejected here — the policy refuses what it does not know, and it
                 // is the one place that decision belongs.
-                resource: Self.formValues(for: "resource", in: body).compactMap { URL(string: $0) }
+                resource: Self.formValues(for: "resource", in: body).compactMap { URL(string: $0) },
+                scope: params["scope"]
             )
 
             let response = try await server.handleTokenRequest(request)

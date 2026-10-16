@@ -44,9 +44,9 @@ comment.
 
 `client_credentials` is present, which is a different judgement: it is not unsafe, only
 user-less, and a client that cannot spell it cannot consume a large class of
-machine-to-machine APIs. A provider built on this package still rejects it —
-`OAuthServer` dispatches on the wire string and answers
-`unsupported_grant_type` — so the client can ask and this provider can decline.
+machine-to-machine APIs. A provider built on this package issues it only when the
+deployment opts in, and only to clients an operator created, each held to a fixed set of
+scopes; every other deployment answers `unsupported_grant_type`.
 
 ## Topics
 

@@ -235,6 +235,15 @@ consumer can meet — each is under **Changed**, with what to do about it.
   response instead of following it.
 
 ### Added
+- **The provider issues `client_credentials` tokens, as an opt-in** (RFC 6749 §4.4). Until
+  now it refused the grant outright, because it issues access with no user present. A
+  deployment that lists `.clientCredentials` in its `ServedCapabilities` now issues it, to
+  clients created with `createServiceClient`, within each client's scope ceiling, with no
+  refresh token, for `clientCredentialsTokenLifetime` (a new `OAuthServer.init` parameter,
+  default 15 minutes). `.core` does not include it, so every existing deployment answers
+  `unsupported_grant_type` exactly as before. `TokenRequest` gains `scope`, and the token
+  endpoint now reads it. Written for SwiftPush's hub, whose services send notifications with
+  no person present; the alternative was a long-lived, unscoped API key.
 - **`OAuthServer.createServiceClient(name:scopes:authentication:)`** creates a client for
   `client_credentials`, with the scopes it may ever be granted. An operator calls it; nothing
   over HTTP does. It returns `ServiceClientCredentials`, the only time the secret exists

@@ -108,19 +108,24 @@ struct ServedCapabilitiesTests {
         }
     }
 
-    /// **A grant this provider does not issue cannot be declared.**
+    /// **A grant this provider does not issue cannot be declared — and today there is none.**
     ///
-    /// `GrantType` names every grant the *client* half can request, which is more than the
-    /// provider issues. This declaration used to succeed, and the metadata then advertised
-    /// `client_credentials` while the token endpoint answered `unsupported_grant_type` — a
-    /// document that over-promises, which is the failure this type exists to prevent.
-    @Test("Declaring a grant the provider does not issue is refused")
-    func unimplementedGrantIsRefused() throws {
-        #expect(throws: ServedCapabilities.Inconsistency.grantNotImplemented(.clientCredentials)) {
-            _ = try ServedCapabilities(
-                grantTypes: [.authorizationCode, .clientCredentials],
-                clientAuthenticationMethods: [.clientSecretBasic])
-        }
+    /// `GrantType` names every grant the *client* half can request. Declaring
+    /// `.clientCredentials` used to succeed while the token endpoint refused it, so the metadata
+    /// advertised a refusal; the guard that closed that (`Inconsistency.grantNotImplemented`)
+    /// threw for it until the provider began issuing the grant as an opt-in. It stays for the
+    /// next grant added for the client half only.
+    ///
+    /// If this fails after a new `GrantType` case, that is the guard working: the provider does
+    /// not issue the new grant, so it must not be declarable either.
+    @Test("Every grant the client half can name, the provider issues and a deployment may declare")
+    func everyGrantIsDeclarable() throws {
+        #expect(ServedCapabilities.implementedGrants == Set(GrantType.allCases))
+
+        let served = try ServedCapabilities(
+            grantTypes: [.authorizationCode, .clientCredentials],
+            clientAuthenticationMethods: [.clientSecretBasic])
+        #expect(served.grantTypes.contains(.clientCredentials))
     }
 }
 

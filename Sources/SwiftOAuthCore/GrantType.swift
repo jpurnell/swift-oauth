@@ -25,11 +25,15 @@ import Foundation
 /// third-party APIs at all, since many offer no alternative.
 ///
 /// The safety concern it appeared to address is real but lives elsewhere: a
-/// *provider* issuing client-credentials tokens would grant access with no user
-/// involved. That is prevented where it should be —
-/// `OAuthServer.handleTokenRequest(_:)` dispatches on the raw wire string and
-/// rejects any grant it does not implement — not by making the value
-/// unconstructible for clients that legitimately need to request it.
+/// *provider* issuing client-credentials tokens grants access with no user
+/// involved. For a long time this package's provider answered that by refusing
+/// the grant outright. It now issues it as an opt-in, and answers the concern
+/// differently: the deployment must declare the grant, only an operator can
+/// create a client for it (dynamic registration refuses it), each such client
+/// is held to scopes fixed at creation, and its tokens are short-lived and never
+/// refreshed. The refusal moved, as it should have, to where the decision is
+/// made — never into making the value unconstructible for clients that
+/// legitimately need to request it.
 public enum GrantType: String, Codable, Sendable, Equatable, CaseIterable {
 
     /// Exchange an authorization code for tokens. RFC 6749 §4.1.
@@ -44,8 +48,9 @@ public enum GrantType: String, Codable, Sendable, Equatable, CaseIterable {
     /// Authenticate as the client itself, with no resource owner. RFC 6749 §4.4.
     ///
     /// For machine-to-machine access where no user is involved and none should
-    /// be. **Client-side only**: this package's provider does not issue these,
-    /// and requesting one from an `OAuthServer` returns `unsupported_grant_type`.
+    /// be. This package's provider issues these only when a deployment opts in,
+    /// to operator-created clients; otherwise `OAuthServer` returns
+    /// `unsupported_grant_type`.
     case clientCredentials = "client_credentials"
 
     /// Sign in on a device that cannot open a browser. RFC 8628.

@@ -25,9 +25,12 @@ Most of the work of an authorization server is declining things precisely.
 - **A consent submission without a matching CSRF token.** ``CSRFValidationResult``
   distinguishes a token that is absent from one that is wrong, so a caller can tell a
   malformed client from an attack.
-- **`grant_type=client_credentials`.** `GrantType` can spell it, because
-  the client half needs to consume APIs that offer nothing else. This provider still
-  answers `unsupported_grant_type`.
+- **`grant_type=client_credentials`, unless the deployment opted in.** A deployment that
+  lists `.clientCredentials` in its ``ServedCapabilities`` issues it, and only to clients
+  an operator created with ``OAuthServer/createServiceClient(name:scopes:authentication:)``:
+  `/register` refuses the grant. A service client's scopes are fixed when it is created
+  (``RegisteredClient/scopeCeiling``), its tokens last 15 minutes by default, and it is
+  never given a refresh token. Every other deployment answers `unsupported_grant_type`.
 
 ### Storage is yours
 

@@ -91,6 +91,7 @@ public actor OAuthServer {
     private let accessTokenLifetime: TimeInterval
     private let refreshTokenLifetime: TimeInterval
     private let authorizationCodeLifetime: TimeInterval
+    private let clientCredentialsTokenLifetime: TimeInterval
 
     // MARK: - Initialization
 
@@ -102,8 +103,12 @@ public actor OAuthServer {
     ///   - accessTokenLifetime: Access token lifetime in seconds (default: 24 hours)
     ///   - refreshTokenLifetime: Refresh token lifetime in seconds (default: 90 days)
     ///   - authorizationCodeLifetime: Auth code lifetime in seconds (default: 10 minutes)
+    ///   - clientCredentialsTokenLifetime: Lifetime in seconds of an access token issued by
+    ///     `client_credentials` (default: 15 minutes). Shorter than a user's, because there is
+    ///     no refresh token and re-requesting costs a service one POST, while a stolen token
+    ///     is good until it expires.
     ///
-    ///     Each of the three lifetimes must be finite and at least one second. This
+    ///     Each of the four lifetimes must be finite and at least one second. This
     ///     initializer does not check — it cannot throw — so a server built with `.nan`,
     ///     `.infinity`, zero or a negative is constructed and then refuses, with
     ///     `server_error`, every request that would have issued something with that lifetime.
@@ -137,6 +142,7 @@ public actor OAuthServer {
         accessTokenLifetime: TimeInterval = 86400,        // 24 hours
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
+        clientCredentialsTokenLifetime: TimeInterval = 900,   // 15 minutes
         resourcePolicy: ResourceIndicatorPolicy? = nil
     ) {
         self.storage = storage
@@ -154,13 +160,14 @@ public actor OAuthServer {
         self.accessTokenLifetime = accessTokenLifetime
         self.refreshTokenLifetime = refreshTokenLifetime
         self.authorizationCodeLifetime = authorizationCodeLifetime
+        self.clientCredentialsTokenLifetime = clientCredentialsTokenLifetime
     }
 
     // MARK: - Configured lifetimes
 
     /// A lifetime this server was configured with, and what it bounds.
     private enum ConfiguredLifetime {
-        case accessToken, refreshToken, authorizationCode
+        case accessToken, refreshToken, authorizationCode, clientCredentialsToken
 
         /// The refusal for a lifetime that cannot be used.
         ///
@@ -181,6 +188,10 @@ public actor OAuthServer {
                 return .serverError(
                     "This server's configured authorization-code lifetime is not a usable "
                     + "number of seconds, so it cannot issue a code.")
+            case .clientCredentialsToken:
+                return .serverError(
+                    "This server's configured client-credentials token lifetime is not a "
+                    + "usable number of seconds, so it cannot issue a token.")
             }
         }
     }
@@ -209,6 +220,7 @@ public actor OAuthServer {
         case .accessToken: configured = accessTokenLifetime
         case .refreshToken: configured = refreshTokenLifetime
         case .authorizationCode: configured = authorizationCodeLifetime
+        case .clientCredentialsToken: configured = clientCredentialsTokenLifetime
         }
         guard let seconds = WholeSeconds.count(in: configured), seconds > 0 else {
             throw lifetime.refusal
@@ -227,10 +239,8 @@ public actor OAuthServer {
             registrationEndpoint: "\(issuer)/register",
             responseTypesSupported: ["code"],
             // Named from `GrantType` rather than written out again: two lists drift, one does
-            // not, and this is a test about drift. `clientCredentials` is absent deliberately —
-            // this provider does not issue those, and advertising a grant it refuses is worse
-            // than omitting one it honours.
-            // What this deployment honours, not what this package implements.
+            // not. What this deployment honours, not what this package implements:
+            // `clientCredentials` appears only for a deployment that opted in to it.
             grantTypesSupported: served.grantTypes.map(\.rawValue),
             codeChallengeMethodsSupported: [PKCE.ChallengeMethod.s256.rawValue],
             tokenEndpointAuthMethodsSupported:
@@ -622,6 +632,11 @@ public actor OAuthServer {
         scopes: Set<String>,
         authentication: ClientAuthenticationMethod = .clientSecretBasic
     ) async throws -> ServiceClientCredentials {
+        guard served.grantTypes.contains(.clientCredentials) else {
+            throw OAuthError.invalidClientMetadata(
+                "This deployment does not serve client_credentials; a client created for it "
+                + "could never obtain a token.")
+        }
         guard authentication == .clientSecretBasic || authentication == .clientSecretPost else {
             throw OAuthError.invalidClientMetadata(
                 "A service client authenticates with a secret: client_secret_basic or client_secret_post.")
@@ -867,6 +882,8 @@ public actor OAuthServer {
             return try await handleAuthorizationCodeGrant(request)
         case "refresh_token":
             return try await handleRefreshTokenGrant(request)
+        case GrantType.clientCredentials.rawValue:
+            return try await handleClientCredentialsGrant(request)
         default:
             throw OAuthError.unsupportedGrantType(nil)
         }
@@ -985,6 +1002,61 @@ public actor OAuthServer {
             expiresIn: expiresIn,
             refreshToken: refreshToken,
             scope: authCode.scope
+        )
+    }
+
+    /// The client-credentials grant — RFC 6749 §4.4.
+    ///
+    /// Checked in an order where each refusal names the first thing wrong, and every check
+    /// happens before anything is stored:
+    ///
+    /// 1. The deployment serves the grant. One that has not opted in answers exactly as it
+    ///    always did, `unsupported_grant_type`, whatever the client's record says.
+    /// 2. The client exists, names the grant, is confidential, and has a scope ceiling. The
+    ///    HTTP handler has already authenticated it; the confidentiality check is repeated
+    ///    because this method is public and can be called without the handler.
+    /// 3. The requested scope lies within the ceiling.
+    ///
+    /// No refresh token, ever (RFC 6749 §4.4.3). A service re-requests instead, and a stolen
+    /// token is good only until it expires.
+    private func handleClientCredentialsGrant(_ request: TokenRequest) async throws -> TokenResponse {
+        guard served.grantTypes.contains(.clientCredentials) else {
+            throw OAuthError.unsupportedGrantType(nil)
+        }
+        let expiresIn = try wholeSeconds(of: .clientCredentialsToken)
+
+        guard let client = try await storage.getClient(clientId: request.clientId) else {
+            throw OAuthError.invalidClient(nil)
+        }
+        guard client.grantTypes.contains(GrantType.clientCredentials.rawValue) else {
+            throw OAuthError.unauthorizedClient(nil)
+        }
+        guard client.tokenEndpointAuthMethod != ClientAuthenticationMethod.none.rawValue else {
+            throw OAuthError.invalidClient(nil)
+        }
+        guard let ceiling = client.scopeCeiling, !ceiling.isEmpty else {
+            throw OAuthError.unauthorizedClient(
+                "This client has no scope ceiling. Create it with createServiceClient.")
+        }
+
+        let scope = try Self.scope(request.scope, within: client)
+        let audience = try resourcePolicy.audience(for: request.resource)
+
+        let accessToken = TokenGenerator.generateAccessToken()
+        try await storage.saveAccessToken(
+            token: accessToken,
+            clientId: request.clientId,
+            scope: scope,
+            expiresAt: Date().addingTimeInterval(clientCredentialsTokenLifetime),
+            audience: audience
+        )
+
+        return TokenResponse(
+            accessToken: accessToken,
+            tokenType: "Bearer",
+            expiresIn: expiresIn,
+            refreshToken: nil,
+            scope: scope
         )
     }
 
@@ -1264,7 +1336,7 @@ public struct ServedCapabilities: Sendable, Equatable {
     /// The grants ``OAuthServer`` can actually issue. Anything else in `GrantType` exists for
     /// the client half, and declaring it here would advertise a refusal.
     static let implementedGrants: Set<GrantType> = [
-        .authorizationCode, .refreshToken, .deviceCode, .tokenExchange
+        .authorizationCode, .refreshToken, .clientCredentials, .deviceCode, .tokenExchange
     ]
 
     /// The grants this deployment will honour.
@@ -1585,6 +1657,11 @@ public struct TokenRequest: Sendable {
     /// strict policy refuses.
     public let resource: [URL]
 
+    /// The `scope` parameter, for a grant that takes one here — `client_credentials`.
+    ///
+    /// The authorization code and refresh grants ignore it: their scope was fixed earlier.
+    public let scope: String?
+
     /// Creates a new token request
     public init(
         grantType: String,
@@ -1594,9 +1671,11 @@ public struct TokenRequest: Sendable {
         clientSecret: String?,
         codeVerifier: String?,
         refreshToken: String?,
-        resource: [URL] = []
+        resource: [URL] = [],
+        scope: String? = nil
     ) {
         self.resource = resource
+        self.scope = scope
         self.grantType = grantType
         self.code = code
         self.redirectUri = redirectUri

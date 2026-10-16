@@ -41,8 +41,9 @@ struct MetadataAccuracyTests {
     ///
     /// Compared against `GrantType` rather than a second literal list, because two lists drift
     /// and this is a test about drift. `clientCredentials` is excluded deliberately: the
-    /// provider does not issue those, and advertising a grant it refuses is worse than not
-    /// advertising one it honours.
+    /// provider issues those only when a deployment opts in, and this server has not —
+    /// advertising a grant it refuses is worse than not advertising one it honours. The
+    /// opted-in case is in `ClientCredentialsGrantTests`.
     @Test("The advertised grants are the grants this server honours")
     func advertisedGrantsMatchImplementation() async throws {
         let metadata = try await makeServer().getMetadata()

@@ -1072,20 +1072,19 @@ struct OAuthServerTests {
 }
 
 /// The invariant that made excluding `client_credentials` from ``GrantType``
-/// look necessary — and which survives without it.
+/// look necessary — narrowed, on purpose, rather than deleted.
 ///
-/// A client-credentials token has no resource owner and no consent step. A
-/// provider issuing one would hand out access with no user involved, which is
-/// the arrangement OAuth exists to make deliberate. Making the grant
-/// unconstructible looked like it prevented that, but the protection never came
-/// from the enum: ``OAuthServer/handleTokenRequest(_:)`` dispatches on the raw
-/// wire string and rejects anything it does not implement. These tests pin that,
-/// so the client half can request the grant from third parties while the
-/// provider half still refuses to issue it.
-@Suite("Provider refuses client credentials")
+/// A client-credentials token has no resource owner and no consent step. This
+/// suite used to pin that the provider never issues one. Since 2026-10-16 it
+/// issues them as an **opt-in** (`project/plans/proposals/ProviderClientCredentials.md`),
+/// so what survives is the part that still matters: a deployment that has not
+/// opted in — ``ServedCapabilities/core`` — answers exactly as before, whatever
+/// the client asks. The opted-in behaviour, and the limits that replace the old
+/// refusal, are pinned in `ClientCredentialsTests`.
+@Suite("Provider refuses client credentials unless the deployment serves them")
 struct ProviderRejectsClientCredentials {
 
-    @Test("A client_credentials token request is rejected")
+    @Test("A client_credentials token request is rejected by a core deployment")
     func rejectsClientCredentialsGrant() async throws {
         let server = try await OAuthServerTests.makeTestServer()
         do {
