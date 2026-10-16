@@ -665,6 +665,54 @@ public actor OAuthServer {
             clientId: clientId, clientSecret: clientSecret, scopes: scopes)
     }
 
+    /// Replaces a service client's secret.
+    ///
+    /// - Parameters:
+    ///   - clientId: The service client.
+    ///   - revokingTokens: Whether to end the tokens already issued. `false` lets them run out
+    ///     on their own, within the client-credentials lifetime — right for a routine rotation.
+    ///     `true` ends them now — right when the old secret may have leaked, since whoever
+    ///     holds it may already have used it.
+    /// - Returns: The new credentials. **The secret is returned only here.**
+    /// - Throws: `OAuthError.invalidClient(_:)` when `clientId` is not a service client.
+    public func rotateServiceClientSecret(
+        clientId: String, revokingTokens: Bool
+    ) async throws -> ServiceClientCredentials {
+        let client = try await serviceClient(clientId)
+        let secret = TokenGenerator.generateClientSecret()
+        try await storage.saveClient(RegisteredClient(
+            clientId: client.clientId, clientSecret: secret, clientName: client.clientName,
+            redirectUris: client.redirectUris, grantTypes: client.grantTypes,
+            tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
+            registrationDate: client.registrationDate, applicationType: client.applicationType,
+            scopeCeiling: client.scopeCeiling))
+        if revokingTokens {
+            try await storage.revokeAllTokensForClient(clientId: clientId)
+        }
+        return ServiceClientCredentials(
+            clientId: clientId, clientSecret: secret, scopes: client.scopeCeiling ?? [])
+    }
+
+    /// Removes a service client and every token it holds.
+    ///
+    /// - Throws: `OAuthError.invalidClient(_:)` when `clientId` is not a service client.
+    ///   Refused rather than applied to any client, so a mistyped id cannot delete an
+    ///   application's registration.
+    public func retireServiceClient(clientId: String) async throws {
+        _ = try await serviceClient(clientId)
+        try await storage.deleteClient(clientId: clientId)
+    }
+
+    /// The stored client, if it is one ``createServiceClient(name:scopes:authentication:)``
+    /// made.
+    private func serviceClient(_ clientId: String) async throws -> RegisteredClient {
+        guard let client = try await storage.getClient(clientId: clientId),
+              client.grantTypes.contains(GrantType.clientCredentials.rawValue) else {
+            throw OAuthError.invalidClient("No service client has that id.")
+        }
+        return client
+    }
+
     /// The scope to grant `client` for a request naming `requested`, held to its ceiling.
     ///
     /// - Returns: `requested` when the client has no ceiling or it lies within it; the whole

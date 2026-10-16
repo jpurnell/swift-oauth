@@ -249,6 +249,11 @@ consumer can meet — each is under **Changed**, with what to do about it.
   over HTTP does. It returns `ServiceClientCredentials`, the only time the secret exists
   outside the process that will use it. A public client, an empty scope set, or a scope the
   deployment does not offer is refused with `invalid_client_metadata`.
+- **`OAuthServer.rotateServiceClientSecret(clientId:revokingTokens:)`** and
+  **`retireServiceClient(clientId:)`**. Rotation returns a new secret; with `revokingTokens:
+  true` it also ends the tokens already issued, which is the choice to make when the old
+  secret may have leaked. Retiring deletes the client and its tokens. Both refuse a client
+  that is not a service client, so a mistyped id cannot touch an application's registration.
 - **`RegisteredClient.scopeCeiling`**: the most a client may be granted, in any flow. When
   set, `/authorize` (checked before the consent page), the device flow and
   `client_credentials` refuse a scope beyond it with `invalid_scope`, and a request naming no

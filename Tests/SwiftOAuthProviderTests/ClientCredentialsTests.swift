@@ -461,3 +461,95 @@ struct ClientCredentialsGrantTests {
         #expect(await !core.getMetadata().grantTypesSupported.contains("client_credentials"))
     }
 }
+
+/// What an operator does when a service's secret leaks, or the service goes away.
+@Suite("Client credentials — rotation and retirement")
+struct ServiceClientLifecycleTests {
+
+    private static func issue(
+        _ server: OAuthServer, _ id: String, _ secret: String
+    ) async throws -> String {
+        try await server.handleTokenRequest(TokenRequest(
+            grantType: "client_credentials", code: nil, redirectUri: nil,
+            clientId: id, clientSecret: secret, codeVerifier: nil, refreshToken: nil)).accessToken
+    }
+
+    @Test("Rotation replaces the secret; outstanding tokens run out on their own")
+    func rotationKeepsTokens() async throws {
+        let (server, storage) = try ClientCredentialsFixtures.makeServer()
+        let service = try await server.createServiceClient(name: "Fleet", scopes: ["push:send:fleet"])
+        let token = try await Self.issue(server, service.clientId, service.clientSecret)
+
+        let rotated = try await server.rotateServiceClientSecret(
+            clientId: service.clientId, revokingTokens: false)
+
+        #expect(rotated.clientId == service.clientId)
+        #expect(rotated.clientSecret != service.clientSecret)
+        #expect(rotated.scopes == ["push:send:fleet"])
+        #expect(try await !storage.clientSecretMatches(
+            clientId: service.clientId, presented: service.clientSecret))
+        #expect(try await storage.clientSecretMatches(
+            clientId: service.clientId, presented: rotated.clientSecret))
+        #expect(try await storage.validateAccessToken(token: token).isValid)
+    }
+
+    /// A leaked secret may already have been used. Revoking ends what it obtained now rather
+    /// than in up to fifteen minutes.
+    @Test("Rotation can end outstanding tokens at once")
+    func rotationRevokingTokens() async throws {
+        let (server, storage) = try ClientCredentialsFixtures.makeServer()
+        let service = try await server.createServiceClient(name: "Fleet", scopes: ["push:send:fleet"])
+        let token = try await Self.issue(server, service.clientId, service.clientSecret)
+
+        let rotated = try await server.rotateServiceClientSecret(
+            clientId: service.clientId, revokingTokens: true)
+
+        #expect(try await !storage.validateAccessToken(token: token).isValid)
+        _ = try await Self.issue(server, service.clientId, rotated.clientSecret)
+    }
+
+    /// Rotation is for service clients. Applied to an ordinary registered client it would
+    /// hand an operator a secret for a client that cannot use this grant, and silently
+    /// break the application holding the old one.
+    @Test("Rotating a client that is not a service client is refused")
+    func rotatingOrdinaryClientRefused() async throws {
+        let (server, _) = try ClientCredentialsFixtures.makeServer()
+        let registered = try await server.registerClient(ClientRegistrationRequest(
+            clientName: "App", redirectUris: ["https://app.example.com/cb"]))
+
+        await #expect(throws: OAuthError.self) {
+            _ = try await server.rotateServiceClientSecret(
+                clientId: registered.clientId, revokingTokens: false)
+        }
+        await #expect(throws: OAuthError.self) {
+            _ = try await server.rotateServiceClientSecret(clientId: "nobody", revokingTokens: false)
+        }
+    }
+
+    @Test("Retiring removes the client and ends its tokens")
+    func retirement() async throws {
+        let (server, storage) = try ClientCredentialsFixtures.makeServer()
+        let service = try await server.createServiceClient(name: "Fleet", scopes: ["push:send:fleet"])
+        let token = try await Self.issue(server, service.clientId, service.clientSecret)
+
+        try await server.retireServiceClient(clientId: service.clientId)
+
+        #expect(try await storage.getClient(clientId: service.clientId) == nil)
+        #expect(try await !storage.validateAccessToken(token: token).isValid)
+        await #expect(throws: OAuthError.self) {
+            _ = try await Self.issue(server, service.clientId, service.clientSecret)
+        }
+    }
+
+    @Test("Retiring a client that is not a service client is refused")
+    func retiringOrdinaryClientRefused() async throws {
+        let (server, storage) = try ClientCredentialsFixtures.makeServer()
+        let registered = try await server.registerClient(ClientRegistrationRequest(
+            clientName: "App", redirectUris: ["https://app.example.com/cb"]))
+
+        await #expect(throws: OAuthError.self) {
+            try await server.retireServiceClient(clientId: registered.clientId)
+        }
+        #expect(try await storage.getClient(clientId: registered.clientId) != nil)
+    }
+}
