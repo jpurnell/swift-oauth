@@ -76,7 +76,9 @@ struct OAuthStorageTests {
             let retrieved = try #require(await storage.getClient(clientId: "test-client-123"))
 
             #expect(retrieved.clientId == client.clientId)
-            #expect(retrieved.clientSecret == client.clientSecret)
+            // The secret is stored as a hash and not handed back — see `ClientSecretStorageTests`.
+            #expect(retrieved.clientSecret == nil)
+            #expect(try await storage.clientSecretMatches(clientId: "test-client-123", presented: "secret-456"))
             #expect(retrieved.clientName == client.clientName)
             #expect(retrieved.redirectUris == client.redirectUris)
             #expect(retrieved.grantTypes == client.grantTypes)
@@ -120,7 +122,7 @@ struct OAuthStorageTests {
 
             let retrieved = try await storage.getClient(clientId: "update-test")
             #expect(retrieved?.clientName == "Updated Name")
-            #expect(retrieved?.clientSecret == "secret2")
+            #expect(try await storage.clientSecretMatches(clientId: "update-test", presented: "secret2"))
             #expect(retrieved?.redirectUris.count == 2)
         }
 

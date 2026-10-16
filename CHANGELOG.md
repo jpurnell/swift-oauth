@@ -158,6 +158,16 @@ consumer can meet — each is under **Changed**, with what to do about it.
   nowhere.
 
 ### Changed
+- **Client secrets are stored as SHA-256 hashes, and `getClient(clientId:)` no longer returns
+  them.** `OAuthStorage` kept every confidential client's secret in plaintext beside tokens it
+  already hashed, so a copy of the database handed over every client's credential. Schema
+  version 7 hashes the existing secrets in place when a database is first opened, in one
+  transaction; every client keeps working with the secret it holds. A retrieved
+  `RegisteredClient` now has `clientSecret == nil`. **Migration:** code that read the secret
+  back from storage to check it should call `OAuthStorage.clientSecretMatches(clientId:presented:)`.
+  Code that reads a client, changes it and saves it back keeps the stored secret: saving
+  without a secret no longer erases one. A database opened by this release cannot be read by
+  an earlier one, since its secrets no longer match what that release compares.
 - **`ServedCapabilities` refuses a grant the provider does not issue.** Declaring
   `.clientCredentials` used to succeed, and the metadata then advertised a grant the token
   endpoint answered with `unsupported_grant_type`. It now throws

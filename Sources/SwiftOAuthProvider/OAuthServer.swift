@@ -1020,22 +1020,21 @@ public actor OAuthServer {
             }
 
             let parts = credentials.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2,
-                  String(parts[0]) == clientId,
-                  let secret = client.clientSecret else {
+            guard parts.count == 2, String(parts[0]) == clientId else {
                 return false
             }
 
-            return TokenGenerator.timingSafeCompare(String(parts[1]), secret)
+            return try await storage.clientSecretMatches(
+                clientId: clientId, presented: String(parts[1]))
 
         case "client_secret_post":
             // Client secret in request body
-            guard let providedSecret = bodyClientSecret,
-                  let storedSecret = client.clientSecret else {
+            guard let providedSecret = bodyClientSecret else {
                 return false
             }
 
-            return TokenGenerator.timingSafeCompare(providedSecret, storedSecret)
+            return try await storage.clientSecretMatches(
+                clientId: clientId, presented: providedSecret)
 
         default:
             return false

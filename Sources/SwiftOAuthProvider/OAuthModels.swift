@@ -40,7 +40,12 @@ public struct RegisteredClient: Codable, Sendable, Equatable {
     /// Unique identifier for the client
     public let clientId: String
 
-    /// Client secret for confidential clients (nil for public clients)
+    /// The client's secret — present only on a value that has not been through storage.
+    ///
+    /// ``OAuthStorage`` keeps a SHA-256 of it and never returns it, so a client read back by
+    /// `getClient(clientId:)` has `nil` here whether it is confidential or not. Check a
+    /// presented secret with `OAuthStorage.clientSecretMatches(clientId:presented:)`, and tell
+    /// a confidential client from a public one by ``tokenEndpointAuthMethod``.
     public let clientSecret: String?
 
     /// Human-readable name of the client application

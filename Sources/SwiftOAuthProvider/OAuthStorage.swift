@@ -101,8 +101,9 @@ public actor OAuthStorage {
     /// `pushed_requests` for RFC 9126; version 4 added `access_tokens.key_thumbprint` and
     /// `dpop_proofs` for RFC 9449; version 5 added `access_tokens.certificate_thumbprint`
     /// for RFC 8705; version 6 added `authorization_codes.audience`, closing the RFC 8707
-    /// authorization-endpoint gap 0.8.0 left open.
-    public static let currentSchemaVersion = 6
+    /// authorization-endpoint gap 0.8.0 left open; version 7 replaced every plaintext
+    /// `clients.client_secret` with its SHA-256.
+    public static let currentSchemaVersion = 7
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -317,8 +318,71 @@ public actor OAuthStorage {
             }
         }
 
+        // Version 7: client secrets at rest are hashes, as tokens already were.
+        //
+        // Every existing secret is hashed in place, so each client keeps working with the
+        // secret it holds and none stays readable on disk. One transaction, with the version
+        // bump inside it: a crash part-way through must leave either every secret plaintext
+        // at version 6 or every secret hashed at version 7. Anything between would be hashed
+        // a second time on the next open, locking those clients out for good.
+        if version < 7 && targetVersion >= 7 {
+            try executeStatic(db: db, sql: "BEGIN IMMEDIATE")
+            do {
+                try hashPlaintextClientSecrets(db: db)
+                try executeStatic(db: db, sql: "PRAGMA user_version = 7")
+                try executeStatic(db: db, sql: "COMMIT")
+            } catch let migrationError {
+                // Reported rather than swallowed: a failed rollback leaves the transaction
+                // open on this connection, and the caller needs to know that too.
+                do {
+                    try executeStatic(db: db, sql: "ROLLBACK")
+                } catch {
+                    throw OAuthStorageError.databaseError(
+                        "Hashing client secrets failed (\(migrationError)) and the rollback "
+                        + "failed too (\(error)).")
+                }
+                throw migrationError
+            }
+        }
+
         if version < targetVersion {
             try executeStatic(db: db, sql: "PRAGMA user_version = \(targetVersion)")
+        }
+    }
+
+    /// Replaces each `clients.client_secret` with its SHA-256. Run once, by the version 7
+    /// migration, inside its transaction.
+    private static func hashPlaintextClientSecrets(db: OpaquePointer) throws {
+        var select: OpaquePointer?
+        defer { sqlite3_finalize(select) }
+        guard sqlite3_prepare_v2(
+            db, "SELECT client_id, client_secret FROM clients WHERE client_secret IS NOT NULL",
+            -1, &select, nil) == SQLITE_OK
+        else {
+            throw OAuthStorageError.databaseError("Failed to read client secrets.")
+        }
+        var rows: [(clientId: String, hash: String)] = []
+        while sqlite3_step(select) == SQLITE_ROW {
+            guard let id = sqlite3_column_text(select, 0),
+                  let secret = sqlite3_column_text(select, 1) else { continue }
+            rows.append((String(cString: id), sha256Hex(String(cString: secret))))
+        }
+
+        var update: OpaquePointer?
+        defer { sqlite3_finalize(update) }
+        guard sqlite3_prepare_v2(
+            db, "UPDATE clients SET client_secret = ? WHERE client_id = ?",
+            -1, &update, nil) == SQLITE_OK
+        else {
+            throw OAuthStorageError.databaseError("Failed to prepare the secret migration.")
+        }
+        for row in rows {
+            sqlite3_reset(update)
+            sqlite3_bind_text(update, 1, row.hash, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(update, 2, row.clientId, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(update) == SQLITE_DONE else {
+                throw OAuthStorageError.databaseError("Failed to hash a client secret.")
+            }
         }
     }
 
@@ -378,18 +442,34 @@ public actor OAuthStorage {
     // MARK: - Client Operations
 
     /// Saves or updates a client registration
+    ///
+    /// The secret, when there is one, is stored as its SHA-256 and never returned: a client read
+    /// back by ``getClient(clientId:)`` has `clientSecret == nil`. Saving such a client again
+    /// keeps the secret already stored, so updating a client's other fields cannot erase its
+    /// credential; saving one with a secret replaces it. A client saved with
+    /// `token_endpoint_auth_method` `none` keeps no secret at all.
     public func saveClient(_ client: RegisteredClient) throws {
         let redirectUris = try encodeJSON(client.redirectUris)
         let grantTypes = try encodeJSON(client.grantTypes)
 
         try execute("""
-            INSERT OR REPLACE INTO clients
+            INSERT INTO clients
             (client_id, client_secret, client_name, redirect_uris, grant_types,
              token_endpoint_auth_method, registration_date)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(client_id) DO UPDATE SET
+                client_secret = CASE
+                    WHEN excluded.token_endpoint_auth_method = 'none' THEN NULL
+                    ELSE COALESCE(excluded.client_secret, clients.client_secret)
+                END,
+                client_name = excluded.client_name,
+                redirect_uris = excluded.redirect_uris,
+                grant_types = excluded.grant_types,
+                token_endpoint_auth_method = excluded.token_endpoint_auth_method,
+                registration_date = excluded.registration_date
         """, parameters: [
             client.clientId,
-            client.clientSecret as Any,
+            client.clientSecret.map(Self.sha256Hex) as Any,
             client.clientName,
             redirectUris,
             grantTypes,
@@ -416,6 +496,27 @@ public actor OAuthStorage {
         }
 
         return try parseClient(from: stmt)
+    }
+
+    /// Whether `presented` is the secret this client was registered with.
+    ///
+    /// Compares hashes in constant time. `false` for an unknown client and for a client with
+    /// no secret, so a public client can never authenticate as a confidential one.
+    public func clientSecretMatches(clientId: String, presented: String) throws -> Bool {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+
+        let sql = "SELECT client_secret FROM clients WHERE client_id = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, clientId, -1, SQLITE_TRANSIENT)
+
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let stored = sqlite3_column_text(stmt, 0) else {
+            return false
+        }
+        return TokenGenerator.timingSafeCompare(Self.sha256Hex(presented), String(cString: stored))
     }
 
     /// Deletes a client and all associated tokens
@@ -1160,8 +1261,16 @@ public actor OAuthStorage {
     }
 
     private func hashToken(_ token: String) -> String {
-        let data = Data(token.utf8)
-        let digest = SHA256.hash(data: data)
+        Self.sha256Hex(token)
+    }
+
+    /// The lowercase hex SHA-256 of a credential: how tokens and client secrets are kept.
+    ///
+    /// A fast hash is the right one here. Every value stored this way is 256 bits of
+    /// generator output, so there is no dictionary to slow down, and a password KDF would cost
+    /// every token request its latency for nothing.
+    private static func sha256Hex(_ value: String) -> String {
+        let digest = SHA256.hash(data: Data(value.utf8))
         return digest.map { ($0 < 16 ? "0" : "") + String($0, radix: 16, uppercase: false) }.joined()
     }
 
@@ -1195,7 +1304,7 @@ public actor OAuthStorage {
         }
 
         let clientId = String(cString: sqlite3_column_text(stmt, 0))
-        let clientSecret = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
+        // Column 1 holds a hash of the secret, which is not the secret and is not returned.
         let clientName = String(cString: sqlite3_column_text(stmt, 2))
         let redirectUrisJson = String(cString: sqlite3_column_text(stmt, 3))
         let grantTypesJson = String(cString: sqlite3_column_text(stmt, 4))
@@ -1207,7 +1316,7 @@ public actor OAuthStorage {
 
         return RegisteredClient(
             clientId: clientId,
-            clientSecret: clientSecret,
+            clientSecret: nil,
             clientName: clientName,
             redirectUris: redirectUris,
             grantTypes: grantTypes,
