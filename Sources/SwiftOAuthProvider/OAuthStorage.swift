@@ -102,8 +102,9 @@ public actor OAuthStorage {
     /// `dpop_proofs` for RFC 9449; version 5 added `access_tokens.certificate_thumbprint`
     /// for RFC 8705; version 6 added `authorization_codes.audience`, closing the RFC 8707
     /// authorization-endpoint gap 0.8.0 left open; version 7 replaced every plaintext
-    /// `clients.client_secret` with its SHA-256 and added `clients.scope_ceiling`.
-    public static let currentSchemaVersion = 7
+    /// `clients.client_secret` with its SHA-256 and added `clients.scope_ceiling`; version 8
+    /// added `clients.application_type`, which until then was dropped on save.
+    public static let currentSchemaVersion = 8
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -352,6 +353,16 @@ public actor OAuthStorage {
             }
         }
 
+        // Version 8: `clients.application_type` (RFC 7591 / OpenID registration). There was no
+        // column for it, so every client read back was `.web`, a native one included. Existing
+        // rows stay NULL, which reads as `.web` — what every read of them returned before.
+        if version < 8 && targetVersion >= 8 {
+            if try !columnExists(db: db, table: "clients", column: "application_type") {
+                try executeStatic(
+                    db: db, sql: "ALTER TABLE clients ADD COLUMN application_type TEXT")
+            }
+        }
+
         if version < targetVersion {
             try executeStatic(db: db, sql: "PRAGMA user_version = \(targetVersion)")
         }
@@ -462,8 +473,8 @@ public actor OAuthStorage {
         try execute("""
             INSERT INTO clients
             (client_id, client_secret, client_name, redirect_uris, grant_types,
-             token_endpoint_auth_method, registration_date, scope_ceiling)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             token_endpoint_auth_method, registration_date, scope_ceiling, application_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(client_id) DO UPDATE SET
                 client_secret = CASE
                     WHEN excluded.token_endpoint_auth_method = 'none' THEN NULL
@@ -474,7 +485,8 @@ public actor OAuthStorage {
                 grant_types = excluded.grant_types,
                 token_endpoint_auth_method = excluded.token_endpoint_auth_method,
                 registration_date = excluded.registration_date,
-                scope_ceiling = excluded.scope_ceiling
+                scope_ceiling = excluded.scope_ceiling,
+                application_type = excluded.application_type
         """, parameters: [
             client.clientId,
             client.clientSecret.map(Self.sha256Hex) as Any,
@@ -483,7 +495,8 @@ public actor OAuthStorage {
             grantTypes,
             client.tokenEndpointAuthMethod,
             client.registrationDate.timeIntervalSince1970,
-            client.scopeCeiling.map { $0.sorted().joined(separator: " ") } as Any
+            client.scopeCeiling.map { $0.sorted().joined(separator: " ") } as Any,
+            client.applicationType.rawValue
         ])
     }
 
@@ -1322,6 +1335,17 @@ public actor OAuthStorage {
         let scopeCeiling = sqlite3_column_text(stmt, 7).map {
             Set(String(cString: $0).split(separator: " ").map(String.init))
         }
+        // NULL is a row from before the column existed, read as `.web` as it always was. Any
+        // other value this build does not know is refused rather than guessed at.
+        let applicationType: ApplicationType
+        if let raw = sqlite3_column_text(stmt, 8).map({ String(cString: $0) }) {
+            guard let known = ApplicationType(rawValue: raw) else {
+                throw OAuthStorageError.databaseError("Unknown application_type '\(raw)' for client \(clientId)")
+            }
+            applicationType = known
+        } else {
+            applicationType = .web
+        }
 
         let redirectUris: [String] = try decodeJSON(redirectUrisJson, as: [String].self)
         let grantTypes: [String] = try decodeJSON(grantTypesJson, as: [String].self)
@@ -1334,6 +1358,7 @@ public actor OAuthStorage {
             grantTypes: grantTypes,
             tokenEndpointAuthMethod: tokenEndpointAuthMethod,
             registrationDate: registrationDate,
+            applicationType: applicationType,
             scopeCeiling: scopeCeiling
         )
     }

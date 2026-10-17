@@ -157,6 +157,14 @@ consumer can meet — each is under **Changed**, with what to do about it.
   the new `OAuthRedirectRefused.noLocation`, and a description that says the redirect named
   nowhere.
 
+### Fixed
+- **A client's `application_type` survives storage.** `OAuthStorage` had no column for it, so
+  every client read back by `getClient(clientId:)` was `.web` — a native client registered
+  through `/register` included; only the registration response ever showed its real type.
+  Schema version 8 adds `clients.application_type`. Clients stored before it read as `.web`,
+  which is what every read of them returned already. Nothing in the provider decided anything
+  from the stored value, so no grant was affected; code reading it back was misinformed.
+
 ### Changed
 - **`/authorize` no longer grants MCP scopes nobody asked for.** A request naming no scope was
   given `mcp:tools mcp:resources mcp:prompts` — three scopes written into this package —
