@@ -116,6 +116,10 @@ public actor OAuthServer {
     ///     documents. No default: `nil` means "advertise none", and it is a decision a caller
     ///     makes rather than inherits. This package previously invented three MCP scopes, which
     ///     one consumer advertised without ever having chosen them.
+    ///
+    ///     Also the default scope at `/authorize`: a request naming none is granted these,
+    ///     in this order. With `nil` or `[]` there is no default, and such a request is
+    ///     refused with `invalid_scope`.
     ///   - served: What this deployment actually serves — its grants, its client
     ///     authentication methods and its routed endpoints. No default, because a client reads
     ///     the metadata as a list of things it may do, and anything advertised but not served
@@ -737,6 +741,31 @@ public actor OAuthServer {
         return asked.sorted().joined(separator: " ")
     }
 
+    /// The scope an authorization code carries for a request naming `requested`.
+    ///
+    /// A client with a ceiling gets what it asked for within it, or the whole ceiling. One
+    /// without gets what it asked for, or — having asked for nothing — the deployment's
+    /// `scopesSupported`, in the order the deployment declared them.
+    ///
+    /// That default used to be three MCP scopes written into this package and granted whatever
+    /// the deployment offered (FullSpecConformance §18). RFC 6749 §3.3 allows a server either a
+    /// pre-defined default or a refusal; the deployment's own offer is the only default this
+    /// package has any business assuming, and with nothing offered there is none.
+    ///
+    /// - Throws: `OAuthError.invalidScope(_:)` for a request beyond the ceiling, or for no
+    ///   scope requested when the deployment offers none.
+    private func authorizationScope(_ requested: String?, for client: RegisteredClient) throws -> String {
+        if let granted = try Self.scope(requested, within: client) {
+            return granted
+        }
+        guard let offered = scopesSupported, !offered.isEmpty else {
+            throw OAuthError.invalidScope(
+                "No scope was requested, and this server offers none to default to. "
+                + "Name the scope to request.")
+        }
+        return offered.joined(separator: " ")
+    }
+
     // MARK: - Authorization Endpoint
 
     /// Handles an authorization request
@@ -795,20 +824,7 @@ public actor OAuthServer {
             throw OAuthError.invalidRequest(nil)
         }
 
-        // A client with a ceiling gets what it asked for within it, or the whole ceiling.
-        //
-        // One without keeps the old behaviour: any requested scope, and the MCP default when
-        // none is named. That default is FullSpecConformance §18's defect and is removed
-        // separately, because SwiftMCPServer depends on it.
-        let defaultScope = "mcp:tools mcp:resources mcp:prompts"
-        let effectiveScope: String
-        if client.scopeCeiling != nil, let bounded = try Self.scope(request.scope, within: client) {
-            effectiveScope = bounded
-        } else if let scope = request.scope, !scope.trimmingCharacters(in: .whitespaces).isEmpty {
-            effectiveScope = scope
-        } else {
-            effectiveScope = defaultScope
-        }
+        let effectiveScope = try authorizationScope(request.scope, for: client)
 
         // After the request is known to be well-formed — so a redirect URI that is not this
         // client's is still reported as that — and before a code exists.
@@ -876,10 +892,9 @@ public actor OAuthServer {
             throw OAuthError.invalidRequest(nil)
         }
 
-        // A client with a ceiling is refused here, before the user sees a consent page for
-        // a grant that cannot be issued. Without one, any scope is passed through per
-        // RFC 6749 §3.3.
-        _ = try Self.scope(request.scope, within: client)
+        // Refused here, before the user sees a consent page for a grant that cannot be
+        // issued: a scope beyond the client's ceiling, or none named with no default to use.
+        _ = try authorizationScope(request.scope, for: client)
 
         return client
     }

@@ -158,6 +158,16 @@ consumer can meet — each is under **Changed**, with what to do about it.
   nowhere.
 
 ### Changed
+- **`/authorize` no longer grants MCP scopes nobody asked for.** A request naming no scope was
+  given `mcp:tools mcp:resources mcp:prompts` — three scopes written into this package —
+  whatever the deployment offered. It now gets the deployment's own `scopesSupported`, in the
+  order declared; with nothing offered it is refused with `invalid_scope` (RFC 6749 §3.3 allows
+  either), at `validateAuthorizationRequest` as well, so before a consent page is shown.
+  A request that names its scope, and a client with a scope ceiling, are unaffected. This closes
+  FullSpecConformance §18, whose metadata half was fixed when `scopesSupported` lost its
+  default. **For SwiftMCPServer nothing changes:** it passes those same three scopes as
+  `scopesSupported`. **Migration:** a deployment passing `scopesSupported: nil` (or `[]`) whose
+  clients omit `scope` must either list its scopes or have those clients name one.
 - **`OAuthError` has a new case, `invalidClientMetadata(_:)`** (`invalid_client_metadata`,
   RFC 7591 §3.2.2), answered with a 400. An exhaustive `switch` over `OAuthError` needs one
   more arm. `OAuthError(code:)` decodes it instead of folding it into `serverError`.
