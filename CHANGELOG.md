@@ -7,9 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.7] — 2026-10-17
+
+Two halves, two stories.
+
 The client half followed redirects on every request that carries a credential. It no longer
 follows any. And what it does with the *answer* to such a request is now bounded: in size, in
 what the session remembers afterwards, and in what `disconnect()` lets go unreported.
+
+The provider half issues `client_credentials` tokens, as an opt-in, to clients only an
+operator can create — and ships the safeguards that grant needed first: `/register` refuses
+it, a per-client scope ceiling binds every flow, and client secrets are stored as hashes.
+`/authorize` stops granting MCP scopes a request never asked for, and a client's
+`application_type` is now stored. Storage moves to schema version 8.
 
 Nothing public is removed or renamed. There are additions, and there are behaviour changes a
 consumer can meet — each is under **Changed**, with what to do about it.
@@ -197,11 +207,14 @@ consumer can meet — each is under **Changed**, with what to do about it.
 - **`ServedCapabilities` refuses a grant the provider does not issue.** Declaring
   `.clientCredentials` used to succeed, and the metadata then advertised a grant the token
   endpoint answered with `unsupported_grant_type`. It now throws
-  `Inconsistency.grantNotImplemented(_:)`. That is a new case, so an exhaustive `switch` over
-  `Inconsistency` needs one more arm. **Migration:** a deployment that listed
-  `.clientCredentials` was advertising something it could not do; remove it. The provider
-  will issue this grant as an opt-in later in this release
-  (`project/plans/proposals/ProviderClientCredentials.md`).
+  `Inconsistency.grantNotImplemented(_:)` for any such grant. That is a new case, so an
+  exhaustive `switch` over `Inconsistency` needs one more arm. ~~**Migration:** a deployment
+  that listed `.clientCredentials` was advertising something it could not do; remove it. The
+  provider will issue this grant as an opt-in later in this release.~~ *As released:* the
+  opt-in landed in this same release (see **Added**), so `.clientCredentials` is accepted and
+  now means what it advertises — a deployment that listed it starts issuing the grant to
+  service clients, and should remove it if that is not wanted. Every `GrantType` this package
+  defines is now issued, so the check guards grants added in future rather than any today.
 - A `3xx` carrying a `Location`, from a token, revocation or introspection endpoint, throws
   `OAuthRedirectRefused`. Before, the redirect was followed and the call reported whatever the
   destination answered. A deployment whose configured endpoint redirects — `http` to `https`,
@@ -341,8 +354,22 @@ consumer can meet — each is under **Changed**, with what to do about it.
 - `DisconnectTests`: refusal, `503`, redirect and an unreadable store each reported with the
   local credential gone; a bare `200` accepted for three bodies.
 - `RedirectWithoutLocationTests`: three kinds of request × six statuses.
+- Provider: `ClientCredentialsTests` (32 tests in five suites — registration closed to the
+  grant, operator-created service clients, the scope ceiling in every flow, the token
+  endpoint, rotation and retirement, including what survives a refused retirement);
+  `ClientSecretStorageTests` (secrets at rest, the v7 in-place migration);
+  `DefaultScopeTests` (`/authorize` with no `scope`); `ApplicationTypeStorageTests` (the v8
+  column). `ProviderRejectsClientCredentials` is narrowed rather than deleted: it now pins
+  that a deployment which has not opted in (`ServedCapabilities.core`) refuses the grant
+  exactly as before.
+- 33 `await`s on synchronous initialisers (`OAuthServer(...)`, `OAuthHTTPHandler(server:)`)
+  removed, and three tests that passed whatever the code did — `#expect(true)` after a caught
+  error or a race — now assert a value. No source under `Sources/` changed for either.
 
 ### Noted
+- 32 of 39 `// SECURITY:` acknowledgements were removed because they answered no finding:
+  each was taken out, the gate's safety checker re-run, and restored only where a finding
+  then appeared. Seven remain live. No code changed.
 - **The `swift-nio` floor is raised from 2.62.0 to 2.70.0, because 2.62.0 never built.** The
   lowest version of every dependency the manifest admits was resolved together in a scratch
   copy and built. Against `swift-nio` 2.62.0 the test-support target fails — "type
@@ -1555,7 +1582,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.6...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...HEAD
+[1.0.0-beta.7]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.6...v1.0.0-beta.7
 [1.0.0-beta.6]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.5...v1.0.0-beta.6
 [1.0.0-beta.5]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.4...v1.0.0-beta.5
 [1.0.0-beta.4]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.3...v1.0.0-beta.4

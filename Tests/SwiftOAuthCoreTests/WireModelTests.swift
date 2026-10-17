@@ -173,9 +173,10 @@ struct GrantTypeTests {
     /// has no other option. Excluding it did not make anything safer; it made this
     /// package unable to talk to providers like eBay's Browse API at all.
     ///
-    /// Safety is preserved where it actually matters: ``OAuthServer`` dispatches on
-    /// the raw wire string with a rejecting `default`, so a provider built on this
-    /// still cannot issue client-credentials tokens. See ``ProviderRejectsClientCredentials``.
+    /// Safety is preserved where it actually matters: a provider built on this issues
+    /// client-credentials tokens only when its deployment opts in through
+    /// ``ServedCapabilities``, and only to operator-created service clients. A core
+    /// deployment still refuses the grant. See ``ProviderRejectsClientCredentials``.
     @Test("client_credentials is available to the client half")
     func clientCredentialsAvailable() {
         #expect(GrantType(rawValue: "client_credentials") == .clientCredentials)
