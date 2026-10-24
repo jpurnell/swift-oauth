@@ -12,6 +12,7 @@ verifier the server validates.
 SwiftOAuthCore        models · errors · grant types · PKCE · token generation
   ├── SwiftOAuthProvider    issuing and validating
   └── SwiftOAuthClient      obtaining, storing, refreshing
+        └── SwiftOAuthIdentity   an introspected token as a SwiftIdentity subject
 ```
 
 Neither half depends on the other. A service that only issues tokens never links client code.
@@ -55,7 +56,13 @@ Pinned exactly, because SwiftPM's version ranges do not select prereleases: a `f
 resolves to the newest *stable* release, which for this package does not exist yet.
 
 Then depend on the half you need — `SwiftOAuthProvider` to issue tokens, `SwiftOAuthClient` to
-consume someone else's, `SwiftOAuthMTLS` only for RFC 8705. Swift 6.2, macOS 14+ / iOS 17+, and
+consume someone else's, `SwiftOAuthMTLS` only for RFC 8705, `SwiftOAuthIdentity` only to resolve
+access tokens to [SwiftIdentity](https://github.com/jpurnell/swift-identity) subjects.
+
+**SwiftPM resolves every dependency of this package for every consumer**, whichever product you
+link: AsyncHTTPClient (for `SwiftOAuthMTLS`) and `swift-identity` (for `SwiftOAuthIdentity`)
+are downloaded and pinned either way, and compiled and linked only if you use the product that
+needs them. Swift 6.2, macOS 14+ / iOS 17+, and
 Linux (CI runs `swift:6.2`).
 
 ## Status
@@ -89,6 +96,23 @@ let tokens = try await client.signIn { authorization in
 
 What the server sends is checked before it is shown: `https` verification URIs only, and a user
 code with no control or bidirectional-override characters to rewrite the terminal.
+
+`SwiftOAuthIdentity` is the other end: a resource server or sign-in gate that holds an access
+token asks the authorization server about it, and SwiftIdentity's own roster says which local
+subject that provider's `sub` is.
+
+```swift
+let corp = OAuthIdentityStore(
+    introspector: introspector,                       // the issuer's RFC 7662 endpoint
+    issuer: "https://auth.example.com/",
+    audience: .mustInclude("https://dash.example.com"),
+    mapping: people)                                  // a SwiftIdentity store of external identities
+let authenticator = Authenticator(stores: [people, corp], audit: audit, now: { Date() })
+let who = await authenticator.authentication(for: [OAuthAccessToken(tokens.accessToken)])
+```
+
+It fails closed, tells the caller nothing about why, and passes SwiftIdentity's conformance
+suite unchanged.
 
 584 tests; the quality gate runs its 43 selected checkers with no errors and no warnings; Linux CI green.
 

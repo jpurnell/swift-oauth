@@ -51,7 +51,13 @@ let package = Package(
         // regardless, so the download is taken either way. What a separate product avoids is
         // *linking* NIO into a binary that never uses it, and compiling it as part of every
         // build of the other targets.
-        .library(name: "SwiftOAuthMTLS", targets: ["SwiftOAuthMTLS"])
+        .library(name: "SwiftOAuthMTLS", targets: ["SwiftOAuthMTLS"]),
+        // The bridge to SwiftIdentity: an introspected access token becomes an
+        // `ExternalAssertion` that SwiftIdentity resolves to a local subject. Its own product,
+        // as SwiftWebAuthn's `SwiftWebAuthnIdentity` is, so a consumer that only wants OAuth
+        // links no identity code — and, as with mTLS, the dependency is still *resolved* for
+        // every consumer of this package.
+        .library(name: "SwiftOAuthIdentity", targets: ["SwiftOAuthIdentity"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
@@ -81,7 +87,14 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.25.0"),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-asn1.git", from: "1.0.0"),
-        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0")
+        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.3.0"),
+        // For `SwiftOAuthIdentity` only. SwiftPM resolves every package-level dependency for
+        // every consumer, so this is downloaded — with its own dependencies — by an application
+        // that links only the client or the provider. It is compiled and linked only into a
+        // binary that uses the bridge. Accepted in SwiftCLIKit's sign-in design (§9) as the cost
+        // of keeping the bridge a product of this package rather than a package of its own.
+        // A version, not a branch: a branch gives a consumer no way to say what it built against.
+        .package(url: "https://github.com/jpurnell/swift-identity.git", from: "0.7.0")
     ],
     targets: [
         // Models, errors, grant types, PKCE. No behaviour beyond value types and
@@ -103,6 +116,17 @@ let package = Package(
                 "SwiftOAuthCore",
                 "SwiftOAuthClient",
                 .product(name: "AsyncHTTPClient", package: "async-http-client")
+            ],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Introspection in, a SwiftIdentity subject out. Depends on the client half, which does
+        // the introspecting, and on nothing of the provider's.
+        .target(
+            name: "SwiftOAuthIdentity",
+            dependencies: [
+                "SwiftOAuthCore",
+                "SwiftOAuthClient",
+                .product(name: "SwiftIdentity", package: "swift-identity")
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -179,6 +203,18 @@ let package = Package(
         .testTarget(
             name: "SwiftOAuthConformanceTests",
             dependencies: ["SwiftOAuthCore", "SwiftOAuthClient", "SwiftOAuthProvider"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // SwiftIdentity's own conformance suite, run against the bridge unchanged: the bar every
+        // `CredentialStore` is held to, shipped as a library so a store written elsewhere runs
+        // the same one.
+        .testTarget(
+            name: "SwiftOAuthIdentityTests",
+            dependencies: [
+                "SwiftOAuthIdentity",
+                .product(name: "SwiftIdentity", package: "swift-identity"),
+                .product(name: "SwiftIdentityConformance", package: "swift-identity")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(

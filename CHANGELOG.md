@@ -39,6 +39,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (§3.1: "All requests from the device MUST use the Transport Layer Security (TLS) protocol").
   Thrown by `DeviceAuthorizationClient.init`, so a provider without the grant is found at
   startup rather than when a user asks to sign in.
+- **`SwiftOAuthIdentity`, a new library product bridging to SwiftIdentity.** An access token
+  is introspected (RFC 7662), and an active answer's `sub` becomes an `ExternalAssertion` of
+  (issuer, `sub`) that the deployment's own SwiftIdentity store resolves to a local
+  `Subject.id` — so a provider's opaque subject maps onto the id durable records carry.
+  `OAuthIdentityStore(introspector:issuer:audience:mapping:audit:now:onRefusal:)` is a
+  SwiftIdentity `CredentialStore` for the new credential kind `OAuthAccessToken`
+  (`oauth-access-token`). It fails closed: an introspection that fails, an inactive token, an
+  `iss` other than the configured issuer, a token not for this resource under its
+  `AudienceRequirement` (`.mustInclude(_:)` or, named, `.notChecked`), an `exp` that has passed,
+  or an answer naming no subject is refused before the mapping is asked; the mapping is asked
+  with the *configured* issuer and its answer — revoked and honeypot included — is returned
+  unaltered. The caller learns nothing; the service's audit gets the outcome of every
+  resolution; the operator's `RefusalObserver` gets which check refused, as an
+  `OAuthIdentityRefusal`. `OAuthAccessToken` never renders its value. It passes SwiftIdentity's
+  `ConformanceSuite` unchanged, claiming revocation, honeypots, expiry and external identity,
+  and declaring throttling, canonical passphrases and algorithm records not claimed.
 - `IntrospectionResult.issuer` (`SwiftOAuthCore`), read from and written as RFC 7662 §2.2's
   `iss`, and a matching `issuer:` parameter, defaulted, at the end of
   `IntrospectionResult.init`. It was dropped on decode, so a resource server could not see that
@@ -50,7 +66,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   origin, as every other advertised endpoint is. Both are optional and default to `nil`, so
   existing call sites are unchanged.
 
+### Dependencies
+- **`swift-identity` (`https://github.com/jpurnell/swift-identity`, `from: "0.7.0"`)**, used only
+  by the `SwiftOAuthIdentity` target. **SwiftPM resolves it for every consumer of this
+  package**, including one that links only `SwiftOAuthClient` or `SwiftOAuthProvider`: a
+  package-level dependency is downloaded and pinned whether or not a product that uses it is
+  linked. It is compiled and linked only into a binary that uses the bridge. That cost was
+  accepted in SwiftCLIKit's sign-in design (§9) in preference to a separate bridge package, as
+  `SwiftWebAuthn` accepted it for `SwiftWebAuthnIdentity`. The same is already true of
+  AsyncHTTPClient for `SwiftOAuthMTLS`.
+
 ### Testing
+- `SwiftOAuthIdentityTests` runs SwiftIdentity's `ConformanceSuite` against
+  `OAuthIdentityStore` unchanged, and resolves RFC 7662 §2.2's example token and claims (`sub`
+  `Z5O3upPC88QrAjx00dis`, `iss` `https://server.example.com/`, `aud`
+  `https://protected.example.net/resource`) through a `FileCredentialStore` roster and
+  SwiftIdentity's `Authenticator` to the local subject.
 - The expected values are RFC 8628's own, copied from the RFC text: §3.2's example response
   (`device_code` `GmRhmhcxhwAzkoEqiMEg_DnyEysNkuNhszIySk9eS`, `user_code` `WDJB-MJHT`,
   `verification_uri` `https://example.com/device`, `expires_in` 1800, `interval` 5) is decoded as
