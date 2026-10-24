@@ -79,4 +79,46 @@ struct IntrospectionResultTests {
         #expect(object.count == 1, "an inactive response leaked \(object.keys.sorted())")
         #expect(object["active"] as? Bool == false)
     }
+
+    /// RFC 7662 §2.2's example response, as the RFC prints it. `iss` is how a resource server
+    /// that trusts one issuer can see that an answer speaks for another; it was dropped on
+    /// decode until this version.
+    @Test("The §2.2 example response decodes, issuer included")
+    func rfcExampleDecodes() throws {
+        let json = """
+             {
+              "active": true,
+              "client_id": "l238j323ds-23ij4",
+              "username": "jdoe",
+              "scope": "read write dolphin",
+              "sub": "Z5O3upPC88QrAjx00dis",
+              "aud": "https://protected.example.net/resource",
+              "iss": "https://server.example.com/",
+              "exp": 1419356238,
+              "iat": 1419350238,
+              "extension_field": "twenty-seven"
+             }
+            """
+        let result = try JSONDecoder().decode(IntrospectionResult.self, from: Data(json.utf8))
+
+        #expect(result.active)
+        #expect(result.clientId == "l238j323ds-23ij4")
+        #expect(result.scope == "read write dolphin")
+        #expect(result.subject == "Z5O3upPC88QrAjx00dis")
+        #expect(result.audience == ["https://protected.example.net/resource"])
+        #expect(result.issuer == "https://server.example.com/")
+        #expect(result.expiry == Date(timeIntervalSince1970: 1419356238))
+        #expect(result.issuedAt == Date(timeIntervalSince1970: 1419350238))
+    }
+
+    /// And it is written back out, so a provider that sets it says so on the wire.
+    @Test("An issuer encodes as iss")
+    func issuerEncodes() throws {
+        let encoded = try JSONEncoder().encode(
+            IntrospectionResult(active: true, subject: "s", issuer: "https://server.example.com/"))
+        let object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        #expect(object["iss"] as? String == "https://server.example.com/")
+    }
 }

@@ -49,6 +49,15 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
     /// When it was issued.
     public let issuedAt: Date?
 
+    /// Who issued it — RFC 7662 §2.2's `iss`, "as defined in JWT".
+    ///
+    /// Optional on the wire, and most often absent: the introspection endpoint already belongs
+    /// to one authorization server, which is the issuer a resource server asked. When it is
+    /// present and names some other issuer, the answer is about a token the resource server
+    /// never meant to trust, and a caller that maps subjects by issuer must refuse it rather
+    /// than file the subject under the wrong one.
+    public let issuer: String?
+
     /// The response for a token that is expired, revoked, or was never issued.
     ///
     /// A constant rather than a constructed value, because every inactive response is identical
@@ -67,7 +76,8 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
         subject: String? = nil,
         audience: [String]? = nil,
         expiry: Date? = nil,
-        issuedAt: Date? = nil
+        issuedAt: Date? = nil,
+        issuer: String? = nil
     ) {
         self.active = active
         self.scope = scope
@@ -76,10 +86,11 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
         self.audience = audience
         self.expiry = expiry
         self.issuedAt = issuedAt
+        self.issuer = issuer
     }
 
     private enum CodingKeys: String, CodingKey {
-        case active, scope, aud, exp, iat, sub
+        case active, scope, aud, exp, iat, sub, iss
         case clientId = "client_id"
     }
 
@@ -108,6 +119,7 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
             .map { Date(timeIntervalSince1970: $0) }
         issuedAt = try container.decodeIfPresent(TimeInterval.self, forKey: .iat)
             .map { Date(timeIntervalSince1970: $0) }
+        issuer = try container.decodeIfPresent(String.self, forKey: .iss)
     }
 
     /// Encodes a response, omitting every field it does not carry.
@@ -130,5 +142,6 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
         }
         try container.encodeIfPresent(expiry?.timeIntervalSince1970, forKey: .exp)
         try container.encodeIfPresent(issuedAt?.timeIntervalSince1970, forKey: .iat)
+        try container.encodeIfPresent(issuer, forKey: .iss)
     }
 }

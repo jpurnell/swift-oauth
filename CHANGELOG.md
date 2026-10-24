@@ -39,6 +39,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (§3.1: "All requests from the device MUST use the Transport Layer Security (TLS) protocol").
   Thrown by `DeviceAuthorizationClient.init`, so a provider without the grant is found at
   startup rather than when a user asks to sign in.
+- `IntrospectionResult.issuer` (`SwiftOAuthCore`), read from and written as RFC 7662 §2.2's
+  `iss`, and a matching `issuer:` parameter, defaulted, at the end of
+  `IntrospectionResult.init`. It was dropped on decode, so a resource server could not see that
+  an answer spoke for an issuer other than the one it asked. The provider does not set it.
 - `AuthorizationServerMetadata.deviceAuthorizationEndpoint`, decoded from
   `device_authorization_endpoint` (RFC 8628 §4) — until now the field was dropped on decode —
   and `ProviderConfiguration.deviceAuthorizationEndpoint`, which
