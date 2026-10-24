@@ -19,6 +19,12 @@ public struct ProviderConfiguration: Sendable, Equatable {
     /// cannot always guarantee the provider forgot you.
     public let revocationEndpoint: URL?
 
+    /// Where a device asks for a device code, if the provider offers the device grant — RFC
+    /// 8628 §3.1.
+    ///
+    /// Optional because most providers do not offer the grant.
+    public let deviceAuthorizationEndpoint: URL?
+
     /// The scopes to request, space-separated per RFC 6749 §3.3.
     public let scope: String
 
@@ -45,11 +51,23 @@ public struct ProviderConfiguration: Sendable, Equatable {
     public let resource: URL?
 
     /// Creates a provider configuration.
+    ///
+    /// - Parameters:
+    ///   - identifier: A short identifier, used in ``ConnectionID``.
+    ///   - authorizationEndpoint: Where the user is sent to authorise.
+    ///   - tokenEndpoint: Where codes and refresh tokens are exchanged.
+    ///   - revocationEndpoint: Where a token is revoked, if the provider offers it.
+    ///   - deviceAuthorizationEndpoint: Where a device asks for a device code, if the provider
+    ///     offers the device grant.
+    ///   - scope: The scopes to request, space-separated.
+    ///   - authenticationMethod: How the client authenticates at the token endpoint.
+    ///   - resource: The RFC 8707 resource indicator, if any.
     public init(
         identifier: String,
         authorizationEndpoint: URL,
         tokenEndpoint: URL,
         revocationEndpoint: URL? = nil,
+        deviceAuthorizationEndpoint: URL? = nil,
         scope: String,
         authenticationMethod: ClientAuthenticationMethod = .clientSecretBasic,
         resource: URL? = nil
@@ -58,6 +76,7 @@ public struct ProviderConfiguration: Sendable, Equatable {
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
         self.revocationEndpoint = revocationEndpoint
+        self.deviceAuthorizationEndpoint = deviceAuthorizationEndpoint
         self.scope = scope
         self.authenticationMethod = authenticationMethod
         self.resource = Self.canonical(resource)

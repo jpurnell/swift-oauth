@@ -36,6 +36,14 @@ public struct AuthorizationServerMetadata: Codable, Sendable, Equatable {
     /// Where a token may be revoked, if the server offers it.
     public let revocationEndpoint: String?
 
+    /// Where a device asks for a device code and a user code, if the server offers the device
+    /// grant — RFC 8628 §4.
+    ///
+    /// Without it a client can poll for the grant's tokens and cannot begin the grant: the
+    /// device code those polls redeem is issued here. Until this field existed it was dropped
+    /// on decode, so a server advertising the endpoint read exactly like one that did not.
+    public let deviceAuthorizationEndpoint: String?
+
     private enum CodingKeys: String, CodingKey {
         case issuer
         case authorizationEndpoint = "authorization_endpoint"
@@ -45,6 +53,7 @@ public struct AuthorizationServerMetadata: Codable, Sendable, Equatable {
         case grantTypesSupported = "grant_types_supported"
         case scopesSupported = "scopes_supported"
         case revocationEndpoint = "revocation_endpoint"
+        case deviceAuthorizationEndpoint = "device_authorization_endpoint"
     }
 
     /// Creates metadata.
@@ -56,7 +65,8 @@ public struct AuthorizationServerMetadata: Codable, Sendable, Equatable {
         codeChallengeMethodsSupported: [String]? = nil,
         grantTypesSupported: [String]? = nil,
         scopesSupported: [String]? = nil,
-        revocationEndpoint: String? = nil
+        revocationEndpoint: String? = nil,
+        deviceAuthorizationEndpoint: String? = nil
     ) {
         self.issuer = issuer
         self.authorizationEndpoint = authorizationEndpoint
@@ -66,6 +76,7 @@ public struct AuthorizationServerMetadata: Codable, Sendable, Equatable {
         self.grantTypesSupported = grantTypesSupported
         self.scopesSupported = scopesSupported
         self.revocationEndpoint = revocationEndpoint
+        self.deviceAuthorizationEndpoint = deviceAuthorizationEndpoint
     }
 }
 
@@ -133,6 +144,11 @@ extension AuthorizationServerMetadata {
             authorizationEndpoint: try Self.endpoint(authorizationEndpoint, within: origin),
             tokenEndpoint: try Self.endpoint(tokenEndpoint, within: origin),
             revocationEndpoint: try revocationEndpoint.map { try Self.endpoint($0, within: origin) },
+            // Held to the issuer like the token endpoint, for the same reason: a confidential
+            // client authenticates to it exactly as it does there (RFC 8628 §3.1).
+            deviceAuthorizationEndpoint: try deviceAuthorizationEndpoint.map {
+                try Self.endpoint($0, within: origin)
+            },
             scope: scope ?? (scopesSupported ?? []).joined(separator: " "),
             resource: resource)
     }

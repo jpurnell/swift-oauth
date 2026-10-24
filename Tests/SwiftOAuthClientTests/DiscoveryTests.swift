@@ -209,3 +209,78 @@ struct DiscoveryResourceTests {
         #expect(configuration.resource == nil)
     }
 }
+
+/// Reading where a device begins a sign-in — RFC 8628 §4, through RFC 8414.
+///
+/// The client could poll for a device grant's tokens and had nowhere to ask for the device
+/// code those polls redeem: the metadata type dropped `device_authorization_endpoint` on
+/// decode, so a server that advertised the endpoint was indistinguishable from one that did
+/// not. The endpoint is held to the issuer's origin and to HTTPS like every other: the request
+/// it receives carries the client's credentials, and RFC 8628 §3.1 requires TLS for it.
+@Suite("Discovery — the device authorization endpoint")
+struct DiscoveryDeviceAuthorizationTests {
+
+    /// The field as RFC 8628 §4 names it, decoded from a document rather than constructed, so
+    /// the coding key is what is under test.
+    @Test("device_authorization_endpoint is decoded from the document")
+    func endpointIsDecoded() throws {
+        let document = Data("""
+            {"issuer":"https://auth.example.com",
+             "authorization_endpoint":"https://auth.example.com/authorize",
+             "token_endpoint":"https://auth.example.com/token",
+             "device_authorization_endpoint":"https://auth.example.com/device_authorization",
+             "code_challenge_methods_supported":["S256"]}
+            """.utf8)
+
+        let metadata = try JSONDecoder().decode(AuthorizationServerMetadata.self, from: document)
+
+        #expect(metadata.deviceAuthorizationEndpoint
+                == "https://auth.example.com/device_authorization")
+    }
+
+    @Test("It reaches the configuration, validated")
+    func endpointReachesConfiguration() throws {
+        let configuration = try deviceMetadata(
+            "https://auth.example.com/device_authorization").configuration(identifier: "auth")
+
+        #expect(configuration.deviceAuthorizationEndpoint?.absoluteString
+                == "https://auth.example.com/device_authorization")
+    }
+
+    /// The device authorization request carries the client's secret when it has one, so a
+    /// document naming another host for it is the same instruction as one naming another host
+    /// for the token endpoint.
+    @Test("One on another host is refused")
+    func foreignEndpointRefused() {
+        #expect(throws: DiscoveryError.endpointOutsideIssuer("https://attacker.example/device")) {
+            try deviceMetadata("https://attacker.example/device").configuration(identifier: "auth")
+        }
+    }
+
+    @Test("One that is not HTTPS is refused")
+    func insecureEndpointRefused() {
+        // SECURITY: the insecure endpoint under test — rewriting it to https would assert that a valid endpoint is refused.
+        let endpoint = "http://auth.example.com/device_authorization"
+        #expect(throws: DiscoveryError.insecureEndpoint(endpoint)) {
+            try deviceMetadata(endpoint).configuration(identifier: "auth")
+        }
+    }
+
+    /// Most servers do not offer the grant, and a configuration for one of them is still a
+    /// configuration.
+    @Test("A server without one yields a configuration without one")
+    func absentEndpointIsNil() throws {
+        let configuration = try deviceMetadata(nil).configuration(identifier: "auth")
+
+        #expect(configuration.deviceAuthorizationEndpoint == nil)
+    }
+
+    private func deviceMetadata(_ endpoint: String?) -> AuthorizationServerMetadata {
+        AuthorizationServerMetadata(
+            issuer: "https://auth.example.com",
+            authorizationEndpoint: "https://auth.example.com/authorize",
+            tokenEndpoint: "https://auth.example.com/token",
+            codeChallengeMethodsSupported: ["S256"],
+            deviceAuthorizationEndpoint: endpoint)
+    }
+}
