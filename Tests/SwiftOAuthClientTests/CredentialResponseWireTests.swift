@@ -50,7 +50,7 @@ struct ResponseSizeWireTests {
     @Test(
         "A body that keeps coming is cut off at the limit",
         .timeLimit(.minutes(2)),
-        arguments: [Kind.codeExchangeBasic, .refresh, .revocation, .introspection])
+        arguments: [Kind.codeExchangeBasic, .refresh, .revocation, .introspection, .deviceAuthorization])
     func endlessBodyIsCutOff(kind: Kind) async throws {
         let server = try await RedirectWireServer.start {
             .stream(chunk: 64 * 1024, total: Self.offered)
@@ -144,7 +144,7 @@ struct RedirectWithoutLocationTests {
 
     @Test(
         "A 3xx without a Location throws the redirect refusal, saying there was none",
-        arguments: [Kind.codeExchangeBasic, .revocation, .introspection], [300, 301, 302, 303, 307, 308])
+        arguments: [Kind.codeExchangeBasic, .revocation, .introspection, .deviceAuthorization], [300, 301, 302, 303, 307, 308])
     func redirectWithoutLocationIsRefused(kind: Kind, status: Int) async throws {
         let server = try await RedirectWireServer.start {
             .respond(status: status, headers: [:], body: "")

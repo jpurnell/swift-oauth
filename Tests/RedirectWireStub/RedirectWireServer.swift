@@ -301,7 +301,11 @@ private final class RecordingHandler: ChannelInboundHandler {
             }
         case .answer:
             status = .ok
-            payload = #"{"access_token":"issued","token_type":"Bearer","expires_in":3600,"active":true}"#
+            // One body every request kind can read as success: a token response, an active
+            // introspection answer, and an RFC 8628 §3.2 device authorization response.
+            payload = #"{"access_token":"issued","token_type":"Bearer","expires_in":3600,"active":true,"#
+                + #""device_code":"issued-device","user_code":"WDJB-MJHT","#
+                + #""verification_uri":"https://example.com/device"}"#
             headers.add(name: "Content-Type", value: "application/json")
         case .redirect(let code, let location):
             status = HTTPResponseStatus(statusCode: code)

@@ -119,7 +119,7 @@ public enum DeviceFlow {
     /// defines it as a lifetime, and a zero `interval` asks a client to poll without waiting —
     /// the specification's own default when the field is absent is five seconds, and the
     /// decoder applies that default, so a zero here was stated rather than omitted.
-    private static func requireUsable(_ value: TimeInterval, field: String) throws {
+    static func requireUsable(_ value: TimeInterval, field: String) throws {
         // NaN fails this comparison, as every comparison with NaN does.
         guard value > 0 else { throw malformed(field) }
         // Infinity and anything past `Int.max` pass it, and are refused here.

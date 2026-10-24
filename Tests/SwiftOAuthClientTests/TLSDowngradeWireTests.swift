@@ -66,6 +66,7 @@ struct TLSDowngradeWireTests {
         case refresh
         case revocation
         case introspection
+        case deviceAuthorization
 
         var testDescription: String { rawValue }
     }
@@ -106,6 +107,10 @@ struct TLSDowngradeWireTests {
                 credentials: .init(clientId: "fixture-client", clientSecret: passphraseFixture),
                 transport: fixture.introspection)
             _ = try await introspector.introspect(token: refreshFixture)
+        case .deviceAuthorization:
+            _ = try await fixture.token.requestDeviceAuthorization(
+                endpoint: endpoint, parameters: ["scope": "fixture-scope"],
+                credentials: credentials, method: .clientSecretPost)
         }
     }
 

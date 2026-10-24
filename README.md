@@ -76,6 +76,20 @@ hashes.
 On the client half, a request that carries a credential follows no redirect, and the answer
 it reads is capped at 1 MiB.
 
+The client half can run the device grant end to end — for a command-line tool or a terminal
+session that cannot open a browser. `DeviceAuthorizationClient.signIn(present:)` asks for the
+codes, hands them to you to show the user, and polls until they approve:
+
+```swift
+let client = try DeviceAuthorizationClient(configuration: configuration, credentials: credentials)
+let tokens = try await client.signIn { authorization in
+    print("Visit \(authorization.verificationURI) and enter \(authorization.userCode)")
+}
+```
+
+What the server sends is checked before it is shown: `https` verification URIs only, and a user
+code with no control or bidirectional-override characters to rewrite the terminal.
+
 584 tests; the quality gate runs its 43 selected checkers with no errors and no warnings; Linux CI green.
 
 Three adoptions exercised it rather than a test suite alone: LedgeOS on the client half,

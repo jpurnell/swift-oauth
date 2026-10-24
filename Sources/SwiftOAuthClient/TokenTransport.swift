@@ -301,3 +301,44 @@ public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
             .joined(separator: "&")
     }
 }
+
+extension URLSessionTokenTransport: DeviceAuthorizationTransport {
+
+    /// Posts a device authorization request and decodes the answer — RFC 8628 §3.1–3.2.
+    ///
+    /// The same door as ``exchange(endpoint:parameters:credentials:method:)``, and on purpose:
+    /// §3.1 has a confidential client "authenticate in the same manner as when making requests
+    /// to the token endpoint", so the form is authenticated by the same code, sent through the
+    /// same request that follows no redirect, and read no further than the same limit. A
+    /// refusal is read the same way too — §3.2: "the authorization server responds in the same
+    /// way as the token endpoint" — so an RFC 6749 §5.2 body becomes its `OAuthError`.
+    ///
+    /// - Parameters:
+    ///   - endpoint: The device authorization endpoint.
+    ///   - parameters: The form body, unencoded: `scope` and `resource` when there are any.
+    ///     `client_id` is added here when `method` puts it in the body, as at the token
+    ///     endpoint.
+    ///   - credentials: Used for client authentication.
+    ///   - method: How the credentials should be presented.
+    /// - Returns: The decoded response, unchecked; ``DeviceAuthorizationClient`` checks it.
+    /// - Throws: `OAuthError` for a refusal the server explained, a status that is not
+    ///   success, or a body that is not a device authorization response;
+    ///   ``OAuthRedirectRefused`` for a redirect; ``OAuthResponseTooLarge`` for an answer past
+    ///   the size limit; or a transport error.
+    public func requestDeviceAuthorization(
+        endpoint: URL,
+        parameters: [String: String],
+        credentials: ClientCredentials,
+        method: ClientAuthenticationMethod
+    ) async throws -> DeviceAuthorizationResponse {
+        let (data, http) = try await post(
+            endpoint: endpoint, parameters: parameters, credentials: credentials, method: method)
+        try Self.requireSuccess(http, data)
+
+        do {
+            return try JSONDecoder().decode(DeviceAuthorizationResponse.self, from: data)
+        } catch {
+            throw OAuthError.serverError("the device authorization response could not be decoded")
+        }
+    }
+}

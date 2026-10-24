@@ -7,6 +7,76 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **The client can begin a device grant** (RFC 8628 §3.1–3.5). It could poll for the grant's
+  tokens with `DeviceFlow.poll` and had no way to ask for the device code those polls redeem,
+  so nobody could start the grant through this package. `DeviceAuthorizationClient`, made
+  from a `ProviderConfiguration` and `ClientCredentials`, does the three steps:
+  `requestDeviceAuthorization()` posts `scope` (omitted when empty) and `resource` (when
+  configured) to the device authorization endpoint, authenticated exactly as the token
+  endpoint is (§3.1); `redeem(deviceCode:)` posts
+  `grant_type=urn:ietf:params:oauth:grant-type:device_code` and the device code to the token
+  endpoint, and is what `DeviceFlow.poll` takes as `redeem`; `poll(_:sleeper:elapsed:)` runs
+  that loop at the interval and for the lifetime the server stated; and
+  `signIn(sleeper:elapsed:present:)` runs all three, handing the response to `present` so the
+  user code and verification URI can be shown before the first poll. Nothing is polled if
+  `present` throws.
+- **The server's answer is checked before anyone is shown it.** Both verification URIs must be
+  absolute `https` URLs; the user code must be non-empty and hold no control, format or
+  separator characters — it is printed to a terminal, where an escape sequence rewrites what
+  the user reads and a bidirectional override reorders it; the device code must be non-empty;
+  and `expires_in` and `interval` must be positive, finite numbers of seconds. A response that
+  fails is `OAuthError.serverError` naming the field, and the user sees nothing.
+- `DeviceAuthorizationTransport`, a refinement of `TokenTransport` with one requirement,
+  `requestDeviceAuthorization(endpoint:parameters:credentials:method:)`.
+  `URLSessionTokenTransport` conforms, through the same request as every other
+  credential-bearing one: no redirect is followed, no more than 1 MiB of the answer is read,
+  and an RFC 6749 §5.2 error body becomes its `OAuthError` (§3.2: the endpoint "responds in the
+  same way as the token endpoint"). A separate protocol rather than a new `TokenTransport`
+  requirement, so transports written against earlier versions still compile.
+- `DeviceGrantConfigurationError`: `.noDeviceAuthorizationEndpoint(provider:)`, and
+  `.insecureEndpoint(_:)` for a device authorization or token endpoint that is not HTTPS
+  (§3.1: "All requests from the device MUST use the Transport Layer Security (TLS) protocol").
+  Thrown by `DeviceAuthorizationClient.init`, so a provider without the grant is found at
+  startup rather than when a user asks to sign in.
+- `AuthorizationServerMetadata.deviceAuthorizationEndpoint`, decoded from
+  `device_authorization_endpoint` (RFC 8628 §4) — until now the field was dropped on decode —
+  and `ProviderConfiguration.deviceAuthorizationEndpoint`, which
+  `configuration(identifier:scope:resource:)` fills after holding it to HTTPS and the issuer's
+  origin, as every other advertised endpoint is. Both are optional and default to `nil`, so
+  existing call sites are unchanged.
+
+### Testing
+- The expected values are RFC 8628's own, copied from the RFC text: §3.2's example response
+  (`device_code` `GmRhmhcxhwAzkoEqiMEg_DnyEysNkuNhszIySk9eS`, `user_code` `WDJB-MJHT`,
+  `verification_uri` `https://example.com/device`, `expires_in` 1800, `interval` 5) is decoded as
+  printed, line break and all; §3.1's example body, `client_id=1406020730&scope=example_scope`,
+  is what a public client puts on the wire, byte for byte, measured at a loopback server; and
+  every redeem is §3.4's example request.
+- End to end over TLS, against a scripted loopback server: two `authorization_pending` polls
+  then tokens record waits of `[5, 5]`, and `slow_down` in the middle makes them `[5, 10]` —
+  the line from SwiftCLIKit's sign-in proposal.
+- The device authorization request joins the redirect, TLS-downgrade, size-limit and
+  missing-`Location` suites as a sixth request kind.
+- **Cross-half:** the client's sign-in run against the provider's own device grant, every
+  answer crossing as JSON and every refusal as an RFC 6749 §5.2 body. It runs through
+  `OAuthServer`'s Swift API, because the provider has no HTTP surface for the grant — see
+  **Noted**.
+
+### Noted
+- **The provider's device grant is not reachable over HTTP.** `ServedCapabilities` accepts
+  `.deviceCode` and a `deviceAuthorization` route, and the metadata then advertises both, but
+  `OAuthHTTPHandler` has no handler for the device authorization endpoint and
+  `OAuthServer.handleTokenRequest` answers `unsupported_grant_type` for
+  `urn:ietf:params:oauth:grant-type:device_code`. `authorizeDevice(clientId:scope:)` also
+  authenticates no client. A deployment that declares the grant therefore advertises a flow its
+  endpoints refuse — the defect `ServedCapabilities.Inconsistency.grantNotImplemented` was added
+  to prevent, in a form that check cannot see. Not changed here.
+- **The provider's tokens carry no subject.** `approveDeviceCode(userCode:subject:)` records who
+  approved, and neither the device grant nor any other stores it on the token, so introspection
+  never returns `sub`. A resource server cannot learn *who* from this provider's tokens — the
+  gap SwiftIdentity's proposal (§3, "`sub` carried on authorization codes and tokens") asked for.
+
 ## [1.0.0-beta.7] — 2026-10-17
 
 Two halves, two stories.

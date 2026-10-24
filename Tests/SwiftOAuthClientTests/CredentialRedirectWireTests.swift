@@ -29,6 +29,7 @@ struct CredentialRedirectWireTests {
         case refresh
         case revocation
         case introspection
+        case deviceAuthorization
 
         var testDescription: String { rawValue }
     }
@@ -101,6 +102,11 @@ struct CredentialRedirectWireTests {
                 transport: session.map { URLSessionIntrospectionTransport(session: $0) }
                     ?? URLSessionIntrospectionTransport())
             _ = try await introspector.introspect(token: inspectedFixture)
+        case .deviceAuthorization:
+            // `client_secret_post`, so the secret travels in the body a `307` would re-post.
+            _ = try await transport.requestDeviceAuthorization(
+                endpoint: endpoint, parameters: ["scope": "fixture-scope"],
+                credentials: credentials(), method: .clientSecretPost)
         }
     }
 
