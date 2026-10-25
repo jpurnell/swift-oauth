@@ -94,7 +94,7 @@ let package = Package(
         // binary that uses the bridge. Accepted in SwiftCLIKit's sign-in design (§9) as the cost
         // of keeping the bridge a product of this package rather than a package of its own.
         // A version, not a branch: a branch gives a consumer no way to say what it built against.
-        .package(url: "https://github.com/jpurnell/swift-identity.git", from: "0.7.0")
+        .package(url: "https://github.com/jpurnell/swift-identity.git", from: "0.7.1")
     ],
     targets: [
         // Models, errors, grant types, PKCE. No behaviour beyond value types and

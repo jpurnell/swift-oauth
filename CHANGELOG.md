@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.9] — 2026-10-25
+
+Linux. `1.0.0-beta.8` did not build there: its Linux CI failed, and every error was in the
+`swift-identity` dependency, which `SwiftOAuthIdentity` brought in and which had never been
+built on Linux. Nothing in this package changed.
+
+### Dependencies
+- **`swift-identity` `from: "0.7.1"`** (was `0.7.0`). 0.7.1 builds on Linux: `Pepper` and
+  `SealingKey` hold a swift-crypto `SymmetricKey`, which is not `Sendable` there, and
+  `RemoteThrottleLedger` lacked the `FoundationNetworking` import. It also carries a Linux CI
+  job, which found five test files with an unguarded `import Darwin` and a test helper calling
+  an `HTTPURLResponse()` initializer Linux does not have. A consumer on `0.7.0` cannot build
+  `SwiftOAuthIdentity` on Linux; one on `beta.8` with a lockfile at `0.7.0` should update.
+
 ## [1.0.0-beta.8] — 2026-10-25
 
 ### Changed
@@ -1762,7 +1776,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...HEAD
+[1.0.0-beta.9]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [1.0.0-beta.7]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.6...v1.0.0-beta.7
 [1.0.0-beta.6]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.5...v1.0.0-beta.6

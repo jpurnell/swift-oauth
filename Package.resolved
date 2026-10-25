@@ -1,5 +1,5 @@
 {
-  "originHash" : "cb5ae577a2752e80461e41ccb74ff616d15d2a1a836608353c37936070b2f41e",
+  "originHash" : "82421ff84eb575d5e316bd4bc6748c6757cc3bbfa53e1463f09e8fd7faa8f069",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -132,8 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/jpurnell/swift-identity.git",
       "state" : {
-        "revision" : "7cc3be5b8796b6134f86f11373701fa5928a3574",
-        "version" : "0.7.0"
+        "revision" : "7b6424fd6ddd99c112a9efeab16de6e33f9a2e1a",
+        "version" : "0.7.1"
       }
     },
     {
