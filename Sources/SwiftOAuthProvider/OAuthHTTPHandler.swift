@@ -11,7 +11,10 @@ import os
 /// - `/.well-known/oauth-authorization-server` - Server metadata
 /// - `/register` - Client registration
 /// - `/authorize` - Authorization endpoint
-/// - `/token` - Token endpoint
+/// - `/token` - Token endpoint, including the device grant (RFC 8628 §3.4)
+/// - the device authorization endpoint (RFC 8628 §3.1), at whatever path
+///   ``ServedCapabilities/deviceAuthorization`` names
+/// - `/device` - Where a user enters a device's code (RFC 8628 §3.3)
 ///
 /// This is a stateless handler that delegates to OAuthServer for business logic.
 public struct OAuthHTTPHandler: Sendable {
@@ -416,7 +419,8 @@ public struct OAuthHTTPHandler: Sendable {
                 // rather than rejected here — the policy refuses what it does not know, and it
                 // is the one place that decision belongs.
                 resource: Self.formValues(for: "resource", in: body).compactMap { URL(string: $0) },
-                scope: params["scope"]
+                scope: params["scope"],
+                deviceCode: params["device_code"]
             )
 
             let response = try await server.handleTokenRequest(request)
@@ -438,13 +442,225 @@ public struct OAuthHTTPHandler: Sendable {
             #if canImport(os)
             logger.debug("OAuth error: \(error.code, privacy: .public)")
             #endif
-            return errorResponse(error)
+            return tokenEndpointErrorResponse(error)
         } catch {
             #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
             #endif
             return errorResponse(.serverError("Token request failed"))
         }
+    }
+
+    /// An error from the token endpoint, or from the device authorization endpoint.
+    ///
+    /// As ``errorResponse(_:)``, except that `access_denied` is a 400. RFC 8628 §3.5 returns it
+    /// from the token endpoint in RFC 6749 §5.2's error response, which is a 400; the 403 the
+    /// shared mapping uses is for a refusal with no specified status, and a device client
+    /// reading a 403 here would be reading a shape the RFC never gives it.
+    private func tokenEndpointErrorResponse(_ error: OAuthError) -> OAuthHTTPResponse {
+        guard case .accessDenied = error else { return errorResponse(error) }
+        return OAuthHTTPResponse(
+            statusCode: 400,
+            contentType: "application/json",
+            body: Self.errorBody(
+                code: error.code, description: error.detail ?? error.standardDescription),
+            headers: Self.uncached)
+    }
+
+    /// RFC 6749 §5.1 and RFC 8628 §3.2: a response carrying a credential is not cached.
+    private static let uncached = ["Cache-Control": "no-store", "Pragma": "no-cache"]
+
+    // MARK: - Device Authorization Endpoint (RFC 8628 §3.1)
+
+    /// Handles a POST to the device authorization endpoint — RFC 8628 §3.1 and §3.2.
+    ///
+    /// The client authenticates exactly as at the token endpoint (§3.1 applies RFC 6749
+    /// §3.2.1): a public client names itself with `client_id`, a confidential one presents its
+    /// secret. Then the deployment must serve the grant and the client must be registered for
+    /// it. The answer is §3.2's JSON — `device_code`, `user_code`, `verification_uri`,
+    /// `verification_uri_complete`, `expires_in` and `interval` — and is not cached, because
+    /// the device code is a bearer credential until redeemed.
+    ///
+    /// - Parameters:
+    ///   - body: The URL-encoded form body: `client_id` (unless authenticating with Basic) and
+    ///     optionally `scope`.
+    ///   - authHeader: The `Authorization` header, for a confidential client.
+    /// - Returns: The §3.2 response, or an RFC 6749 §5.2 error: `invalid_client` (401),
+    ///   `unauthorized_client`, `unsupported_grant_type` or `invalid_scope` (400).
+    public func handleDeviceAuthorizationRequest(
+        body: String, authHeader: String?
+    ) async -> OAuthHTTPResponse {
+        let params = parseFormBody(body)
+        guard let clientId = params["client_id"] ?? Self.clientId(fromBasic: authHeader) else {
+            return errorResponse(.invalidClient(nil))
+        }
+
+        do {
+            let authenticated = try await server.authenticateClient(
+                clientId: clientId, authHeader: authHeader,
+                bodyClientSecret: params["client_secret"])
+            guard authenticated else {
+                return errorResponse(.invalidClient(nil))
+            }
+
+            let response = try await server.requestDeviceAuthorization(
+                clientId: clientId, scope: params["scope"])
+            let encoded = try JSONEncoder().encode(response)
+            return OAuthHTTPResponse(
+                statusCode: 200,
+                contentType: "application/json",
+                body: String(decoding: encoded, as: UTF8.self),
+                headers: Self.uncached)
+        } catch let error as OAuthError {
+            #if canImport(os)
+            logger.debug("Device authorization refused: \(error.code, privacy: .public)")
+            #endif
+            return tokenEndpointErrorResponse(error)
+        } catch {
+            #if canImport(os)
+            logger.error("Unexpected error handling device authorization: \(error.localizedDescription, privacy: .public)")
+            #endif
+            return errorResponse(.serverError(nil))
+        }
+    }
+
+    // MARK: - Device Verification (RFC 8628 §3.3)
+
+    /// What a verification CSRF token is issued for, in the place a consent token names a
+    /// client. Its other half is the user's subject, so a token one user fetched cannot be
+    /// spent as another.
+    private static let verificationCSRFPurpose = "urn:swift-oauth:device-verification"
+
+    /// Handles a GET of `/device` — the page where a user enters a device's code.
+    ///
+    /// **The deployment authenticates the user first** and passes who they are as `subject`:
+    /// this package authenticates no user, and approving a device hands it a session in that
+    /// user's name. The page carries a CSRF token bound to that subject, so a form posted from
+    /// elsewhere — the forged-approval attack, which would hand the attacker's device the
+    /// victim's session — fails unless it was loaded by the same user.
+    ///
+    /// - Parameters:
+    ///   - queryParams: The query, which may carry `user_code` from
+    ///     `verification_uri_complete` (§3.3.1). It is shown only if it is a well-formed code.
+    ///   - subject: The user the deployment authenticated.
+    /// - Returns: The entry form, uncached and not to be framed.
+    public func handleDeviceVerificationPage(
+        queryParams: [String: String], subject: String
+    ) async -> OAuthHTTPResponse {
+        let prefill = queryParams["user_code"].flatMap(TokenGenerator.normalizedUserCode)
+        return await verificationPage(.entry(prefill: prefill, message: nil), subject: subject)
+    }
+
+    /// Handles a POST to `/device` — the user continuing, approving or denying.
+    ///
+    /// Three actions, each from the page the one before rendered:
+    ///
+    /// - `confirm` — look the code up and show which client is asking, and for what (§5.4),
+    ///   with *Approve* and *Deny*. Nothing is approved.
+    /// - `approve` — the device's next poll collects tokens whose `sub` is `subject`.
+    /// - `deny` — the device's next poll is `access_denied`.
+    ///
+    /// Every action needs the CSRF token the previous page carried, issued to this same
+    /// subject and unused. A code that matches nothing live is one answer whatever the reason,
+    /// and counts towards the user's limit of wrong codes (§5.1).
+    ///
+    /// - Parameters:
+    ///   - formParams: The posted form: `action`, `user_code` and `csrf_token`.
+    ///   - subject: The user the deployment authenticated — never a form field, which the
+    ///     browser controls.
+    /// - Returns: The next page: 200 for a step that succeeded; 400 for a stale form, an
+    ///   unknown action, or a code that matched nothing; 429 while the user is throttled.
+    public func handleDeviceVerificationSubmission(
+        formParams: [String: String], subject: String
+    ) async -> OAuthHTTPResponse {
+        guard let csrf = formParams["csrf_token"], let action = formParams["action"] else {
+            return await verificationPage(
+                .entry(prefill: nil, message: "That form was incomplete. Enter the code again."),
+                subject: subject, status: 400)
+        }
+        do {
+            let check = try await server.validateCSRFToken(
+                token: csrf, clientId: Self.verificationCSRFPurpose, redirectUri: subject)
+            guard check.isValid else {
+                return await verificationPage(
+                    .entry(prefill: nil, message: "That form has expired. Enter the code again."),
+                    subject: subject, status: 400)
+            }
+        } catch {
+            #if canImport(os)
+            logger.error("Device verification CSRF check failed: \(error.localizedDescription, privacy: .public)")
+            #endif
+            return errorResponse(.serverError(nil))
+        }
+
+        let userCode = formParams["user_code"] ?? ""
+        do {
+            switch action {
+            case "confirm":
+                let pending = try await server.pendingDeviceAuthorization(
+                    userCode: userCode, subject: subject)
+                return await verificationPage(.confirmation(pending), subject: subject)
+            case "approve":
+                try await server.approveDeviceCode(userCode: userCode, subject: subject)
+                return await verificationPage(.finished(approved: true), subject: subject)
+            case "deny":
+                try await server.denyDeviceCode(userCode: userCode, subject: subject)
+                return await verificationPage(.finished(approved: false), subject: subject)
+            default:
+                return await verificationPage(
+                    .entry(prefill: nil, message: "Enter the code shown on your device."),
+                    subject: subject, status: 400)
+            }
+        } catch let error as OAuthError {
+            // The code the user typed is not logged: it is short, and a log of failed codes is
+            // a list of guesses to try elsewhere.
+            #if canImport(os)
+            logger.debug("Device verification refused: \(error.code, privacy: .public)")
+            #endif
+            let throttled: Bool
+            if case .slowDown = error { throttled = true } else { throttled = false }
+            return await verificationPage(
+                .entry(
+                    prefill: nil,
+                    message: error.detail ?? "That code is not valid, or has expired."),
+                subject: subject, status: throttled ? 429 : 400)
+        } catch {
+            #if canImport(os)
+            logger.error("Unexpected error handling device verification: \(error.localizedDescription, privacy: .public)")
+            #endif
+            return errorResponse(.serverError(nil))
+        }
+    }
+
+    /// Renders a verification stage with a fresh CSRF token bound to `subject`.
+    private func verificationPage(
+        _ stage: DeviceVerificationPage.Stage, subject: String, status: Int = 200
+    ) async -> OAuthHTTPResponse {
+        let csrf: String
+        do {
+            // The finished page has no form, so it is issued no token to leave unspent.
+            if case .finished = stage {
+                csrf = ""
+            } else {
+                csrf = try await server.generateCSRFToken(
+                    clientId: Self.verificationCSRFPurpose, redirectUri: subject)
+            }
+        } catch {
+            #if canImport(os)
+            logger.error("Device verification CSRF token not stored: \(error.localizedDescription, privacy: .public)")
+            #endif
+            return errorResponse(.serverError(nil))
+        }
+        return OAuthHTTPResponse(
+            statusCode: status,
+            contentType: "text/html; charset=utf-8",
+            body: DeviceVerificationPage(stage: stage, csrfToken: csrf).render(),
+            // Uncached, because it carries a CSRF token; not framed, because a page that hands
+            // a device a session behind one button is what clickjacking is for.
+            headers: Self.uncached.merging([
+                "X-Frame-Options": "DENY",
+                "Content-Security-Policy": "frame-ancestors 'none'"
+            ]) { current, _ in current })
     }
 
     // MARK: - Token Validation

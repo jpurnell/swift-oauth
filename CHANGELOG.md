@@ -38,6 +38,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   place and adds `denied`, `last_polled_at` and `poll_interval`.
 
 ### Added
+- **The provider serves the device grant over HTTP (RFC 8628).**
+  `OAuthHTTPHandler.handleDeviceAuthorizationRequest(body:authHeader:)` is the device
+  authorization endpoint (§3.1–3.2): the client authenticates as at the token endpoint, the
+  deployment must serve `.deviceCode` (else `unsupported_grant_type`) and the client must be
+  registered for it (else `unauthorized_client`), and the answer is §3.2's JSON with
+  `verification_uri_complete`, sent `Cache-Control: no-store`. The token endpoint dispatches
+  `grant_type=urn:ietf:params:oauth:grant-type:device_code` (`TokenRequest.deviceCode`, new) and
+  answers §3.5's `authorization_pending`, `slow_down`, `access_denied` and `expired_token` as
+  RFC 6749 §5.2 400s — `access_denied` included, which the shared mapping sends as 403
+  elsewhere. `handleDeviceVerificationPage(queryParams:subject:)` and
+  `handleDeviceVerificationSubmission(formParams:subject:)` are the `/device` page (§3.3): enter
+  the code (prefilled from `verification_uri_complete`, and only when it is a well-formed code),
+  see which client is asking and for what (§5.4), approve or deny. The deployment authenticates
+  the user and passes the subject; every form carries a single-use CSRF token bound to that
+  subject, so a token fetched by one user cannot approve as another; pages are `no-store`,
+  `X-Frame-Options: DENY` and `frame-ancestors 'none'`. `OAuthServer.requestDeviceAuthorization
+  (clientId:scope:)` is the checked entry the endpoint uses. Registration no longer requires a
+  redirect URI from a client that does not ask for the authorization code grant (RFC 7591 §2:
+  redirect URIs are for redirect-based flows), so a command-line client can register for the
+  device grant alone.
 - **The provider's tokens say whose they are: `sub` and `iss` (RFC 7662 §2.2).** Every access
   token now records a subject, and an active introspection answer carries it as `sub` and this
   server's issuer as `iss` — so `SwiftOAuthIdentity` can use this provider as an identity
@@ -143,7 +163,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Noted**.
 
 ### Noted
-- **The provider's device grant is not reachable over HTTP.** `ServedCapabilities` accepts
+- ~~**The provider's device grant is not reachable over HTTP.**~~ *Fixed in this release — see*
+  **Added**. As first recorded: `ServedCapabilities` accepts
   `.deviceCode` and a `deviceAuthorization` route, and the metadata then advertises both, but
   `OAuthHTTPHandler` has no handler for the device authorization endpoint and
   `OAuthServer.handleTokenRequest` answers `unsupported_grant_type` for

@@ -268,6 +268,14 @@ public struct ConsentPage: Sendable {
     /// - Parameter string: The string to escape
     /// - Returns: HTML-safe string
     private func escapeHTML(_ string: String) -> String {
+        Self.htmlEscaped(string)
+    }
+
+    /// Escapes HTML special characters, for every page this package renders.
+    ///
+    /// - Parameter string: The string to escape
+    /// - Returns: HTML-safe string
+    static func htmlEscaped(_ string: String) -> String {
         return string
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")

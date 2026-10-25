@@ -478,9 +478,9 @@ public actor OAuthServer {
     /// short user code to display; the user enters that code at ``verificationURI`` — or opens
     /// `verification_uri_complete`, which carries it (§3.3.1).
     ///
-    /// This authenticates no client and checks no grant: it is the model the HTTP endpoint
-    /// (`OAuthHTTPHandler.handleDeviceAuthorizationRequest(body:authHeader:)`) calls after
-    /// doing both.
+    /// This authenticates no client and checks no grant. The HTTP endpoint,
+    /// ``OAuthHTTPHandler/handleDeviceAuthorizationRequest(body:authHeader:)``, authenticates
+    /// the client and calls ``requestDeviceAuthorization(clientId:scope:)``, which checks both.
     ///
     /// - Parameters:
     ///   - clientId: The client asking.
@@ -521,11 +521,56 @@ public actor OAuthServer {
             interval: devicePollInterval)
     }
 
+    /// Starts a device flow for a client the HTTP layer has authenticated — RFC 8628 §3.1.
+    ///
+    /// ``authorizeDevice(clientId:scope:)`` with the two checks a request from the network
+    /// needs and a direct caller may not: that this deployment serves the grant, and that the
+    /// client was registered for it.
+    ///
+    /// - Parameters:
+    ///   - clientId: The authenticated client.
+    ///   - scope: What it is asking for.
+    /// - Returns: The codes and where to send the user.
+    /// - Throws: `OAuthError.unsupportedGrantType(_:)` when the deployment does not serve the
+    ///   device grant, `OAuthError.invalidClient(_:)` for an unknown client,
+    ///   `OAuthError.unauthorizedClient(_:)` for one not registered for the grant, or as
+    ///   ``authorizeDevice(clientId:scope:)``.
+    public func requestDeviceAuthorization(
+        clientId: String, scope: String?
+    ) async throws -> DeviceAuthorizationResponse {
+        _ = try await deviceGrantClient(clientId)
+        return try await authorizeDevice(clientId: clientId, scope: scope)
+    }
+
+    /// The client, if this deployment serves the device grant and it may use it.
+    private func deviceGrantClient(_ clientId: String) async throws -> RegisteredClient {
+        guard served.grantTypes.contains(.deviceCode) else {
+            throw OAuthError.unsupportedGrantType(nil)
+        }
+        guard let client = try await storage.getClient(clientId: clientId) else {
+            throw OAuthError.invalidClient(nil)
+        }
+        guard client.grantTypes.contains(GrantType.deviceCode.rawValue) else {
+            throw OAuthError.unauthorizedClient(
+                "This client is not registered for the device authorization grant.")
+        }
+        return client
+    }
+
+    /// The device grant at the token endpoint — RFC 8628 §3.4.
+    private func handleDeviceCodeGrant(_ request: TokenRequest) async throws -> TokenResponse {
+        _ = try await deviceGrantClient(request.clientId)
+        guard let deviceCode = request.deviceCode, !deviceCode.isEmpty else {
+            throw OAuthError.invalidRequest("A device_code is required.")
+        }
+        return try await redeemDeviceCode(deviceCode, clientId: request.clientId)
+    }
+
     /// Where a user goes to enter a user code: the issuer's `/device`.
     ///
     /// A deployment routes `GET` and `POST` there to
-    /// `OAuthHTTPHandler.handleDeviceVerificationPage(queryParams:)` and
-    /// `OAuthHTTPHandler.handleDeviceVerificationSubmission(formParams:subject:)`.
+    /// ``OAuthHTTPHandler/handleDeviceVerificationPage(queryParams:subject:)`` and
+    /// ``OAuthHTTPHandler/handleDeviceVerificationSubmission(formParams:subject:)``.
     public var verificationURI: URL {
         URL(string: issuer + "/device") ?? URL(fileURLWithPath: "/device")
     }
@@ -748,8 +793,11 @@ public actor OAuthServer {
     ///   Anyone who can reach this endpoint can register, so a client able to obtain tokens
     ///   with no user present is created by an operator instead (`createServiceClient`).
     public func registerClient(_ request: ClientRegistrationRequest) async throws -> ClientRegistrationResponse {
-        // Validate request
-        guard !request.redirectUris.isEmpty else {
+        // RFC 7591 §2 requires redirect URIs "for use in redirect-based flows". The
+        // authorization code grant is one; the device grant is not, and a command-line client
+        // registering for it alone has nowhere to be redirected to.
+        guard !request.redirectUris.isEmpty
+                || !request.grantTypes.contains(GrantType.authorizationCode.rawValue) else {
             throw OAuthError.invalidRequest(nil)
         }
         guard !request.grantTypes.contains(GrantType.clientCredentials.rawValue) else {
@@ -1133,6 +1181,8 @@ public actor OAuthServer {
             return try await handleRefreshTokenGrant(request)
         case GrantType.clientCredentials.rawValue:
             return try await handleClientCredentialsGrant(request)
+        case GrantType.deviceCode.rawValue:
+            return try await handleDeviceCodeGrant(request)
         default:
             throw OAuthError.unsupportedGrantType(nil)
         }
@@ -1917,6 +1967,9 @@ public struct TokenRequest: Sendable {
     /// The authorization code and refresh grants ignore it: their scope was fixed earlier.
     public let scope: String?
 
+    /// The `device_code` parameter, for the device grant — RFC 8628 §3.4.
+    public let deviceCode: String?
+
     /// Creates a new token request
     public init(
         grantType: String,
@@ -1927,10 +1980,12 @@ public struct TokenRequest: Sendable {
         codeVerifier: String?,
         refreshToken: String?,
         resource: [URL] = [],
-        scope: String? = nil
+        scope: String? = nil,
+        deviceCode: String? = nil
     ) {
         self.resource = resource
         self.scope = scope
+        self.deviceCode = deviceCode
         self.grantType = grantType
         self.code = code
         self.redirectUri = redirectUri

@@ -59,6 +59,14 @@ public enum DeviceGrantConfigurationError: Error, Equatable, Sendable {
 /// until the user has approved, refused, or gone away.
 ///
 /// ```swift
+/// let configuration = ProviderConfiguration(
+///     identifier: "example",
+///     authorizationEndpoint: URL(string: "https://id.example.com/authorize")!,
+///     tokenEndpoint: URL(string: "https://id.example.com/token")!,
+///     deviceAuthorizationEndpoint: URL(string: "https://id.example.com/device_authorization")!,
+///     scope: "openid")
+/// let credentials = ClientCredentials(
+///     environment: "production", clientID: "my-client", clientSecret: "")
 /// let client = try DeviceAuthorizationClient(configuration: configuration, credentials: credentials)
 /// let tokens = try await client.signIn { authorization in
 ///     print("Visit \(authorization.verificationURI) and enter \(authorization.userCode)")
