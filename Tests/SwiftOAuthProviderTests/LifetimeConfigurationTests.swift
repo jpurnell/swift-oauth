@@ -191,7 +191,7 @@ struct LifetimeConfigurationTests {
         // the configuration.
         #expect(try fixture.rows() == before)
         #expect(try await fixture.storage.deviceCodeState(
-            deviceCode: issued.deviceCode, clientId: "tv-app") == .approved(scope: "read"))
+            deviceCode: issued.deviceCode, clientId: "tv-app") == .approved(scope: "read", subject: "user-1"))
     }
 
     @Test("The authorization-code grant refuses, stores nothing, and leaves the code unspent",

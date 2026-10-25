@@ -103,8 +103,10 @@ public actor OAuthStorage {
     /// for RFC 8705; version 6 added `authorization_codes.audience`, closing the RFC 8707
     /// authorization-endpoint gap 0.8.0 left open; version 7 replaced every plaintext
     /// `clients.client_secret` with its SHA-256 and added `clients.scope_ceiling`; version 8
-    /// added `clients.application_type`, which until then was dropped on save.
-    public static let currentSchemaVersion = 8
+    /// added `clients.application_type`, which until then was dropped on save; version 9 added
+    /// `subject` to `access_tokens`, `refresh_tokens` and `authorization_codes`, so a token can
+    /// say whose it is (RFC 7662 `sub`).
+    public static let currentSchemaVersion = 9
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -363,6 +365,17 @@ public actor OAuthStorage {
             }
         }
 
+        // Version 9: who a token, refresh token or authorization code was issued for — the
+        // resource owner, RFC 7662's `sub`. Existing rows stay NULL: nobody was recorded for
+        // them, and inventing someone would be worse than naming nobody.
+        if version < 9 && targetVersion >= 9 {
+            for table in ["access_tokens", "refresh_tokens", "authorization_codes"] {
+                if try !columnExists(db: db, table: table, column: "subject") {
+                    try executeStatic(db: db, sql: "ALTER TABLE \(table) ADD COLUMN subject TEXT")
+                }
+            }
+        }
+
         if version < targetVersion {
             try executeStatic(db: db, sql: "PRAGMA user_version = \(targetVersion)")
         }
@@ -556,8 +569,8 @@ public actor OAuthStorage {
         try execute("""
             INSERT OR REPLACE INTO authorization_codes
             (code, client_id, redirect_uri, scope, code_challenge, code_challenge_method,
-             expires_at, created_at, consumed, audience)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+             expires_at, created_at, consumed, audience, subject)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
         """, parameters: [
             code.code,
             code.clientId,
@@ -567,7 +580,8 @@ public actor OAuthStorage {
             code.codeChallengeMethod as Any,
             code.expiresAt.timeIntervalSince1970,
             code.createdAt.timeIntervalSince1970,
-            code.audience?.absoluteString as Any
+            code.audience?.absoluteString as Any,
+            code.subject as Any
         ])
     }
 
@@ -743,15 +757,16 @@ public actor OAuthStorage {
         expiresAt: Date,
         audience: URL? = nil,
         keyThumbprint: String? = nil,
-        certificateThumbprint: String? = nil
+        certificateThumbprint: String? = nil,
+        subject: String? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO access_tokens
             (token_hash, client_id, scope, expires_at, created_at, revoked, audience,
-             key_thumbprint, certificate_thumbprint)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+             key_thumbprint, certificate_thumbprint, subject)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
         """, parameters: [
             tokenHash,
             clientId,
@@ -760,7 +775,8 @@ public actor OAuthStorage {
             Date().timeIntervalSince1970,
             audience?.absoluteString as Any,
             keyThumbprint as Any,
-            certificateThumbprint as Any
+            certificateThumbprint as Any,
+            subject as Any
         ])
     }
 
@@ -773,7 +789,7 @@ public actor OAuthStorage {
 
         let sql = """
             SELECT client_id, scope, expires_at, revoked, audience, key_thumbprint,
-                   certificate_thumbprint
+                   certificate_thumbprint, subject
             FROM access_tokens
             WHERE token_hash = ?
         """
@@ -808,9 +824,10 @@ public actor OAuthStorage {
 
         let thumbprint = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
         let certificate = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+        let subject = sqlite3_column_text(stmt, 7).map { String(cString: $0) }
         return .valid(TokenValidationResult.ValidatedToken(
             clientId: clientId, scope: scope, audience: audience,
-            keyThumbprint: thumbprint, certificateThumbprint: certificate))
+            keyThumbprint: thumbprint, certificateThumbprint: certificate, subject: subject))
     }
 
     /// Everything RFC 7662 reports about an access token.
@@ -835,7 +852,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked, audience, created_at
+            SELECT client_id, scope, expires_at, revoked, audience, created_at, subject
             FROM access_tokens
             WHERE token_hash = ?
         """
@@ -859,11 +876,14 @@ public actor OAuthStorage {
         let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
         let audience = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
         let issuedAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+        let subject = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
 
+        // No `iss` here: storage does not know which issuer it serves. `OAuthServer` adds it.
         return IntrospectionResult(
             active: true,
             scope: scope,
             clientId: clientId,
+            subject: subject,
             audience: audience.map { [$0] },
             expiry: expiresAt,
             issuedAt: issuedAt)
@@ -932,6 +952,7 @@ public actor OAuthStorage {
 
         let owner = String(cString: sqlite3_column_text(stmt, 0))
         let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
+        let subject = sqlite3_column_text(stmt, 2).map { String(cString: $0) }
         let approved = sqlite3_column_int(stmt, 3) != 0
         let redeemed = sqlite3_column_int(stmt, 4) != 0
         let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
@@ -939,13 +960,10 @@ public actor OAuthStorage {
         // The client check comes before everything else. A device code seen in transit is
         // otherwise redeemable by anyone who can name a client id, and client ids are public
         // by design.
-        // The client check comes before everything else. A device code seen in transit is
-        // otherwise redeemable by anyone who can name a client id, and client ids are public
-        // by design.
         guard owner == clientId else { return .unknown }
         guard !redeemed else { return .alreadyRedeemed }
         guard Date() < expiresAt else { return .expired }
-        return approved ? .approved(scope: scope) : .pending
+        return approved ? .approved(scope: scope, subject: subject) : .pending
     }
 
     /// Marks a device code redeemed, so it cannot be used again.
@@ -1116,20 +1134,22 @@ public actor OAuthStorage {
         token: String,
         clientId: String,
         scope: String?,
-        expiresAt: Date
+        expiresAt: Date,
+        subject: String? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO refresh_tokens
-            (token_hash, client_id, scope, expires_at, created_at, revoked)
-            VALUES (?, ?, ?, ?, ?, 0)
+            (token_hash, client_id, scope, expires_at, created_at, revoked, subject)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
         """, parameters: [
             tokenHash,
             clientId,
             scope as Any,
             expiresAt.timeIntervalSince1970,
-            Date().timeIntervalSince1970
+            Date().timeIntervalSince1970,
+            subject as Any
         ])
     }
 
@@ -1141,7 +1161,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked
+            SELECT client_id, scope, expires_at, revoked, subject
             FROM refresh_tokens
             WHERE token_hash = ?
         """
@@ -1165,7 +1185,9 @@ public actor OAuthStorage {
             return nil
         }
 
-        return RefreshTokenInfo(clientId: clientId, scope: scope, expiresAt: expiresAt)
+        let subject = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+        return RefreshTokenInfo(
+            clientId: clientId, scope: scope, expiresAt: expiresAt, subject: subject)
     }
 
     /// Revokes a refresh token
@@ -1380,6 +1402,8 @@ public actor OAuthStorage {
         let audience = sqlite3_column_text(stmt, 9)
             .map { String(cString: $0) }
             .flatMap { URL(string: $0) }
+        // Column 10 is the subject added in schema 9; NULL for a code granted with nobody named.
+        let subject = sqlite3_column_text(stmt, 10).map { String(cString: $0) }
 
         return AuthorizationCode(
             code: code,
@@ -1390,7 +1414,8 @@ public actor OAuthStorage {
             codeChallengeMethod: codeChallengeMethod,
             expiresAt: expiresAt,
             createdAt: createdAt,
-            audience: audience
+            audience: audience,
+            subject: subject
         )
     }
 }
@@ -1405,6 +1430,9 @@ public struct RefreshTokenInfo: Sendable {
     public let scope: String?
     /// When this token expires
     public let expiresAt: Date
+    /// Who it was issued for — carried onto every access token it refreshes. `nil` when
+    /// nobody was recorded.
+    public let subject: String?
 }
 
 // MARK: - OAuthStorageError

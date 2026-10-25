@@ -329,19 +329,29 @@ public enum TokenValidationResult: Sendable, Equatable {
         /// single `case .valid(let token)` anywhere.
         public let certificateThumbprint: String?
 
+        /// Who the token was issued for — the resource owner, RFC 7662's `sub`.
+        ///
+        /// The approving user for the device grant, the user a deployment named at consent for
+        /// the authorization code grant, the client itself for `client_credentials`, and the
+        /// subject token's subject for an exchange. `nil` when nobody was recorded: a token
+        /// stored before schema 9, or a code granted without a subject.
+        public let subject: String?
+
         /// Creates a validated token.
         public init(
             clientId: String,
             scope: String? = nil,
             audience: URL? = nil,
             keyThumbprint: String? = nil,
-            certificateThumbprint: String? = nil
+            certificateThumbprint: String? = nil,
+            subject: String? = nil
         ) {
             self.clientId = clientId
             self.scope = scope
             self.audience = audience
             self.keyThumbprint = keyThumbprint
             self.certificateThumbprint = certificateThumbprint
+            self.subject = subject
         }
     }
 
@@ -391,6 +401,12 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
     /// user consented to at `/authorize` and a different one at `/token`.
     public let audience: URL?
 
+    /// Who approved the request this code was granted for — the resource owner.
+    ///
+    /// Carried onto the access and refresh tokens the code redeems for, so introspection can
+    /// answer `sub`. `nil` when the deployment did not say who approved.
+    public let subject: String?
+
     /// Whether this code has expired
     public var isExpired: Bool {
         Date() >= expiresAt
@@ -409,6 +425,7 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
     ///   - audience: The resource this code will mint a token for — RFC 8707. `nil` for a code
     ///     issued against a request that named none, which a permissive
     ///     ``ResourceIndicatorPolicy`` allows and a strict one refuses before reaching here.
+    ///   - subject: Who approved the request, carried onto the tokens it redeems for.
     public init(
         code: String,
         clientId: String,
@@ -418,7 +435,8 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
         codeChallengeMethod: String?,
         expiresAt: Date,
         createdAt: Date,
-        audience: URL? = nil
+        audience: URL? = nil,
+        subject: String? = nil
     ) {
         self.code = code
         self.clientId = clientId
@@ -429,11 +447,13 @@ public struct AuthorizationCode: Codable, Sendable, Equatable {
         self.expiresAt = expiresAt
         self.createdAt = createdAt
         self.audience = audience
+        self.subject = subject
     }
 
     // MARK: - Codable
 
     private enum CodingKeys: String, CodingKey {
+        case subject
         case code
         case clientId = "client_id"
         case redirectUri = "redirect_uri"
@@ -481,8 +501,8 @@ public enum DeviceCodeState: Sendable, Equatable {
     case unknown
     /// Issued, and the user has not finished.
     case pending
-    /// Approved and ready to exchange.
-    case approved(scope: String?)
+    /// Approved and ready to exchange, by `subject` — the user who approved it.
+    case approved(scope: String?, subject: String?)
     /// Already exchanged. Single-use, so a second attempt is a refusal.
     case alreadyRedeemed
     /// Issued, but the user did not finish in time.

@@ -214,9 +214,15 @@ public struct OAuthHTTPHandler: Sendable {
     ///
     /// Processes the user's approval or denial of the authorization request.
     ///
-    /// - Parameter formParams: URL-encoded form parameters
+    /// - Parameters:
+    ///   - formParams: URL-encoded form parameters
+    ///   - subject: Who is approving — the user the deployment authenticated for this request.
+    ///     Carried onto the tokens as `sub`. Taken from the caller and never from the form,
+    ///     which the browser controls. `nil` issues tokens naming nobody.
     /// - Returns: Redirect with authorization code (approve) or error (deny)
-    public func handleConsentSubmission(formParams: [String: String]) async -> OAuthHTTPResponse {
+    public func handleConsentSubmission(
+        formParams: [String: String], subject: String? = nil
+    ) async -> OAuthHTTPResponse {
         guard let action = formParams["action"],
               let clientId = formParams["client_id"],
               let redirectUri = formParams["redirect_uri"],
@@ -238,7 +244,9 @@ public struct OAuthHTTPHandler: Sendable {
             ], state: state)
 
         case "approve":
-            return await handleApproveAction(formParams: formParams, clientId: clientId, redirectUri: redirectUri, state: state)
+            return await handleApproveAction(
+                formParams: formParams, clientId: clientId, redirectUri: redirectUri,
+                state: state, subject: subject)
 
         default:
             return jsonErrorResponse("invalid_request", "Invalid action")
@@ -270,7 +278,10 @@ public struct OAuthHTTPHandler: Sendable {
         return nil
     }
 
-    private func handleApproveAction(formParams: [String: String], clientId: String, redirectUri: String, state: String?) async -> OAuthHTTPResponse {
+    private func handleApproveAction(
+        formParams: [String: String], clientId: String, redirectUri: String, state: String?,
+        subject: String?
+    ) async -> OAuthHTTPResponse {
         let request = AuthorizationRequest(
             responseType: "code",
             clientId: clientId,
@@ -283,7 +294,7 @@ public struct OAuthHTTPHandler: Sendable {
         )
 
         do {
-            let response = try await server.handleAuthorizationRequest(request)
+            let response = try await server.handleAuthorizationRequest(request, subject: subject)
             return buildRedirect(uri: redirectUri, queryItems: [
                 URLQueryItem(name: "code", value: response.code),
             ], state: response.state)

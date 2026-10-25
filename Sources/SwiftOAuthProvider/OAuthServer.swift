@@ -278,11 +278,26 @@ public actor OAuthServer {
     /// a different condition handled in a different place, usually with a retry that cannot
     /// help.
     ///
+    /// An active answer names who the token is for (`sub`, when one was recorded) and who
+    /// issued it (`iss`, this server's issuer), so a resource server can use this provider as
+    /// an identity source. An inactive answer names neither: §2.2 allows it nothing but
+    /// `active`.
+    ///
     /// - Parameter token: The access token to describe.
     /// - Returns: The introspection response, active or not.
     /// - Throws: Only if storage cannot be read. A token being bad is an answer, not an error.
     public func introspect(token: String) async throws -> IntrospectionResult {
-        try await storage.introspectAccessToken(token: token)
+        let stored = try await storage.introspectAccessToken(token: token)
+        guard stored.active else { return .inactive }
+        return IntrospectionResult(
+            active: true,
+            scope: stored.scope,
+            clientId: stored.clientId,
+            subject: stored.subject,
+            audience: stored.audience,
+            expiry: stored.expiry,
+            issuedAt: stored.issuedAt,
+            issuer: issuer)
     }
 
     // MARK: - Token Exchange (RFC 8693)
@@ -363,7 +378,10 @@ public actor OAuthServer {
         try await storage.saveAccessToken(
             token: issued, clientId: clientId, scope: issuedScope,
             expiresAt: Date().addingTimeInterval(accessTokenLifetime),
-            audience: request.resource)
+            audience: request.resource,
+            // RFC 8693 §1.1: the issued token acts for the subject token's subject. Dropping it
+            // would leave the downstream service unable to say on whose behalf it acts.
+            subject: subject.subject)
 
         return TokenExchangeResponse(
             accessToken: issued,
@@ -515,7 +533,7 @@ public actor OAuthServer {
             // One answer for both. A device code is single-use, and telling a caller that a
             // code exists but is spent distinguishes it from one that never existed.
             throw OAuthError.invalidGrant(nil)
-        case .approved(let scope):
+        case .approved(let scope, let subject):
             // Marked spent before the token is issued. The other order leaves a window in
             // which two concurrent polls both see an approved code and both collect a token.
             try await storage.markDeviceCodeRedeemed(deviceCode: deviceCode)
@@ -524,12 +542,14 @@ public actor OAuthServer {
             let refreshToken = TokenGenerator.generateRefreshToken()
             let now = Date()
 
+            // The user who approved, so introspection can say whose session this is.
             try await storage.saveAccessToken(
                 token: accessToken, clientId: clientId, scope: scope,
-                expiresAt: now.addingTimeInterval(accessTokenLifetime), audience: nil)
+                expiresAt: now.addingTimeInterval(accessTokenLifetime), audience: nil,
+                subject: subject)
             try await storage.saveRefreshToken(
                 token: refreshToken, clientId: clientId, scope: scope,
-                expiresAt: now.addingTimeInterval(refreshTokenLifetime))
+                expiresAt: now.addingTimeInterval(refreshTokenLifetime), subject: subject)
 
             return TokenResponse(
                 accessToken: accessToken,
@@ -770,11 +790,18 @@ public actor OAuthServer {
 
     /// Handles an authorization request
     ///
-    /// - Parameter request: Authorization request parameters
+    /// - Parameters:
+    ///   - request: Authorization request parameters
+    ///   - subject: Who approved it — the resource owner, as the deployment authenticated them.
+    ///     Carried onto the code and every token it redeems for, so introspection answers
+    ///     `sub`. This package authenticates no user, so it cannot know who approved; a
+    ///     deployment that omits it issues tokens naming nobody, never an invented subject.
     /// - Returns: Authorization response with code
     /// - Throws: `OAuthError` if request is invalid, or `OAuthError.serverError(_:)` if this
     ///   server's configured authorization-code lifetime is not a usable number of seconds.
-    public func handleAuthorizationRequest(_ request: AuthorizationRequest) async throws -> AuthorizationResponse {
+    public func handleAuthorizationRequest(
+        _ request: AuthorizationRequest, subject: String? = nil
+    ) async throws -> AuthorizationResponse {
         // Validate response type
         guard request.responseType == "code" else {
             throw OAuthError.invalidRequest(nil)
@@ -856,7 +883,8 @@ public actor OAuthServer {
             codeChallengeMethod: request.codeChallengeMethod,
             expiresAt: now.addingTimeInterval(authorizationCodeLifetime),
             createdAt: now,
-            audience: audience
+            audience: audience,
+            subject: subject
         )
 
         try await storage.saveAuthorizationCode(authCode)
@@ -1047,7 +1075,8 @@ public actor OAuthServer {
             clientId: request.clientId,
             scope: authCode.scope,
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
-            audience: audience
+            audience: audience,
+            subject: authCode.subject
         )
 
         if let rt = refreshToken {
@@ -1055,7 +1084,8 @@ public actor OAuthServer {
                 token: rt,
                 clientId: request.clientId,
                 scope: authCode.scope,
-                expiresAt: now.addingTimeInterval(refreshTokenLifetime)
+                expiresAt: now.addingTimeInterval(refreshTokenLifetime),
+                subject: authCode.subject
             )
         }
 
@@ -1111,7 +1141,10 @@ public actor OAuthServer {
             clientId: request.clientId,
             scope: scope,
             expiresAt: Date().addingTimeInterval(clientCredentialsTokenLifetime),
-            audience: audience
+            audience: audience,
+            // No resource owner: the client acts for itself, so it is the subject — the
+            // convention RFC 9068 §2.2 writes down for exactly this grant.
+            subject: request.clientId
         )
 
         return TokenResponse(
@@ -1183,7 +1216,8 @@ public actor OAuthServer {
             clientId: request.clientId,
             scope: tokenInfo.scope,
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
-            audience: audience
+            audience: audience,
+            subject: tokenInfo.subject
         )
 
         // Optionally rotate refresh token (we'll keep the same one for simplicity)

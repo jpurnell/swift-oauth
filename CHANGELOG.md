@@ -16,8 +16,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from `0.7.1` through `v1.0.0-beta.7` carries it. This change does not, and cannot, withdraw
   the MIT grant from copies of those commits already obtained under it; it governs this commit
   and later ones.
+- **Source-breaking, provider:** `DeviceCodeState.approved` carries the approver,
+  `.approved(scope:subject:)`. An exhaustive match on `.approved(let scope)` must bind the
+  second value.
 
 ### Added
+- **The provider's tokens say whose they are: `sub` and `iss` (RFC 7662 §2.2).** Every access
+  token now records a subject, and an active introspection answer carries it as `sub` and this
+  server's issuer as `iss` — so `SwiftOAuthIdentity` can use this provider as an identity
+  source. The subject is the user who approved, for the device grant; the user the deployment
+  names at consent, for the authorization code grant (`handleAuthorizationRequest(_:subject:)`,
+  `OAuthHTTPHandler.handleConsentSubmission(formParams:subject:)` — from the caller, never from
+  the form, which the browser controls); the client's own `client_id` for `client_credentials`,
+  the convention RFC 9068 §2.2 records; the refresh token's subject on refresh; and the subject
+  token's subject on an exchange (RFC 8693 §1.1). A code granted without a subject yields a
+  token naming nobody — never an invented one. `TokenValidationResult.ValidatedToken.subject`,
+  `AuthorizationCode.subject` and `RefreshTokenInfo.subject` expose it; `saveAccessToken` and
+  `saveRefreshToken` take `subject:` (default `nil`). An inactive answer is still exactly
+  `{"active":false}`. **Schema 9** adds `subject` to `access_tokens`, `refresh_tokens` and
+  `authorization_codes`; existing rows keep working and name nobody.
 - **The client can begin a device grant** (RFC 8628 §3.1–3.5). It could poll for the grant's
   tokens with `DeviceFlow.poll` and had no way to ask for the device code those polls redeem,
   so nobody could start the grant through this package. `DeviceAuthorizationClient`, made
@@ -117,7 +134,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   authenticates no client. A deployment that declares the grant therefore advertises a flow its
   endpoints refuse — the defect `ServedCapabilities.Inconsistency.grantNotImplemented` was added
   to prevent, in a form that check cannot see. Not changed here.
-- **The provider's tokens carry no subject.** `approveDeviceCode(userCode:subject:)` records who
+- ~~**The provider's tokens carry no subject.**~~ *Fixed in this release — see* **Added**.
+  `approveDeviceCode(userCode:subject:)` records who
   approved, and neither the device grant nor any other stores it on the token, so introspection
   never returns `sub`. A resource server cannot learn *who* from this provider's tokens — the
   gap SwiftIdentity's proposal (§3, "`sub` carried on authorization codes and tokens") asked for.
