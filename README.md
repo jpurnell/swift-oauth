@@ -114,7 +114,7 @@ let who = await authenticator.authentication(for: [OAuthAccessToken(tokens.acces
 It fails closed, tells the caller nothing about why, and passes SwiftIdentity's conformance
 suite unchanged.
 
-679 tests; the quality gate runs with no errors and no warnings. Linux CI was green at 1.0.0-beta.7 and has not yet run 1.0.0-beta.8 — `SwiftOAuthIdentity` and its `swift-identity` dependency have been built on macOS only.
+683 tests; the quality gate runs with no errors and no warnings. Linux CI is green at 1.0.0-beta.9, `SwiftOAuthIdentity` included. 1.0.0-beta.8 did not build on Linux, because `swift-identity` 0.7.0 did not; beta.9 requires 0.7.1.
 
 Three adoptions exercised it rather than a test suite alone: LedgeOS on the client half,
 SwiftMCPServer and SwiftMCPClient on the provider half. Eight defects in this package were found by a
