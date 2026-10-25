@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Licence: proprietary.** `LICENSE` held the MIT text while README said "Proprietary";
+  it now says *Copyright (c) 2026 Justin Purnell. All rights reserved.* and that no licence is
+  granted without written permission. README's licence section says the same. No source file
+  header, the manifest or any documentation named MIT. **Earlier published commits were
+  distributed with the MIT text:** `LICENSE` was added in `c53c085` (2026-09-02), and every tag
+  from `0.7.1` through `v1.0.0-beta.7` carries it. This change does not, and cannot, withdraw
+  the MIT grant from copies of those commits already obtained under it; it governs this commit
+  and later ones.
+
 ### Added
 - **The client can begin a device grant** (RFC 8628 §3.1–3.5). It could poll for the grant's
   tokens with `DeviceFlow.poll` and had no way to ask for the device code those polls redeem,

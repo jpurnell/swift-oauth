@@ -128,4 +128,8 @@ module, if at all.
 
 ## License
 
-Proprietary.
+Proprietary. Copyright (c) 2026 Justin Purnell. All rights reserved; no licence is granted
+without written permission. See `LICENSE`.
+
+Tags `0.7.1` through `v1.0.0-beta.7` were published with the MIT licence text in `LICENSE`;
+see the changelog.
