@@ -199,10 +199,17 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The two halves against each other. Neither depends on the other in production —
-        // that is the architecture — so nothing else checks they agree on the wire.
+        // that is the architecture — so nothing else checks they agree on the wire. The
+        // identity bridge is here too, because the question "can the provider be an identity
+        // source" is one only the provider, the client's introspector and the bridge together
+        // can answer.
         .testTarget(
             name: "SwiftOAuthConformanceTests",
-            dependencies: ["SwiftOAuthCore", "SwiftOAuthClient", "SwiftOAuthProvider"],
+            dependencies: [
+                "SwiftOAuthCore", "SwiftOAuthClient", "SwiftOAuthProvider", "SwiftOAuthIdentity",
+                .product(name: "SwiftIdentity", package: "swift-identity"),
+                .product(name: "SwiftIdentityConformance", package: "swift-identity")
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // SwiftIdentity's own conformance suite, run against the bridge unchanged: the bar every

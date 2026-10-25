@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.8] — 2026-10-25
+
 ### Changed
 - **Licence: proprietary.** `LICENSE` held the MIT text while README said "Proprietary";
   it now says *Copyright (c) 2026 Justin Purnell. All rights reserved.* and that no licence is
@@ -157,10 +159,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the line from SwiftCLIKit's sign-in proposal.
 - The device authorization request joins the redirect, TLS-downgrade, size-limit and
   missing-`Location` suites as a sixth request kind.
-- **Cross-half:** the client's sign-in run against the provider's own device grant, every
-  answer crossing as JSON and every refusal as an RFC 6749 §5.2 body. It runs through
-  `OAuthServer`'s Swift API, because the provider has no HTTP surface for the grant — see
-  **Noted**.
+- **Cross-half, over HTTP:** the client's sign-in run against the provider's own
+  `OAuthHTTPHandler` — registration at `/register`, the device authorization endpoint, the
+  token endpoint, and the user's approval on the `/device` page — each request a URL-encoded
+  form body and each answer a status and JSON read with the client's own types
+  (`ProviderOverHTTP`). It also covers `slow_down` (waits of `[5, 10, 15]` against a provider
+  clock that does not move: the client polls once before it waits, and every later poll is too
+  soon), a refusal reaching the client as `invalid_grant`, and a user's denial reaching it as
+  `access_denied`. The conformance target now depends on `SwiftOAuthIdentity` and
+  `SwiftIdentity`, so the provider-as-identity-source question is asked of all three together.
+- The doc-comment example on `DeviceAuthorizationClient` binds the configuration and
+  credentials it uses, so it compiles as a reader copies it.
 
 ### Noted
 - ~~**The provider's device grant is not reachable over HTTP.**~~ *Fixed in this release — see*
@@ -1753,7 +1762,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...HEAD
+[1.0.0-beta.8]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [1.0.0-beta.7]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.6...v1.0.0-beta.7
 [1.0.0-beta.6]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.5...v1.0.0-beta.6
 [1.0.0-beta.5]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.4...v1.0.0-beta.5

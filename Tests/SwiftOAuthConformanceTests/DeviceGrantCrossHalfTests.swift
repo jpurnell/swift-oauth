@@ -4,45 +4,95 @@ import SwiftOAuthCore
 import SwiftOAuthClient
 import SwiftOAuthProvider
 
-/// The device grant, the client half against the provider half.
+/// The device grant, the client half against the provider half — over the provider's HTTP
+/// endpoints.
 ///
-/// The provider has issued device codes and redeemed them since the grant was added; until
-/// `DeviceAuthorizationClient` the client could not ask for one, so nothing checked that the two
-/// agree. This runs the client's sign-in against the provider's own grant.
-///
-/// **Through the provider's Swift API, not its HTTP handler.** `OAuthHTTPHandler` routes no
-/// device authorization endpoint and its token endpoint does not dispatch the device grant, so
-/// there is no HTTP surface to run against. The bridge below still crosses the wire *format*:
-/// every answer the provider gives is encoded to JSON and decoded by the client's own types,
-/// and every refusal crosses as an RFC 6749 §5.2 body — which is where the halves have
-/// disagreed before.
-@Suite("Conformance — the device grant across the halves")
+/// This ran through `OAuthServer`'s Swift API while the provider had no HTTP surface for the
+/// grant. It now crosses `OAuthHTTPHandler`: the client registers at `/register`, asks at the
+/// device authorization endpoint, and polls the token endpoint, each request a form body and
+/// each answer a status and JSON the client reads with its own types (``ProviderOverHTTP``).
+/// The user approves on the provider's `/device` page.
+@Suite("Conformance — the device grant across the halves, over HTTP")
 struct DeviceGrantCrossHalfTests {
 
     static let issuer = "https://mcp.example.com"
 
-    private static func makeServer(
-        served: ServedCapabilities = .core, clock: SharedClock = SharedClock()
-    ) throws -> OAuthServer {
-        OAuthServer(
+    static func served() throws -> ServedCapabilities {
+        try ServedCapabilities(
+            grantTypes: [.authorizationCode, .refreshToken, .deviceCode],
+            clientAuthenticationMethods: [.none, .clientSecretBasic],
+            introspection: "\(issuer)/introspect",
+            deviceAuthorization: "\(issuer)/device_authorization")
+    }
+
+    struct Provider {
+        let server: OAuthServer
+        let handler: OAuthHTTPHandler
+        let wire: ProviderOverHTTP
+        let clock: SharedClock
+    }
+
+    static func provider() throws -> Provider {
+        let clock = SharedClock()
+        let server = OAuthServer(
             storage: try OAuthStorage(path: ":memory:"), issuer: issuer,
-            scopesSupported: ["mcp:tools"], served: served, resourceIdentity: .colocated,
+            scopesSupported: ["mcp:tools"], served: try served(), resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true),
             now: { clock.now })
+        let handler = OAuthHTTPHandler(server: server)
+        return Provider(
+            server: server, handler: handler, wire: ProviderOverHTTP(handler: handler),
+            clock: clock)
+    }
+
+    /// Registers a public client for the device grant through `/register`, as a command-line
+    /// tool would, and returns its credentials.
+    static func registerDeviceClient(_ provider: Provider) async throws -> ClientCredentials {
+        let response = await provider.handler.handleRegistrationRequest(body: """
+            {"client_name":"Terminal","redirect_uris":[],
+             "grant_types":["urn:ietf:params:oauth:grant-type:device_code","refresh_token"],
+             "token_endpoint_auth_method":"none"}
+            """)
+        let registered: SwiftOAuthProvider.ClientRegistrationResponse = try ProviderOverHTTP.read(response)
+        return ClientCredentials(environment: "test", clientID: registered.clientId, clientSecret: "")
+    }
+
+    /// The user approving on the provider's `/device` page, as `subject`.
+    static func approveOnThePage(
+        _ provider: Provider, userCode: String, subject: String
+    ) async throws {
+        let entry = await provider.handler.handleDeviceVerificationPage(
+            queryParams: ["user_code": userCode], subject: subject)
+        let csrf = try csrfToken(in: entry.body)
+        let confirmation = await provider.handler.handleDeviceVerificationSubmission(
+            formParams: ["action": "confirm", "user_code": userCode, "csrf_token": csrf],
+            subject: subject)
+        let approved = await provider.handler.handleDeviceVerificationSubmission(
+            formParams: ["action": "approve", "user_code": userCode,
+                         "csrf_token": try csrfToken(in: confirmation.body)],
+            subject: subject)
+        guard approved.statusCode == 200 else {
+            throw OAuthError.serverError("approval page answered \(approved.statusCode)")
+        }
+    }
+
+    static func csrfToken(in page: String) throws -> String {
+        let marker = #"name="csrf_token" value=""#
+        let start = try #require(page.range(of: marker))
+        let rest = page[start.upperBound...]
+        let end = try #require(rest.firstIndex(of: "\""))
+        return String(rest[..<end])
     }
 
     /// The provider advertises the endpoint, and the client reads it into a configuration
     /// that will start the grant.
     @Test("The provider's device authorization endpoint is discovered by the client")
     func endpointIsDiscovered() async throws {
-        let served = try ServedCapabilities(
-            grantTypes: [.authorizationCode, .deviceCode],
-            clientAuthenticationMethods: [.none],
-            deviceAuthorization: "\(Self.issuer)/device_authorization")
-        let server = try Self.makeServer(served: served)
+        let provider = try Self.provider()
 
-        let published = try JSONEncoder().encode(await server.getMetadata())
-        let discovered = try JSONDecoder().decode(AuthorizationServerMetadata.self, from: published)
+        let published = await provider.handler.handleMetadataRequest()
+        let discovered = try JSONDecoder().decode(
+            AuthorizationServerMetadata.self, from: Data(published.body.utf8))
         let configuration = try discovered.configuration(identifier: "mcp")
 
         #expect(configuration.deviceAuthorizationEndpoint?.absoluteString
@@ -52,64 +102,111 @@ struct DeviceGrantCrossHalfTests {
             credentials: ClientCredentials(environment: "test", clientID: "cli", clientSecret: ""))
     }
 
-    /// The whole grant: the client requests, the provider issues, the user approves on the
-    /// provider after two polls, and the client collects tokens the provider then honours.
-    @Test("A sign-in completes against the provider, and the token it yields is active there")
+    /// The whole grant: the client registers, requests, shows the code; the user approves on
+    /// the provider's page after two polls; the client collects tokens the provider honours.
+    @Test("A sign-in completes over HTTP, and the token it yields is active there")
     func signInCompletes() async throws {
-        // The provider paces polls by its clock (RFC 8628 §3.5 `slow_down`), so the sleeper
-        // moves that clock by each wait — the device really does wait, as far as the provider
-        // can tell.
-        let clock = SharedClock()
-        let server = try Self.makeServer(clock: clock)
-        let bridge = ProviderBridge(server: server)
+        let provider = try Self.provider()
+        let credentials = try await Self.registerDeviceClient(provider)
         let client = try DeviceAuthorizationClient(
-            configuration: Self.configuration(),
-            credentials: ClientCredentials(environment: "test", clientID: "cli", clientSecret: ""),
-            transport: bridge)
-        let sleeper = ApprovingSleeper(approveOnWait: 2, clock: clock) { userCode in
-            try await server.approveDeviceCode(userCode: userCode, subject: "ada")
+            configuration: Self.configuration(), credentials: credentials,
+            transport: provider.wire)
+        let sleeper = ApprovingSleeper(approveOnWait: 2, clock: provider.clock) { userCode in
+            try await Self.approveOnThePage(provider, userCode: userCode, subject: "ada")
         }
 
         let tokens = try await client.signIn(sleeper: sleeper, elapsed: { 0 }, present: { shown in
             await sleeper.remember(shown.userCode)
         })
 
-        // Two `authorization_pending` polls at the provider's stated interval, then tokens.
+        // Two `authorization_pending` polls at the provider's stated interval, then tokens —
+        // and no `slow_down`, because the client waited as long as it was told to.
         #expect(await sleeper.waits == [5, 5])
-        #expect(await bridge.redeemCount == 3)
-        let introspected = try await server.introspect(token: tokens.accessToken)
+        #expect(await provider.wire.tokenRequests == 3)
+        let introspected = try await provider.server.introspect(token: tokens.accessToken)
         #expect(introspected.active)
-        #expect(introspected.clientId == "cli")
+        #expect(introspected.clientId == credentials.clientID)
         #expect(introspected.scope == "mcp:tools")
+        #expect(introspected.subject == "ada")
+        #expect(introspected.issuer == Self.issuer)
+    }
+
+    /// A device that polls faster than it was told is slowed, and the client widens its
+    /// interval by the five seconds the provider added.
+    ///
+    /// The sleeper here leaves the provider's clock where it is, so every wait is, as far as
+    /// the provider can tell, no wait at all. The client polls once before it waits: that poll
+    /// is `authorization_pending` (there is no earlier poll to be too close to), every later
+    /// one is `slow_down`, and each widens the interval by five seconds, so the client waits
+    /// five, then ten, then fifteen.
+    @Test("slow_down from the provider widens the client's interval by five seconds")
+    func slowDownCrosses() async throws {
+        let provider = try Self.provider()
+        let credentials = try await Self.registerDeviceClient(provider)
+        let client = try DeviceAuthorizationClient(
+            configuration: Self.configuration(), credentials: credentials,
+            transport: provider.wire)
+        let sleeper = ApprovingSleeper(
+            approveOnWait: 3, clock: provider.clock, advancesClock: false
+        ) { userCode in
+            try await provider.server.approveDeviceCode(userCode: userCode, subject: "ada")
+        }
+
+        _ = try await client.signIn(sleeper: sleeper, elapsed: { 0 }, present: { shown in
+            await sleeper.remember(shown.userCode)
+        })
+
+        let waits = await sleeper.waits
+        #expect(waits == [5, 10, 15], "waits were \(waits)")
     }
 
     /// A refusal on the provider's side reaches the client as itself, through a §5.2 body.
     @Test("A refusal on the provider reaches the client as itself, and ends the loop")
     func refusalCrosses() async throws {
-        let server = try Self.makeServer()
-        let bridge = ProviderBridge(server: server)
+        let provider = try Self.provider()
+        let owner = try await Self.registerDeviceClient(provider)
+        let stranger = try await Self.registerDeviceClient(provider)
         let client = try DeviceAuthorizationClient(
-            configuration: Self.configuration(),
-            credentials: ClientCredentials(environment: "test", clientID: "cli", clientSecret: ""),
-            transport: bridge)
-
+            configuration: Self.configuration(), credentials: owner, transport: provider.wire)
         let authorization = try await client.requestDeviceAuthorization()
-        // Another client's identifier: the provider answers `invalid_grant`, which is not a
-        // polling state, and the loop must stop on it.
-        let stranger = try DeviceAuthorizationClient(
-            configuration: Self.configuration(),
-            credentials: ClientCredentials(environment: "test", clientID: "other", clientSecret: ""),
-            transport: bridge)
+        // Another registered client's identifier: the provider answers `invalid_grant`, which
+        // is not a polling state, and the loop must stop on it.
+        let thief = try DeviceAuthorizationClient(
+            configuration: Self.configuration(), credentials: stranger, transport: provider.wire)
 
-        await #expect(throws: OAuthError.invalidGrant(nil)) {
-            _ = try await stranger.poll(
+        // Matched by case: the provider's answer carries its standard description, which the
+        // client reads back, so it is not equal to `invalidGrant(nil)`.
+        await #expect {
+            _ = try await thief.poll(
                 authorization,
-                sleeper: ApprovingSleeper(approveOnWait: 0, clock: SharedClock()) { _ in },
-                                        elapsed: { 0 })
+                sleeper: ApprovingSleeper(approveOnWait: 0, clock: provider.clock) { _ in },
+                elapsed: { 0 })
+        } throws: { error in
+            if case .invalidGrant = error as? OAuthError { return true }
+            return false
         }
     }
 
-    private static func configuration() throws -> ProviderConfiguration {
+    @Test("A user's refusal on the page reaches the client as access_denied")
+    func denialCrosses() async throws {
+        let provider = try Self.provider()
+        let credentials = try await Self.registerDeviceClient(provider)
+        let client = try DeviceAuthorizationClient(
+            configuration: Self.configuration(), credentials: credentials,
+            transport: provider.wire)
+        let sleeper = ApprovingSleeper(approveOnWait: 1, clock: provider.clock) { userCode in
+            try await provider.server.denyDeviceCode(userCode: userCode, subject: "ada")
+        }
+
+        await #expect(throws: OAuthError.self) {
+            _ = try await client.signIn(sleeper: sleeper, elapsed: { 0 }, present: { shown in
+                await sleeper.remember(shown.userCode)
+            })
+        }
+        #expect(await provider.wire.tokenRequests == 2)
+    }
+
+    static func configuration() throws -> ProviderConfiguration {
         let deviceEndpoint = try #require(URL(string: "\(issuer)/device_authorization"))
         return ProviderConfiguration(
             identifier: "mcp",
@@ -118,113 +215,5 @@ struct DeviceGrantCrossHalfTests {
             deviceAuthorizationEndpoint: deviceEndpoint,
             scope: "mcp:tools",
             authenticationMethod: .none)
-    }
-}
-
-/// Carries the client's requests to the provider's device grant, through JSON both ways.
-private actor ProviderBridge: DeviceAuthorizationTransport {
-
-    private let server: OAuthServer
-    private(set) var redeemCount = 0
-
-    init(server: OAuthServer) {
-        self.server = server
-    }
-
-    func requestDeviceAuthorization(
-        endpoint: URL,
-        parameters: [String: String],
-        credentials: ClientCredentials,
-        method: ClientAuthenticationMethod
-    ) async throws -> DeviceAuthorizationResponse {
-        do {
-            return try Self.acrossTheWire(
-                try await server.authorizeDevice(
-                    clientId: credentials.clientID, scope: parameters["scope"]))
-        } catch let refusal as OAuthError {
-            throw try Self.acrossTheWire(refusal)
-        }
-    }
-
-    func exchange(
-        endpoint: URL,
-        parameters: [String: String],
-        credentials: ClientCredentials,
-        method: ClientAuthenticationMethod
-    ) async throws -> TokenResponse {
-        guard parameters["grant_type"] == GrantType.deviceCode.rawValue,
-              let deviceCode = parameters["device_code"] else {
-            throw OAuthError.unsupportedGrantType(nil)
-        }
-        redeemCount += 1
-        do {
-            return try Self.acrossTheWire(
-                try await server.redeemDeviceCode(deviceCode, clientId: credentials.clientID))
-        } catch let refusal as OAuthError {
-            throw try Self.acrossTheWire(refusal)
-        }
-    }
-
-    /// The provider's answer as JSON, read back by the client's types.
-    private static func acrossTheWire<Answer: Codable>(_ answer: Answer) throws -> Answer {
-        try JSONDecoder().decode(Answer.self, from: try JSONEncoder().encode(answer))
-    }
-
-    /// A refusal as an RFC 6749 §5.2 body, read back the way `URLSessionTokenTransport` reads
-    /// one.
-    private static func acrossTheWire(_ refusal: OAuthError) throws -> OAuthError {
-        let body = try JSONEncoder().encode(OAuthErrorResponse(refusal))
-        return try JSONDecoder().decode(OAuthErrorResponse.self, from: body).oauthError
-    }
-}
-
-/// Records each wait and, on the given one, approves the code the user was shown — standing in
-/// for a person who types it in while the device polls.
-private actor ApprovingSleeper: DeviceFlowSleeper {
-
-    private let approveOnWait: Int
-    private let clock: SharedClock
-    private let approve: @Sendable (String) async throws -> Void
-    private var userCode: String?
-    private(set) var waits: [TimeInterval] = []
-
-    init(
-        approveOnWait: Int, clock: SharedClock,
-        approve: @escaping @Sendable (String) async throws -> Void
-    ) {
-        self.approveOnWait = approveOnWait
-        self.clock = clock
-        self.approve = approve
-    }
-
-    func remember(_ code: String) {
-        userCode = code
-    }
-
-    func sleep(for interval: TimeInterval) async throws {
-        waits.append(interval)
-        clock.advance(interval)
-        if waits.count == approveOnWait, let userCode {
-            try await approve(userCode)
-        }
-    }
-}
-
-/// A clock the provider reads and a test moves, shared by the halves under test.
-// Justification: mutable `current` is read and written only under `lock`.
-final class SharedClock: @unchecked Sendable {
-    private var current = Date(timeIntervalSince1970: 1_800_000_000)
-    private let lock = NSLock()
-
-    var now: Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return current
-    }
-
-    func advance(_ seconds: TimeInterval) {
-        lock.lock()
-        defer { lock.unlock() }
-        current = current.addingTimeInterval(seconds)
     }
 }
