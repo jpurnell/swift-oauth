@@ -17,8 +17,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the MIT grant from copies of those commits already obtained under it; it governs this commit
   and later ones.
 - **Source-breaking, provider:** `DeviceCodeState.approved` carries the approver,
-  `.approved(scope:subject:)`. An exhaustive match on `.approved(let scope)` must bind the
-  second value.
+  `.approved(scope:subject:)`, and gains `.denied`. An exhaustive match must bind the second
+  value and handle the new case.
+- **The provider's device grant follows RFC 8628 §3.5, §5 and §6.1.** `redeemDeviceCode`
+  answers `slow_down` to a poll sooner than the code's interval after the last one and widens
+  that interval by five seconds for every later poll (paced per device code, while pending
+  only); `access_denied` after the user refuses (`denyDeviceCode(userCode:subject:)`, new);
+  `expired_token` past the lifetime, approved or not. A code is spent by a conditional write
+  (`markDeviceCodeRedeemed` now returns whether this call spent it), so concurrent polls on one
+  approved code yield one set of tokens — before, two polls that both read "approved" both
+  collected. An approved or denied code cannot be answered again, so a second user can no longer
+  overwrite the approver. User codes are compared case-insensitively with punctuation ignored
+  (§6.1, `TokenGenerator.normalizedUserCode`), and stored and looked up as the SHA-256 of that
+  canonical form rather than in the clear. Five wrong codes in five minutes throttle that user
+  (`slow_down`) at the verification step (§5.1), and no one else.
+  `pendingDeviceAuthorization(userCode:subject:)` (new) names the client and scope behind a
+  code so a verification page can show the user what is asking (§5.4). Responses now carry
+  `verification_uri_complete` (§3.3.1). `OAuthServer.init` takes `now:` (default the system
+  clock), which the device grant is judged by. **Schema 10** hashes existing user codes in
+  place and adds `denied`, `last_polled_at` and `poll_interval`.
 
 ### Added
 - **The provider's tokens say whose they are: `sub` and `iss` (RFC 7662 §2.2).** Every access

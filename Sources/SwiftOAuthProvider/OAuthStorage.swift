@@ -105,8 +105,9 @@ public actor OAuthStorage {
     /// `clients.client_secret` with its SHA-256 and added `clients.scope_ceiling`; version 8
     /// added `clients.application_type`, which until then was dropped on save; version 9 added
     /// `subject` to `access_tokens`, `refresh_tokens` and `authorization_codes`, so a token can
-    /// say whose it is (RFC 7662 `sub`).
-    public static let currentSchemaVersion = 9
+    /// say whose it is (RFC 7662 `sub`); version 10 hashed `device_codes.user_code` and added
+    /// `device_codes.denied`, `last_polled_at` and `poll_interval` for RFC 8628 §3.5.
+    public static let currentSchemaVersion = 10
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -376,6 +377,41 @@ public actor OAuthStorage {
             }
         }
 
+        // Version 10: RFC 8628 §3.5 and §6.1. A user's refusal (`denied`), the pace a device is
+        // polling at (`last_polled_at`, and `poll_interval`, which `slow_down` widens), and the
+        // user code kept as the SHA-256 of its canonical form rather than as the code — looked
+        // up by digest, so neither a database read nor the lookup's timing yields a code to
+        // type. One transaction with the version bump inside it, as version 7: a crash part-way
+        // must not leave some codes hashed and the rest about to be hashed a second time.
+        if version < 10 && targetVersion >= 10 {
+            try executeStatic(db: db, sql: "BEGIN IMMEDIATE")
+            do {
+                let added: [(String, String)] = [
+                    ("denied", "INTEGER DEFAULT 0"),
+                    ("last_polled_at", "REAL"),
+                    ("poll_interval", "REAL")
+                ]
+                for (column, type) in added {
+                    if try !columnExists(db: db, table: "device_codes", column: column) {
+                        try executeStatic(
+                            db: db, sql: "ALTER TABLE device_codes ADD COLUMN \(column) \(type)")
+                    }
+                }
+                try hashPlaintextUserCodes(db: db)
+                try executeStatic(db: db, sql: "PRAGMA user_version = 10")
+                try executeStatic(db: db, sql: "COMMIT")
+            } catch let migrationError {
+                do {
+                    try executeStatic(db: db, sql: "ROLLBACK")
+                } catch {
+                    throw OAuthStorageError.databaseError(
+                        "Hashing user codes failed (\(migrationError)) and the rollback "
+                        + "failed too (\(error)).")
+                }
+                throw migrationError
+            }
+        }
+
         if version < targetVersion {
             try executeStatic(db: db, sql: "PRAGMA user_version = \(targetVersion)")
         }
@@ -415,6 +451,50 @@ public actor OAuthStorage {
                 throw OAuthStorageError.databaseError("Failed to hash a client secret.")
             }
         }
+    }
+
+    /// Replaces each `device_codes.user_code` with the SHA-256 of its canonical form. Run once,
+    /// by the version 10 migration, inside its transaction.
+    private static func hashPlaintextUserCodes(db: OpaquePointer) throws {
+        var select: OpaquePointer?
+        defer { sqlite3_finalize(select) }
+        guard sqlite3_prepare_v2(
+            db, "SELECT device_code_hash, user_code FROM device_codes", -1, &select, nil
+        ) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to read user codes.")
+        }
+        var rows: [(key: String, hash: String)] = []
+        while sqlite3_step(select) == SQLITE_ROW {
+            guard let key = sqlite3_column_text(select, 0),
+                  let code = sqlite3_column_text(select, 1) else { continue }
+            rows.append((String(cString: key), userCodeDigest(String(cString: code))))
+        }
+
+        var update: OpaquePointer?
+        defer { sqlite3_finalize(update) }
+        guard sqlite3_prepare_v2(
+            db, "UPDATE device_codes SET user_code = ? WHERE device_code_hash = ?",
+            -1, &update, nil) == SQLITE_OK
+        else {
+            throw OAuthStorageError.databaseError("Failed to prepare the user-code migration.")
+        }
+        for row in rows {
+            sqlite3_reset(update)
+            sqlite3_bind_text(update, 1, row.hash, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(update, 2, row.key, -1, SQLITE_TRANSIENT)
+            guard sqlite3_step(update) == SQLITE_DONE else {
+                throw OAuthStorageError.databaseError("Failed to hash a user code.")
+            }
+        }
+    }
+
+    /// What is stored, and looked up, for a user code: the SHA-256 of its canonical form.
+    ///
+    /// Canonical first (RFC 8628 §6.1 — case and punctuation do not matter), so `wdjb mjht`
+    /// finds `WDJB-MJHT`. An input that cannot be a user code is hashed as given, which matches
+    /// nothing this server issued.
+    static func userCodeDigest(_ userCode: String) -> String {
+        sha256Hex(TokenGenerator.normalizedUserCode(userCode) ?? userCode)
     }
 
     /// Whether a table already has a column, so a migration can be run twice safely.
@@ -894,53 +974,172 @@ public actor OAuthStorage {
     /// The device code is hashed, like every other credential here: it is a bearer credential
     /// until redeemed, so a database read must not yield something redeemable.
     ///
-    /// The user code is stored in the clear, deliberately. It has to be looked up by exactly
-    /// what a person typed, it is short-lived, and it is useless without the device code —
-    /// approving one authorises a session the approver cannot themselves collect.
+    /// The user code is stored as the SHA-256 of its canonical form (schema 10) and looked up
+    /// by that digest. It was stored in the clear before, on the argument that it is short-lived
+    /// and useless without the device code; both are true, and neither stops a database read
+    /// from yielding a code someone could type into the approval page, nor makes the lookup's
+    /// timing independent of how much of a live code an input matched.
+    ///
+    /// - Parameters:
+    ///   - deviceCode: The device's credential. Stored hashed.
+    ///   - userCode: The code the user will type. Stored hashed, in canonical form.
+    ///   - clientId: The client the codes belong to.
+    ///   - scope: What it asked for.
+    ///   - expiresAt: When both codes stop working.
+    ///   - interval: The polling interval the device was told, in seconds — the floor below
+    ///     which a poll is answered `slow_down`.
+    ///   - now: When the codes were issued.
     public func saveDeviceCode(
         deviceCode: String,
         userCode: String,
         clientId: String,
         scope: String?,
-        expiresAt: Date
+        expiresAt: Date,
+        interval: TimeInterval = 5,
+        now: Date = Date()
     ) throws {
         try execute("""
             INSERT INTO device_codes
             (device_code_hash, user_code, client_id, scope, subject, approved, redeemed,
-             expires_at, created_at)
-            VALUES (?, ?, ?, ?, NULL, 0, 0, ?, ?)
+             expires_at, created_at, denied, last_polled_at, poll_interval)
+            VALUES (?, ?, ?, ?, NULL, 0, 0, ?, ?, 0, NULL, ?)
         """, parameters: [
             hashToken(deviceCode),
-            userCode,
+            Self.userCodeDigest(userCode),
             clientId,
             scope as Any,
             expiresAt.timeIntervalSince1970,
-            Date().timeIntervalSince1970
+            now.timeIntervalSince1970,
+            interval
         ])
     }
 
     /// Marks the user code approved, recording who approved it.
     ///
-    /// - Returns: `false` if no unexpired, unapproved code matches — which is what an unknown
-    ///   or stale code looks like, and is not distinguished from it on purpose. The approval
-    ///   page would otherwise be an oracle for guessing codes that are short by design.
-    public func approveDeviceCode(userCode: String, subject: String) throws -> Bool {
+    /// Only a code nobody has answered yet: an approved or denied code is not approved again,
+    /// so a second user cannot rewrite whose session the device is about to collect.
+    ///
+    /// - Parameters:
+    ///   - userCode: What the user typed, in any case and with or without punctuation.
+    ///   - subject: Who approved it.
+    ///   - now: The time to judge expiry by.
+    /// - Returns: `false` if no live, unanswered code matches — which is what an unknown or
+    ///   stale code looks like, and is not distinguished from it on purpose. The approval page
+    ///   would otherwise be an oracle for guessing codes that are short by design.
+    public func approveDeviceCode(
+        userCode: String, subject: String, now: Date = Date()
+    ) throws -> Bool {
         try execute("""
             UPDATE device_codes SET approved = 1, subject = ?
-            WHERE user_code = ? AND redeemed = 0 AND expires_at > ?
-        """, parameters: [subject, userCode, Date().timeIntervalSince1970])
+            WHERE user_code = ? AND approved = 0 AND denied = 0 AND redeemed = 0
+              AND expires_at > ?
+        """, parameters: [subject, Self.userCodeDigest(userCode), now.timeIntervalSince1970])
         return sqlite3_changes(db) > 0
     }
 
+    /// Marks the user code denied — the user refused, RFC 8628 §3.5 `access_denied`.
+    ///
+    /// - Parameters:
+    ///   - userCode: What the user typed.
+    ///   - subject: Who refused.
+    ///   - now: The time to judge expiry by.
+    /// - Returns: `false` if no live, unanswered code matches.
+    public func denyDeviceCode(
+        userCode: String, subject: String, now: Date = Date()
+    ) throws -> Bool {
+        try execute("""
+            UPDATE device_codes SET denied = 1, subject = ?
+            WHERE user_code = ? AND approved = 0 AND denied = 0 AND redeemed = 0
+              AND expires_at > ?
+        """, parameters: [subject, Self.userCodeDigest(userCode), now.timeIntervalSince1970])
+        return sqlite3_changes(db) > 0
+    }
+
+    /// The client and scope behind a live, unanswered user code — what a verification page
+    /// shows so the user can tell whether it is their own device asking (RFC 8628 §5.4).
+    ///
+    /// - Parameters:
+    ///   - userCode: What the user typed.
+    ///   - now: The time to judge expiry by.
+    /// - Returns: The client id and scope, or `nil` for a code that is unknown, expired or
+    ///   already answered — one answer for all three.
+    public func pendingDeviceCode(
+        userCode: String, now: Date = Date()
+    ) throws -> (clientId: String, scope: String?)? {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = """
+            SELECT client_id, scope FROM device_codes
+            WHERE user_code = ? AND approved = 0 AND denied = 0 AND redeemed = 0
+              AND expires_at > ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, Self.userCodeDigest(userCode), -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 2, now.timeIntervalSince1970)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let client = sqlite3_column_text(stmt, 0) else { return nil }
+        return (String(cString: client), sqlite3_column_text(stmt, 1).map { String(cString: $0) })
+    }
+
+    /// Records a poll of a pending device code, and says whether it came too soon —
+    /// RFC 8628 §3.5 `slow_down`.
+    ///
+    /// A poll sooner than the code's interval after the last one widens that interval by five
+    /// seconds, "for this and all subsequent requests" (§3.5), and is reported as too soon.
+    /// Either way the poll becomes the last one, so a device that keeps hammering keeps being
+    /// told — at a widening interval.
+    ///
+    /// - Parameters:
+    ///   - deviceCode: The code being polled with.
+    ///   - now: When the poll arrived.
+    /// - Returns: `true` when the device should be told `slow_down`.
+    public func pacePendingPoll(deviceCode: String, now: Date = Date()) throws -> Bool {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "SELECT last_polled_at, poll_interval FROM device_codes WHERE device_code_hash = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        let key = hashToken(deviceCode)
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return false }
+
+        let lastPolled: Date? = sqlite3_column_type(stmt, 0) == SQLITE_NULL
+            ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
+        let stored = sqlite3_column_type(stmt, 1) == SQLITE_NULL
+            ? Self.defaultPollInterval : sqlite3_column_double(stmt, 1)
+        let interval = stored.isFinite && stored > 0 ? stored : Self.defaultPollInterval
+
+        let tooSoon = lastPolled.map { now.timeIntervalSince($0) < interval } ?? false
+        let next = tooSoon ? interval + Self.slowDownIncrement : interval
+        try execute(
+            "UPDATE device_codes SET last_polled_at = ?, poll_interval = ? WHERE device_code_hash = ?",
+            parameters: [now.timeIntervalSince1970, next, key])
+        return tooSoon
+    }
+
+    /// RFC 8628 §3.2's default interval, used for a code stored before schema 10 recorded one.
+    private static let defaultPollInterval: TimeInterval = 5
+
+    /// What `slow_down` adds to the interval — RFC 8628 §3.5 names five seconds.
+    private static let slowDownIncrement: TimeInterval = 5
+
     /// What a device code currently is, for a client redeeming it.
+    ///
+    /// - Parameters:
+    ///   - deviceCode: The code being redeemed.
+    ///   - clientId: The client redeeming it.
+    ///   - now: The time to judge expiry by.
     public func deviceCodeState(
-        deviceCode: String, clientId: String
+        deviceCode: String, clientId: String, now: Date = Date()
     ) throws -> DeviceCodeState {
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, subject, approved, redeemed, expires_at
+            SELECT client_id, scope, subject, approved, redeemed, expires_at, denied
             FROM device_codes WHERE device_code_hash = ?
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
@@ -956,21 +1155,30 @@ public actor OAuthStorage {
         let approved = sqlite3_column_int(stmt, 3) != 0
         let redeemed = sqlite3_column_int(stmt, 4) != 0
         let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+        let denied = sqlite3_column_int(stmt, 6) != 0
 
         // The client check comes before everything else. A device code seen in transit is
         // otherwise redeemable by anyone who can name a client id, and client ids are public
         // by design.
         guard owner == clientId else { return .unknown }
         guard !redeemed else { return .alreadyRedeemed }
-        guard Date() < expiresAt else { return .expired }
+        guard now < expiresAt else { return .expired }
+        guard !denied else { return .denied }
         return approved ? .approved(scope: scope, subject: subject) : .pending
     }
 
     /// Marks a device code redeemed, so it cannot be used again.
-    public func markDeviceCodeRedeemed(deviceCode: String) throws {
+    ///
+    /// A conditional write, so it succeeds once: of two polls racing on one approved code,
+    /// both may read it as approved, and only the one whose write changed the row may issue.
+    ///
+    /// - Returns: `true` if this call spent the code; `false` if it was already spent.
+    @discardableResult
+    public func markDeviceCodeRedeemed(deviceCode: String) throws -> Bool {
         try execute(
-            "UPDATE device_codes SET redeemed = 1 WHERE device_code_hash = ?",
+            "UPDATE device_codes SET redeemed = 1 WHERE device_code_hash = ? AND redeemed = 0",
             parameters: [hashToken(deviceCode)])
+        return sqlite3_changes(db) > 0
     }
 
     /// Stores a pushed authorization request — RFC 9126 §2.

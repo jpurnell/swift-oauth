@@ -505,8 +505,37 @@ public enum DeviceCodeState: Sendable, Equatable {
     case approved(scope: String?, subject: String?)
     /// Already exchanged. Single-use, so a second attempt is a refusal.
     case alreadyRedeemed
+    /// The user refused — RFC 8628 §3.5 `access_denied`.
+    case denied
     /// Issued, but the user did not finish in time.
     case expired
+}
+
+// MARK: - PendingDeviceAuthorization
+
+/// A device sign-in waiting for its user — what a verification page shows before asking them
+/// to approve or deny, RFC 8628 §5.4.
+///
+/// §5.4's remote-phishing attack is a user approving a code someone else's device is showing
+/// them. The defence the RFC offers is telling the user *which client* is asking, so they can
+/// notice it is not the device in front of them.
+public struct PendingDeviceAuthorization: Sendable, Equatable {
+    /// The user code, in canonical `XXXX-XXXX` form.
+    public let userCode: String
+    /// The client that asked.
+    public let clientId: String
+    /// Its registered name, when it is a registered client.
+    public let clientName: String?
+    /// What it asked for.
+    public let scope: String?
+
+    /// Creates a pending authorization.
+    public init(userCode: String, clientId: String, clientName: String?, scope: String?) {
+        self.userCode = userCode
+        self.clientId = clientId
+        self.clientName = clientName
+        self.scope = scope
+    }
 }
 
 // MARK: - Pushed authorization requests (RFC 9126)

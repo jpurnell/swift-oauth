@@ -161,6 +161,36 @@ public enum TokenGenerator {
         return String(characters[0..<4]) + "-" + String(characters[4..<8])
     }
 
+    /// The canonical form of a user code a person typed, or `nil` if it cannot be one —
+    /// RFC 8628 §6.1.
+    ///
+    /// §6.1 asks the server to "be case-insensitive when comparing the entered user code" and to
+    /// "ignore dashes or other punctuation". So case is folded, and ASCII spaces, dashes and
+    /// punctuation are dropped; anything else outside the alphabet — a vowel, a digit, a control
+    /// or bidirectional-override character — means the input is not a code this server issued,
+    /// and is refused rather than stripped, so two different inputs never normalise to one
+    /// code by accident.
+    ///
+    /// - Parameter typed: What the person entered.
+    /// - Returns: The code in `XXXX-XXXX` form, or `nil`.
+    public static func normalizedUserCode(_ typed: String) -> String? {
+        let alphabet = Set(userCodeAlphabet)
+        var characters: [Character] = []
+        // Bounded: a code is eight characters, and an input longer than a page is not one.
+        guard typed.count <= 64 else { return nil }
+        for character in typed.uppercased() {
+            if alphabet.contains(character) {
+                characters.append(character)
+            } else if character.isASCII, character.isWhitespace || character.isPunctuation {
+                continue
+            } else {
+                return nil
+            }
+        }
+        guard characters.count == 8 else { return nil }
+        return String(characters[0..<4]) + "-" + String(characters[4..<8])
+    }
+
     /// Generates a refresh token
     ///
     /// Refresh tokens include a prefix for easy identification.

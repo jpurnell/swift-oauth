@@ -21,11 +21,14 @@ struct DeviceGrantCrossHalfTests {
 
     static let issuer = "https://mcp.example.com"
 
-    private static func makeServer(served: ServedCapabilities = .core) throws -> OAuthServer {
+    private static func makeServer(
+        served: ServedCapabilities = .core, clock: SharedClock = SharedClock()
+    ) throws -> OAuthServer {
         OAuthServer(
             storage: try OAuthStorage(path: ":memory:"), issuer: issuer,
             scopesSupported: ["mcp:tools"], served: served, resourceIdentity: .colocated,
-            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
+            resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true),
+            now: { clock.now })
     }
 
     /// The provider advertises the endpoint, and the client reads it into a configuration
@@ -53,13 +56,17 @@ struct DeviceGrantCrossHalfTests {
     /// provider after two polls, and the client collects tokens the provider then honours.
     @Test("A sign-in completes against the provider, and the token it yields is active there")
     func signInCompletes() async throws {
-        let server = try Self.makeServer()
+        // The provider paces polls by its clock (RFC 8628 §3.5 `slow_down`), so the sleeper
+        // moves that clock by each wait — the device really does wait, as far as the provider
+        // can tell.
+        let clock = SharedClock()
+        let server = try Self.makeServer(clock: clock)
         let bridge = ProviderBridge(server: server)
         let client = try DeviceAuthorizationClient(
             configuration: Self.configuration(),
             credentials: ClientCredentials(environment: "test", clientID: "cli", clientSecret: ""),
             transport: bridge)
-        let sleeper = ApprovingSleeper(approveOnWait: 2) { userCode in
+        let sleeper = ApprovingSleeper(approveOnWait: 2, clock: clock) { userCode in
             try await server.approveDeviceCode(userCode: userCode, subject: "ada")
         }
 
@@ -95,7 +102,9 @@ struct DeviceGrantCrossHalfTests {
             transport: bridge)
 
         await #expect(throws: OAuthError.invalidGrant(nil)) {
-            _ = try await stranger.poll(authorization, sleeper: ApprovingSleeper(approveOnWait: 0) { _ in },
+            _ = try await stranger.poll(
+                authorization,
+                sleeper: ApprovingSleeper(approveOnWait: 0, clock: SharedClock()) { _ in },
                                         elapsed: { 0 })
         }
     }
@@ -174,12 +183,17 @@ private actor ProviderBridge: DeviceAuthorizationTransport {
 private actor ApprovingSleeper: DeviceFlowSleeper {
 
     private let approveOnWait: Int
+    private let clock: SharedClock
     private let approve: @Sendable (String) async throws -> Void
     private var userCode: String?
     private(set) var waits: [TimeInterval] = []
 
-    init(approveOnWait: Int, approve: @escaping @Sendable (String) async throws -> Void) {
+    init(
+        approveOnWait: Int, clock: SharedClock,
+        approve: @escaping @Sendable (String) async throws -> Void
+    ) {
         self.approveOnWait = approveOnWait
+        self.clock = clock
         self.approve = approve
     }
 
@@ -189,8 +203,28 @@ private actor ApprovingSleeper: DeviceFlowSleeper {
 
     func sleep(for interval: TimeInterval) async throws {
         waits.append(interval)
+        clock.advance(interval)
         if waits.count == approveOnWait, let userCode {
             try await approve(userCode)
         }
+    }
+}
+
+/// A clock the provider reads and a test moves, shared by the halves under test.
+// Justification: mutable `current` is read and written only under `lock`.
+final class SharedClock: @unchecked Sendable {
+    private var current = Date(timeIntervalSince1970: 1_800_000_000)
+    private let lock = NSLock()
+
+    var now: Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(_ seconds: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        current = current.addingTimeInterval(seconds)
     }
 }

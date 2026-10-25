@@ -93,6 +93,26 @@ public actor OAuthServer {
     private let authorizationCodeLifetime: TimeInterval
     private let clientCredentialsTokenLifetime: TimeInterval
 
+    /// The clock the device grant is judged by: issue, expiry, polling pace, and throttling.
+    private let clock: @Sendable () -> Date
+
+    /// Recent wrong user codes, per user, for RFC 8628 §5.1's rate limit on the step where a
+    /// person types one. Pruned to the window on every use and capped in size.
+    private var verificationFailures: [String: [Date]] = [:]
+
+    /// How many wrong user codes one user may enter inside ``verificationWindow``.
+    ///
+    /// A user code has about 34.5 bits (§6.1). Five tries per five minutes per user puts a
+    /// single account's chance of hitting any one live code below one in a billion per day.
+    private static let verificationFailureLimit = 5
+
+    /// The window ``verificationFailureLimit`` counts over.
+    private static let verificationWindow: TimeInterval = 300
+
+    /// The most users whose failures are remembered at once, so the record cannot grow without
+    /// bound under a flood of distinct subjects.
+    private static let verificationRecordCapacity = 10_000
+
     // MARK: - Initialization
 
     /// Creates a new OAuth server
@@ -133,6 +153,9 @@ public actor OAuthServer {
     ///   - resourcePolicy: Which resources this server issues tokens for — RFC 8707. Defaults
     ///     to ``ResourceIndicatorPolicy/protecting(_:)`` over the issuer, which is the value the
     ///     server already publishes as its own resource identifier.
+    ///   - now: The clock the device grant is judged by — when its codes expire, whether a poll
+    ///     came too soon, and how long a user who typed wrong codes waits. Defaults to the
+    ///     system clock; injectable so that pacing and expiry are testable without waiting.
     public init(
         storage: OAuthStorage,
         issuer: String,
@@ -147,8 +170,10 @@ public actor OAuthServer {
         refreshTokenLifetime: TimeInterval = 7776000,     // 90 days
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
         clientCredentialsTokenLifetime: TimeInterval = 900,   // 15 minutes
-        resourcePolicy: ResourceIndicatorPolicy? = nil
+        resourcePolicy: ResourceIndicatorPolicy? = nil,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.clock = now
         self.storage = storage
         self.issuer = issuer
         self.scopesSupported = scopesSupported
@@ -450,13 +475,19 @@ public actor OAuthServer {
     /// Starts a device flow — RFC 8628 §3.1.
     ///
     /// For a client that cannot open a browser. It receives a device code to poll with and a
-    /// short user code to display; the user enters that code somewhere with a keyboard.
+    /// short user code to display; the user enters that code at ``verificationURI`` — or opens
+    /// `verification_uri_complete`, which carries it (§3.3.1).
+    ///
+    /// This authenticates no client and checks no grant: it is the model the HTTP endpoint
+    /// (`OAuthHTTPHandler.handleDeviceAuthorizationRequest(body:authHeader:)`) calls after
+    /// doing both.
     ///
     /// - Parameters:
     ///   - clientId: The client asking.
     ///   - scope: What it is asking for.
     /// - Returns: The codes and where to send the user.
-    /// - Throws: `OAuthStorageError` if the codes cannot be stored.
+    /// - Throws: `OAuthError.invalidScope(_:)` beyond a client's ceiling, or
+    ///   `OAuthStorageError` if the codes cannot be stored.
     public func authorizeDevice(
         clientId: String, scope: String?
     ) async throws -> DeviceAuthorizationResponse {
@@ -470,49 +501,165 @@ public actor OAuthServer {
 
         let deviceCode = TokenGenerator.generateDeviceCode()
         let userCode = TokenGenerator.generateUserCode()
-        let expiresAt = Date().addingTimeInterval(deviceCodeLifetime)
+        let issuedAt = clock()
 
         try await storage.saveDeviceCode(
             deviceCode: deviceCode, userCode: userCode, clientId: clientId,
-            scope: scope, expiresAt: expiresAt)
+            scope: scope, expiresAt: issuedAt.addingTimeInterval(deviceCodeLifetime),
+            interval: devicePollInterval, now: issuedAt)
 
-        let verificationURI = URL(string: issuer + "/device")
-            ?? URL(fileURLWithPath: "/device")
+        let verification = verificationURI
+        var complete = URLComponents(url: verification, resolvingAgainstBaseURL: false)
+        complete?.queryItems = [URLQueryItem(name: "user_code", value: userCode)]
 
         return DeviceAuthorizationResponse(
             deviceCode: deviceCode,
             userCode: userCode,
-            verificationURI: verificationURI,
+            verificationURI: verification,
+            verificationURIComplete: complete?.url,
             expiresIn: deviceCodeLifetime,
             interval: devicePollInterval)
+    }
+
+    /// Where a user goes to enter a user code: the issuer's `/device`.
+    ///
+    /// A deployment routes `GET` and `POST` there to
+    /// `OAuthHTTPHandler.handleDeviceVerificationPage(queryParams:)` and
+    /// `OAuthHTTPHandler.handleDeviceVerificationSubmission(formParams:subject:)`.
+    public var verificationURI: URL {
+        URL(string: issuer + "/device") ?? URL(fileURLWithPath: "/device")
+    }
+
+    /// The client and scope behind a user code, for the user to check before answering —
+    /// RFC 8628 §5.4.
+    ///
+    /// Counts against the user's rate limit exactly as a wrong approval does: looking a code up
+    /// is guessing it, by another name.
+    ///
+    /// - Parameters:
+    ///   - userCode: What the user typed, in any case, with or without punctuation (§6.1).
+    ///   - subject: Who is looking — the user the deployment authenticated.
+    /// - Returns: What is asking, and for what.
+    /// - Throws: `OAuthError.slowDown(_:)` while this user is throttled (§5.1), or
+    ///   `OAuthError.invalidGrant(_:)` for a code that is unknown, expired or already answered.
+    public func pendingDeviceAuthorization(
+        userCode: String, subject: String
+    ) async throws -> PendingDeviceAuthorization {
+        let at = clock()
+        try refuseIfThrottled(subject, at: at)
+        guard let canonical = TokenGenerator.normalizedUserCode(userCode),
+              let pending = try await storage.pendingDeviceCode(userCode: canonical, now: at) else {
+            recordVerificationFailure(subject, at: at)
+            throw Self.unknownUserCode
+        }
+        let client = try await storage.getClient(clientId: pending.clientId)
+        return PendingDeviceAuthorization(
+            userCode: canonical, clientId: pending.clientId, clientName: client?.clientName,
+            scope: pending.scope)
     }
 
     /// Records that a user approved a device — RFC 8628 §3.3.
     ///
     /// - Parameters:
-    ///   - userCode: The code the user typed.
-    ///   - subject: Who approved it.
-    /// - Throws: `OAuthError.invalidGrant(_:)` if no live, unapproved code matches. Unknown
-    ///   and expired are not distinguished: the approval page would otherwise confirm which
-    ///   short codes exist, and they are short by design.
+    ///   - userCode: The code the user typed, in any case, with or without punctuation (§6.1).
+    ///   - subject: Who approved it. Becomes the `sub` of the tokens the device collects.
+    /// - Throws: `OAuthError.slowDown(_:)` while this user is throttled (§5.1), or
+    ///   `OAuthError.invalidGrant(_:)` if no live, unanswered code matches. Unknown, expired
+    ///   and already-answered are not distinguished: the approval page would otherwise confirm
+    ///   which short codes exist, and they are short by design.
     public func approveDeviceCode(userCode: String, subject: String) async throws {
-        let approved = try await storage.approveDeviceCode(userCode: userCode, subject: subject)
-        guard approved else {
-            throw OAuthError.invalidGrant("That code is not valid, or has expired.")
+        try await answerDeviceCode(userCode: userCode, subject: subject, approving: true)
+    }
+
+    /// Records that a user refused a device — RFC 8628 §3.5 `access_denied`.
+    ///
+    /// The device's next poll is answered `access_denied`, and it stops.
+    ///
+    /// - Parameters:
+    ///   - userCode: The code the user typed.
+    ///   - subject: Who refused.
+    /// - Throws: As ``approveDeviceCode(userCode:subject:)``.
+    public func denyDeviceCode(userCode: String, subject: String) async throws {
+        try await answerDeviceCode(userCode: userCode, subject: subject, approving: false)
+    }
+
+    /// Approves or denies, under the user's rate limit.
+    private func answerDeviceCode(
+        userCode: String, subject: String, approving: Bool
+    ) async throws {
+        let at = clock()
+        try refuseIfThrottled(subject, at: at)
+        guard let canonical = TokenGenerator.normalizedUserCode(userCode) else {
+            recordVerificationFailure(subject, at: at)
+            throw Self.unknownUserCode
+        }
+        let answered = approving
+            ? try await storage.approveDeviceCode(userCode: canonical, subject: subject, now: at)
+            : try await storage.denyDeviceCode(userCode: canonical, subject: subject, now: at)
+        guard answered else {
+            recordVerificationFailure(subject, at: at)
+            throw Self.unknownUserCode
         }
     }
 
-    /// Exchanges an approved device code for tokens — RFC 8628 §3.4.
+    /// The one refusal for a user code that matches nothing live.
+    private static let unknownUserCode = OAuthError.invalidGrant(
+        "That code is not valid, or has expired.")
+
+    /// Throws while `subject` has used up its wrong codes for the window — RFC 8628 §5.1.
+    private func refuseIfThrottled(_ subject: String, at time: Date) throws {
+        let recent = (verificationFailures[subject] ?? [])
+            .filter { time.timeIntervalSince($0) < Self.verificationWindow }
+        verificationFailures[subject] = recent.isEmpty ? nil : recent
+        guard recent.count < Self.verificationFailureLimit else {
+            throw OAuthError.slowDown(
+                "Too many codes that did not match. Wait a few minutes before trying again.")
+        }
+    }
+
+    /// Remembers a wrong code from `subject`, keeping the record bounded.
+    private func recordVerificationFailure(_ subject: String, at time: Date) {
+        verificationFailures[subject, default: []].append(time)
+        guard verificationFailures.count > Self.verificationRecordCapacity else { return }
+        // Over capacity: forget whatever has aged out of the window, and if that is not enough,
+        // the users whose latest failure is oldest — the ones least likely to be mid-attack.
+        verificationFailures = verificationFailures.compactMapValues { failures in
+            let live = failures.filter { time.timeIntervalSince($0) < Self.verificationWindow }
+            return live.isEmpty ? nil : live
+        }
+        let excess = verificationFailures.count - Self.verificationRecordCapacity
+        guard excess > 0 else { return }
+        let oldest = verificationFailures
+            .sorted { ($0.value.last ?? time) < ($1.value.last ?? time) }
+            .prefix(excess)
+            .map(\.key)
+        for key in oldest {
+            verificationFailures[key] = nil
+        }
+    }
+
+    /// Exchanges an approved device code for tokens — RFC 8628 §3.4 and §3.5.
+    ///
+    /// The answers, in the order they are decided:
+    ///
+    /// - `invalid_grant` for a code that is unknown, another client's, or already spent — one
+    ///   answer, so a caller cannot learn that a code it does not own exists.
+    /// - `expired_token` once the code's lifetime has passed, approved or not.
+    /// - `access_denied` once the user has refused.
+    /// - `slow_down` for a poll sooner than the interval after the last one, which widens the
+    ///   interval by five seconds for every later poll (§3.5); `authorization_pending`
+    ///   otherwise, while the user has not answered.
+    /// - Tokens, once, for an approved code. Spent before anything is issued, by a write that
+    ///   succeeds for one caller only, so concurrent polls cannot both collect.
     ///
     /// - Parameters:
     ///   - deviceCode: The code the device has been polling with.
     ///   - clientId: The client redeeming it.
-    /// - Returns: The tokens, once the user has approved.
-    /// - Throws: `OAuthError.authorizationPending(_:)` while the user has not finished —
-    ///   the expected answer for most of the flow — or `OAuthError.expiredToken(_:)`,
-    ///   or `OAuthError.invalidGrant(_:)` for a code that is unknown, not this client's, or
-    ///   already spent. `OAuthError.serverError(_:)` if this server's configured access- or
-    ///   refresh-token lifetime is not a usable number of seconds; the code is left unspent.
+    /// - Returns: The tokens, once the user has approved. They carry the approver as `sub`.
+    /// - Throws: `OAuthError.authorizationPending(_:)`, `.slowDown(_:)`, `.accessDenied(_:)`,
+    ///   `.expiredToken(_:)` or `.invalidGrant(_:)` as above. `OAuthError.serverError(_:)` if
+    ///   this server's configured access- or refresh-token lifetime is not a usable number of
+    ///   seconds; the code is left unspent.
     public func redeemDeviceCode(
         _ deviceCode: String, clientId: String
     ) async throws -> TokenResponse {
@@ -523,20 +670,31 @@ public actor OAuthServer {
         // part.
         let expiresIn = try wholeSeconds(of: .accessToken)
         _ = try wholeSeconds(of: .refreshToken)
+        let at = clock()
 
-        switch try await storage.deviceCodeState(deviceCode: deviceCode, clientId: clientId) {
+        switch try await storage.deviceCodeState(deviceCode: deviceCode, clientId: clientId, now: at) {
         case .pending:
+            // Paced only while pending: an approved, denied or expired code's answer ends the
+            // polling anyway, and withholding it behind `slow_down` would only delay the user.
+            if try await storage.pacePendingPoll(deviceCode: deviceCode, now: at) {
+                throw OAuthError.slowDown(nil)
+            }
             throw OAuthError.authorizationPending(nil)
         case .expired:
             throw OAuthError.expiredToken(nil)
+        case .denied:
+            throw OAuthError.accessDenied(nil)
         case .unknown, .alreadyRedeemed:
             // One answer for both. A device code is single-use, and telling a caller that a
             // code exists but is spent distinguishes it from one that never existed.
             throw OAuthError.invalidGrant(nil)
         case .approved(let scope, let subject):
-            // Marked spent before the token is issued. The other order leaves a window in
-            // which two concurrent polls both see an approved code and both collect a token.
-            try await storage.markDeviceCodeRedeemed(deviceCode: deviceCode)
+            // Spent before the token is issued, and only by the caller whose write changed the
+            // row. Two polls can both read the code as approved — every `await` here is a
+            // point where another may run — so the read alone decides nothing.
+            guard try await storage.markDeviceCodeRedeemed(deviceCode: deviceCode) else {
+                throw OAuthError.invalidGrant(nil)
+            }
 
             let accessToken = TokenGenerator.generateAccessToken()
             let refreshToken = TokenGenerator.generateRefreshToken()
