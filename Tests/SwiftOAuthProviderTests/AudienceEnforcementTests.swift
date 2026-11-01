@@ -87,6 +87,60 @@ struct AudienceEnforcementTests {
                 "The audience must be compared against the advertised resource, not the issuer")
     }
 
+    // MARK: - The audience is compared as a resource, not as a string
+
+    /// Found in production: Claude Code sends `resource=https://roseclub.org:9080/` — the form a
+    /// URL type serialises a bare origin to — while the deployment advertises
+    /// `https://roseclub.org:9080`. The issuing side already judges those the same resource
+    /// (`ResourceIndicatorPolicy`, RFC 3986 §6.2.3), so the token was issued and then refused on
+    /// its first use: every exchange succeeded and every reconnect was a 401.
+    @Test("A trailing slash on the audience does not make a different resource",
+          arguments: [
+            ("https://a.example.com", "https://a.example.com/"),
+            ("https://a.example.com/", "https://a.example.com"),
+            ("https://a.example.com:9080", "https://a.example.com:9080/"),
+            ("https://A.Example.COM", "https://a.example.com/"),
+            ("https://a.example.com:443", "https://a.example.com"),
+          ])
+    func equivalentSpellingsAccepted(advertised: String, audience: String) async throws {
+        let identity = try ResourceIdentity(
+            resource: advertised, authorizationServers: ["https://a.example.com"])
+        let (handler, storage) = try makeHandler(identity: identity)
+        try await plant("t-spelling", audience: URL(string: audience), in: storage)
+
+        let result = await handler.validateBearerToken(authHeader: "Bearer t-spelling")
+        #expect(result.isValid,
+                "\(audience) and \(advertised) name the same resource and must compare equal")
+    }
+
+    @Test("Normalising the spelling does not loosen what counts as another resource",
+          arguments: [
+            ("https://a.example.com:9080", "https://a.example.com:9081/"),
+            ("https://a.example.com:9080", "https://a.example.com:9080/mcp"),
+            ("https://a.example.com:9080", "wss://a.example.com:9080/"),
+            ("https://a.example.com", "https://b.example.com/"),
+          ])
+    func differentResourcesStillRefused(advertised: String, audience: String) async throws {
+        let identity = try ResourceIdentity(
+            resource: advertised, authorizationServers: ["https://a.example.com"])
+        let (handler, storage) = try makeHandler(identity: identity)
+        try await plant("t-other", audience: URL(string: audience), in: storage)
+
+        let result = await handler.validateBearerToken(authHeader: "Bearer t-other")
+        #expect(!result.isValid,
+                "\(audience) is a different resource from \(advertised) and must stay refused")
+    }
+
+    @Test("A resource server can ask whether two identifiers name the same resource")
+    func publicEquivalence() throws {
+        let bare = try #require(URL(string: "https://a.example.com:9080"))
+        let slash = try #require(URL(string: "https://a.example.com:9080/"))
+        let other = try #require(URL(string: "https://a.example.com:9081/"))
+        #expect(ResourceIndicatorPolicy.isSameResource(bare, slash))
+        #expect(ResourceIndicatorPolicy.isSameResource(slash, bare))
+        #expect(!ResourceIndicatorPolicy.isSameResource(bare, other))
+    }
+
     @Test("Honouring a foreign audience requires asking for it")
     func foreignAudienceOptIn() async throws {
         let (handler, storage) = try makeHandler()

@@ -92,6 +92,30 @@ public struct ResourceIndicatorPolicy: Sendable, Hashable {
     /// - Parameter url: The identifier to normalise.
     /// - Returns: A string safe to compare against another canonicalised identifier.
     static func canonical(_ url: URL) -> String {
+        canonicalForm(of: url)
+    }
+
+    /// Whether two identifiers name the same resource, by the same RFC 3986 §6.2 rules the
+    /// issuing side applies.
+    ///
+    /// The issuing side accepted `https://host:9080/` for a resource advertised as
+    /// `https://host:9080`, but stored the spelling it was given — so a resource server that
+    /// compared the stored audience with `==` refused a token this package had just issued for
+    /// it. Anything that decides whether a token was meant for it should ask this rather than
+    /// compare strings, so that issuing and consuming cannot disagree about what "the same
+    /// resource" means.
+    ///
+    /// A different port, scheme, host or non-empty path is a different resource.
+    ///
+    /// - Parameters:
+    ///   - lhs: One identifier.
+    ///   - rhs: The other.
+    /// - Returns: `true` if they are the same resource.
+    public static func isSameResource(_ lhs: URL, _ rhs: URL) -> Bool {
+        canonicalForm(of: lhs) == canonicalForm(of: rhs)
+    }
+
+    private static func canonicalForm(of url: URL) -> String {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             return url.absoluteString
         }

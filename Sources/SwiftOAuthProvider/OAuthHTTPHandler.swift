@@ -745,7 +745,13 @@ public struct OAuthHTTPHandler: Sendable {
                 if case .ownResource = acceptingAudiences,
                    let audience = validated.audience {
                     let ours = await server.getProtectedResourceMetadata().resource
-                    if audience.absoluteString != ours {
+                    // The same resource by RFC 3986 §6.2, not the same string: a client that
+                    // parses `https://host:9080` and sends back `https://host:9080/` named this
+                    // resource, and the policy that issued the token already said so.
+                    let sameResource = URL(string: ours).map {
+                        ResourceIndicatorPolicy.isSameResource(audience, $0)
+                    } ?? (audience.absoluteString == ours)
+                    if !sameResource {
                         return .invalid(
                             reason: "This token was issued for \(audience.absoluteString) and "
                                 + "this resource is \(ours). Obtain a token naming this "

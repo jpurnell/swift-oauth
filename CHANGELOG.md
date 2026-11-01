@@ -7,6 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.10] — 2026-10-31
+
+A token this package issued was refused on its first use. A client that parses
+`https://host:9080` and sends back `https://host:9080/` as the `resource` is told by
+`ResourceIndicatorPolicy` that it named the right resource (RFC 3986 §6.2.3: an empty path is
+`/`), and is issued a token — but the audience stored is the spelling the client sent, and
+`validateBearerToken` compared it to the advertised resource with `!=`. Every token exchange
+succeeded and every request with the token was a 401. Found in production with Claude Code
+against four servers at once: each reconnect minted a fresh token (five in one second) and
+none was ever honoured. Re-authenticating cannot fix it, because every new token has the
+same audience.
+
+### Fixed
+- **A resource server compares the audience as a resource, not as a string.**
+  `validateBearerToken` now asks the same RFC 3986 §6.2 question the issuing side asks, so
+  issuing and consuming cannot disagree. A different port, scheme, host or non-empty path is
+  still a different resource, and a foreign audience is still refused.
+
+### Added
+- **`ResourceIndicatorPolicy.isSameResource(_:_:)`**, public. A consumer that decides whether
+  a token was meant for it (as `SwiftMCPServer` does, after this package has) should call it
+  rather than compare `absoluteString`s.
+
 ## [1.0.0-beta.9] — 2026-10-25
 
 Linux. `1.0.0-beta.8` did not build there: its Linux CI failed, and every error was in the
@@ -1777,6 +1800,7 @@ SwiftMCPServer's own quality gate acts as the control: if it cannot be made gree
 extracted package, the extraction was wrong and is reverted rather than patched.
 
 [Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...HEAD
+[1.0.0-beta.10]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...v1.0.0-beta.8
 [1.0.0-beta.7]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.6...v1.0.0-beta.7
