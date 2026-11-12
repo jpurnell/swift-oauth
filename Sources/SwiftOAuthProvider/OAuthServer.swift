@@ -96,6 +96,9 @@ public actor OAuthServer {
     /// Whether a grant that names nobody is refused. See the initializer's `requireSubject`.
     private let requireSubject: Bool
 
+    /// What the refresh grant does with the refresh token it is given.
+    private let rotationPolicy: RefreshTokenRotationPolicy
+
     /// The clock the device grant is judged by: issue, expiry, polling pace, and throttling.
     private let clock: @Sendable () -> Date
 
@@ -167,6 +170,19 @@ public actor OAuthServer {
     ///     invent a subject: a shared default would make revoking it end every unattributed
     ///     token at once. `client_credentials` is unaffected, because its subject is the client
     ///     itself, and tokens already stored with no subject are not touched.
+    ///   - rotationPolicy: What a refresh does with the refresh token presented. Defaults to
+    ///     ``RefreshTokenRotationPolicy/rotating``, as RFC 9700 §2.2.2 requires of a public client
+    ///     whose token is not sender-constrained: every refresh returns a **new** refresh token and
+    ///     spends the old one, and presenting a spent token again revokes the whole grant. Pass
+    ///     ``RefreshTokenRotationPolicy/reusable`` to keep the earlier behaviour, in which the same
+    ///     refresh token is returned and stays valid until it expires.
+    ///
+    ///     **This default changed behaviour for every deployment that did not set it.** A client
+    ///     that stores the first refresh token and never updates it breaks at its second refresh.
+    ///     A client that loses the response to a refresh and retries presents a spent token, and
+    ///     its grant is revoked (RFC 9700 §4.14.2 accepts that: the server cannot tell it from an
+    ///     attacker). **There is no grace window**; one is a known mitigation but is not in the
+    ///     RFC text and is not built here.
     ///   - now: The clock the device grant is judged by — when its codes expire, whether a poll
     ///     came too soon, and how long a user who typed wrong codes waits. Defaults to the
     ///     system clock; injectable so that pacing and expiry are testable without waiting.
@@ -186,9 +202,11 @@ public actor OAuthServer {
         clientCredentialsTokenLifetime: TimeInterval = 900,   // 15 minutes
         resourcePolicy: ResourceIndicatorPolicy? = nil,
         requireSubject: Bool = false,
+        rotationPolicy: RefreshTokenRotationPolicy = .rotating,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.requireSubject = requireSubject
+        self.rotationPolicy = rotationPolicy
         self.clock = now
         self.storage = storage
         self.issuer = issuer
@@ -1251,6 +1269,12 @@ public actor OAuthServer {
 
         // Consume the authorization code (single-use)
         guard let authCode = try await storage.consumeAuthorizationCode(code: code) else {
+            // Spent already, or never issued. RFC 9700 §4.2.4: a code presented a second time
+            // is a sign it was stolen, and the server "SHOULD revoke all tokens issued
+            // previously based on that code". The grant is named by the code, so a code
+            // nobody issued names a grant that has no tokens and this changes nothing. The
+            // answer is the same either way, so it does not tell which this was.
+            try await storage.revokeGrant(grantId: Self.grantIdentifier(forCode: code))
             throw OAuthError.invalidGrant(nil)
         }
 
@@ -1437,8 +1461,8 @@ public actor OAuthServer {
     }
 
     private func handleRefreshTokenGrant(_ request: TokenRequest) async throws -> TokenResponse {
-        // Only the access-token lifetime: this grant returns the refresh token it was given
-        // and issues no new one.
+        // Only the access-token lifetime: a refresh token's expiry is carried over from the
+        // token presented, so no refresh-token lifetime is computed here.
         let expiresIn = try wholeSeconds(of: .accessToken)
 
         // First check if client exists and can use refresh_token grant
@@ -1454,6 +1478,19 @@ public actor OAuthServer {
             throw OAuthError.invalidRequest(nil)
         }
 
+        switch rotationPolicy {
+        case .reusable:
+            return try await refreshKeepingToken(request, refreshToken: refreshToken, expiresIn: expiresIn)
+        case .rotating:
+            return try await refreshRotating(request, refreshToken: refreshToken, expiresIn: expiresIn)
+        }
+    }
+
+    /// The refresh grant under ``RefreshTokenRotationPolicy/reusable``: a new access token, and
+    /// the refresh token presented is returned as it came and stays valid.
+    private func refreshKeepingToken(
+        _ request: TokenRequest, refreshToken: String, expiresIn: Int
+    ) async throws -> TokenResponse {
         // Validate refresh token
         guard let tokenInfo = try await storage.getRefreshTokenInfo(token: refreshToken) else {
             throw OAuthError.invalidGrant(nil)
@@ -1463,27 +1500,13 @@ public actor OAuthServer {
             throw OAuthError.invalidGrant(nil)
         }
 
-        // Generate new access token
-        let newAccessToken = TokenGenerator.generateAccessToken()
-        let now = Date()
-
         // Checked on refresh too. A token that could shed its audience by being refreshed
         // would make the binding good only until the first renewal.
         let audience = try resourcePolicy.audience(for: request.resource)
 
-        try await storage.saveAccessToken(
-            token: newAccessToken,
-            clientId: request.clientId,
-            scope: tokenInfo.scope,
-            expiresAt: now.addingTimeInterval(accessTokenLifetime),
-            audience: audience,
-            keyThumbprint: nil, certificateThumbprint: nil,
-            subject: tokenInfo.subject,
-            // The same grant as the refresh token, so revoking either ends both.
-            grantId: tokenInfo.grantId
-        )
+        let newAccessToken = try await issueRefreshedAccessToken(
+            request, info: tokenInfo, audience: audience)
 
-        // Optionally rotate refresh token (we'll keep the same one for simplicity)
         return TokenResponse(
             accessToken: newAccessToken,
             tokenType: "Bearer",
@@ -1491,6 +1514,71 @@ public actor OAuthServer {
             refreshToken: refreshToken, // Return same refresh token
             scope: tokenInfo.scope
         )
+    }
+
+    /// The refresh grant under ``RefreshTokenRotationPolicy/rotating`` — RFC 9700 §4.14.2.
+    ///
+    /// The presented token is spent first, atomically, and only for the client it was issued
+    /// to; a successor is then issued under the same grant. A spent token presented again
+    /// revokes the grant, which is every access and refresh token descended from the code that
+    /// began it, and answers `invalid_grant` like any dead token.
+    ///
+    /// Everything that can be refused is decided before the token is spent, because a spent
+    /// token cannot be put back: a `resource` this server refuses must not cost the client its
+    /// refresh token.
+    private func refreshRotating(
+        _ request: TokenRequest, refreshToken: String, expiresIn: Int
+    ) async throws -> TokenResponse {
+        let audience = try resourcePolicy.audience(for: request.resource)
+
+        let info: RefreshTokenInfo
+        switch try await storage.claimRefreshToken(
+            token: refreshToken, clientId: request.clientId,
+            defaultGrantId: UUID().uuidString, now: Date()) {
+        case .claimed(let claimed):
+            info = claimed
+        case .replayed(let grantId):
+            try await storage.revokeGrant(grantId: grantId)
+            throw OAuthError.invalidGrant(nil)
+        case .unusable:
+            throw OAuthError.invalidGrant(nil)
+        }
+
+        // The successor has what the original had, including its expiry: rotation replaces a
+        // credential, it does not extend the period a user agreed to.
+        let successor = TokenGenerator.generateRefreshToken()
+        try await storage.saveRefreshToken(
+            token: successor, clientId: info.clientId, scope: info.scope,
+            expiresAt: info.expiresAt, subject: info.subject, grantId: info.grantId)
+
+        let newAccessToken = try await issueRefreshedAccessToken(request, info: info, audience: audience)
+
+        return TokenResponse(
+            accessToken: newAccessToken,
+            tokenType: "Bearer",
+            expiresIn: expiresIn,
+            refreshToken: successor,
+            scope: info.scope
+        )
+    }
+
+    /// Stores and returns the access token a refresh issues, under the refresh token's grant.
+    private func issueRefreshedAccessToken(
+        _ request: TokenRequest, info: RefreshTokenInfo, audience: URL?
+    ) async throws -> String {
+        let newAccessToken = TokenGenerator.generateAccessToken()
+        try await storage.saveAccessToken(
+            token: newAccessToken,
+            clientId: request.clientId,
+            scope: info.scope,
+            expiresAt: Date().addingTimeInterval(accessTokenLifetime),
+            audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
+            subject: info.subject,
+            // The same grant as the refresh token, so revoking either ends both.
+            grantId: info.grantId
+        )
+        return newAccessToken
     }
 
     // MARK: - Token Validation
@@ -1673,6 +1761,29 @@ public actor OAuthServer {
 }
 
 // MARK: - Server Metadata
+
+/// What the refresh grant does with the refresh token it is given.
+///
+/// RFC 9700 §2.2.2: "Refresh tokens for public clients MUST be sender-constrained or use refresh
+/// token rotation." The refresh tokens this provider issues are not sender-constrained, so
+/// rotation is the default.
+public enum RefreshTokenRotationPolicy: Sendable, Equatable {
+
+    /// Every refresh returns a new refresh token and spends the old one (RFC 9700 §4.14.2).
+    ///
+    /// Presenting a spent refresh token revokes the whole grant, every access and refresh token
+    /// descended from the authorization the user gave, because the server cannot tell the
+    /// attacker from the client that lost a response. A successor keeps the original's scope,
+    /// subject and expiry.
+    case rotating
+
+    /// The refresh token is returned as presented and stays valid until it expires.
+    ///
+    /// What this provider did before rotation existed. **Not RFC 9700 §2.2.2 conforming** for a
+    /// public client; an explicit opt-out for a deployment whose clients cannot yet store a
+    /// replacement token.
+    case reusable
+}
 
 /// Who this deployment is, as a protected resource — RFC 9728 §2.
 ///

@@ -76,6 +76,9 @@ private actor RefusingStore: OAuthProviderStorage {
     func getRefreshTokenInfo(token: String) throws -> RefreshTokenInfo? { nil }
     func revokeRefreshToken(token: String, clientId: String) throws -> Int { 0 }
     func revokeGrant(grantId: String) throws -> Int { 0 }
+    func claimRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, now: Date
+    ) throws -> RefreshTokenClaim { .unusable }
     func saveDeviceCode(
         deviceCode: String, userCode: String, clientId: String, scope: String?, expiresAt: Date,
         interval: TimeInterval, now: Date

@@ -62,6 +62,18 @@ at a time.
 including authorization codes not yet spent and device codes they approved and the device has
 not collected. Rows with no subject are not reachable by it; revoke those by client.
 
+### Refresh-token rotation
+
+``OAuthServer`` rotates refresh tokens by default (``RefreshTokenRotationPolicy/rotating``; RFC 9700
+§2.2.2 and §4.14.2). Each refresh returns a new refresh token and spends the one presented,
+keeping its scope, subject and expiry. A spent token presented again revokes the whole grant,
+since the server cannot tell an attacker from a client that lost a response, and the same
+happens to the tokens a replayed authorization code issued (§4.2.4). A client must therefore
+store the refresh token every response returns. There is **no grace window** for a client that
+lost a response: it is not in the RFC, and such a client signs in again.
+``RefreshTokenRotationPolicy/reusable`` keeps the earlier behaviour, one refresh token valid until
+it expires, for a deployment whose clients cannot yet do that.
+
 ### Metadata
 
 ``ServerMetadata`` is RFC 8414 and ``ProtectedResourceMetadata`` is RFC 9728. Both are
@@ -95,6 +107,8 @@ change to what the server accepts cannot drift from what it advertises.
 - ``TokenRequest``
 - ``TokenValidationResult``
 - ``RefreshTokenInfo``
+- ``RefreshTokenClaim``
+- ``RefreshTokenRotationPolicy``
 
 ### Advertising the server
 

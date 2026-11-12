@@ -106,7 +106,8 @@ public actor OAuthStorage {
     /// say whose it is (RFC 7662 `sub`); version 10 hashed `device_codes.user_code` and added
     /// `device_codes.denied`, `last_polled_at` and `poll_interval` for RFC 8628 §3.5;
     /// version 11 indexed the `subject` columns, so revoking everything a user holds is a lookup
-    /// and not a table scan, and added `grant_id` to `access_tokens` and `refresh_tokens`.
+    /// and not a table scan, and added `grant_id` to `access_tokens` and `refresh_tokens` and `rotated_at` to
+    /// `refresh_tokens`.
     public static let currentSchemaVersion = 11
 
     /// Static helper to initialize database schema (runs before actor isolation)
@@ -432,6 +433,13 @@ public actor OAuthStorage {
                 try executeStatic(
                     db: db,
                     sql: "CREATE INDEX IF NOT EXISTS idx_\(table)_grant ON \(table)(grant_id)")
+            }
+            // When a refresh token was exchanged for its replacement (RFC 9700 §4.14.2). NULL
+            // is a token not yet used, which is every existing row and every token issued under
+            // `.reusable`. The row is kept, not deleted, so that presenting it again can be told
+            // from presenting a token that never existed.
+            if try !columnExists(db: db, table: "refresh_tokens", column: "rotated_at") {
+                try executeStatic(db: db, sql: "ALTER TABLE refresh_tokens ADD COLUMN rotated_at REAL")
             }
             for table in ["access_tokens", "refresh_tokens", "authorization_codes", "device_codes"] {
                 try executeStatic(
@@ -1350,7 +1358,7 @@ public actor OAuthStorage {
     public func revokeAllTokens(forSubject subject: String) throws -> Int {
         let statements = [
             "UPDATE access_tokens SET revoked = 1 WHERE subject = ? AND revoked = 0",
-            "UPDATE refresh_tokens SET revoked = 1 WHERE subject = ? AND revoked = 0",
+            "UPDATE refresh_tokens SET revoked = 1 WHERE subject = ? AND revoked = 0 AND rotated_at IS NULL",
             "UPDATE authorization_codes SET consumed = 1 WHERE subject = ? AND consumed = 0",
             """
             UPDATE device_codes SET redeemed = 1
@@ -1424,7 +1432,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked, subject, grant_id
+            SELECT client_id, scope, expires_at, revoked, subject, grant_id, rotated_at
             FROM refresh_tokens
             WHERE token_hash = ?
         """
@@ -1443,8 +1451,10 @@ public actor OAuthStorage {
         let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
         let expiresAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2))
         let revoked = sqlite3_column_int(stmt, 3) != 0
+        // Rotated out (schema 11): replaced by a newer token, so no longer good for a refresh.
+        let rotatedOut = sqlite3_column_type(stmt, 6) != SQLITE_NULL
 
-        if revoked || Date() >= expiresAt {
+        if revoked || rotatedOut || Date() >= expiresAt {
             return nil
         }
 
@@ -1452,6 +1462,55 @@ public actor OAuthStorage {
         let grantId = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
         return RefreshTokenInfo(
             clientId: clientId, scope: scope, expiresAt: expiresAt, subject: subject, grantId: grantId)
+    }
+
+    /// Spends a live refresh token for rotation, once. See
+    /// ``OAuthProviderStorage/claimRefreshToken(token:clientId:defaultGrantId:now:)``.
+    ///
+    /// The `UPDATE` is what decides, not a read before it: it succeeds for exactly one caller
+    /// because it names the unspent state in its `WHERE`. A replay is then told from an unknown
+    /// token by reading the row the `UPDATE` declined.
+    public func claimRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, now: Date
+    ) throws -> RefreshTokenClaim {
+        let tokenHash = hashToken(token)
+        try execute("""
+            UPDATE refresh_tokens SET rotated_at = ?, grant_id = COALESCE(grant_id, ?)
+            WHERE token_hash = ? AND client_id = ? AND rotated_at IS NULL AND revoked = 0
+              AND expires_at > ?
+        """, parameters: [
+            now.timeIntervalSince1970, defaultGrantId, tokenHash, clientId, now.timeIntervalSince1970
+        ])
+        let claimed = sqlite3_changes(db) > 0
+
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = """
+            SELECT client_id, scope, expires_at, subject, grant_id, rotated_at
+            FROM refresh_tokens WHERE token_hash = ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let owner = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }),
+              owner == clientId else {
+            return .unusable
+        }
+        let grantId = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+        if claimed {
+            return .claimed(RefreshTokenInfo(
+                clientId: owner,
+                scope: sqlite3_column_text(stmt, 1).map { String(cString: $0) },
+                expiresAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2)),
+                subject: sqlite3_column_text(stmt, 3).map { String(cString: $0) },
+                grantId: grantId))
+        }
+        // Declined: spent already (a replay, and it has a grant, because claiming gives one),
+        // or revoked, or expired, which are not.
+        guard sqlite3_column_type(stmt, 5) != SQLITE_NULL, let grantId else { return .unusable }
+        return .replayed(grantId: grantId)
     }
 
     /// Revokes a refresh token on behalf of its client, with the rest of its grant.
@@ -1475,7 +1534,7 @@ public actor OAuthStorage {
         let grantId = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
 
         try execute(
-            "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ? AND revoked = 0",
+            "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ? AND revoked = 0 AND rotated_at IS NULL",
             parameters: [tokenHash])
         let changed = Int(sqlite3_changes(db))
         guard let grantId else { return changed }
@@ -1488,8 +1547,11 @@ public actor OAuthStorage {
     public func revokeGrant(grantId: String) throws -> Int {
         var changed = 0
         for table in ["access_tokens", "refresh_tokens"] {
+            // A refresh token already rotated out is dead and stays as it is: it is the
+            // evidence that tells a later replay from an unknown token.
+            let live = table == "refresh_tokens" ? " AND rotated_at IS NULL" : ""
             try execute(
-                "UPDATE \(table) SET revoked = 1 WHERE grant_id = ? AND revoked = 0",
+                "UPDATE \(table) SET revoked = 1 WHERE grant_id = ? AND revoked = 0\(live)",
                 parameters: [grantId])
             changed += Int(sqlite3_changes(db))
         }
@@ -1729,7 +1791,7 @@ public actor OAuthStorage {
 // MARK: - RefreshTokenInfo
 
 /// Information about a valid refresh token
-public struct RefreshTokenInfo: Sendable {
+public struct RefreshTokenInfo: Sendable, Equatable {
     /// The client identifier that owns this token
     public let clientId: String
     /// The authorized scope for this token
@@ -1753,6 +1815,25 @@ public struct RefreshTokenInfo: Sendable {
         self.subject = subject
         self.grantId = grantId
     }
+}
+
+// MARK: - RefreshTokenClaim
+
+/// What happened when a refresh token was presented for rotation.
+///
+/// A refresh token that has been exchanged is kept, marked, and not deleted, so presenting it
+/// again can be told from presenting one that never existed (RFC 9700 §4.14.2).
+public enum RefreshTokenClaim: Sendable, Equatable {
+    /// The token was live and unspent, and is now spent. Exactly one caller of any number
+    /// presenting it together receives this.
+    case claimed(RefreshTokenInfo)
+    /// The token was spent already: it was exchanged for a successor, and someone is
+    /// presenting it again. Carries the grant, so everything issued under it can be revoked.
+    case replayed(grantId: String)
+    /// The token is unknown, expired, revoked, or belongs to another client. Alike on purpose,
+    /// and with no effect: a client that presents another's token must not be able to spend it,
+    /// nor to trigger its revocation.
+    case unusable
 }
 
 // MARK: - OAuthStorageError

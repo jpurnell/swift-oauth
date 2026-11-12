@@ -85,6 +85,46 @@ struct SchemaElevenMigrationTests {
         }
     }
 
+    @Test("refresh_tokens gains rotated_at, NULL for every existing row (none has been rotated)")
+    func gainsRotatedAt() async throws {
+        let path = try Self.schemaTenDatabase()
+        #expect(try Self.column(path, "SELECT name FROM pragma_table_info('refresh_tokens') WHERE name = 'rotated_at'").isEmpty)
+
+        _ = try OAuthStorage(path: path)
+
+        #expect(try Self.column(path, "SELECT name FROM pragma_table_info('refresh_tokens') WHERE name = 'rotated_at'") == ["rotated_at"])
+        #expect(try Self.column(path, "SELECT rotated_at FROM refresh_tokens ORDER BY token_hash") == [nil, nil])
+    }
+
+    @Test("A refresh token from before the migration rotates, and its replay reaches the successor's grant")
+    func legacyTokenRotatesIntoAGrant() async throws {
+        let path = try Self.schemaTenDatabase()
+        let storage = try OAuthStorage(path: path)
+
+        // `rt-alice` is a stored hash, not a token anyone holds; save one whose hash we know
+        // without a grant, as an earlier release did.
+        try await storage.saveRefreshToken(
+            token: "legacy", clientId: "app", scope: "read",
+            expiresAt: Date().addingTimeInterval(60), subject: "alice")
+        let claim = try await storage.claimRefreshToken(
+            token: "legacy", clientId: "app", defaultGrantId: "grant-given-at-rotation", now: Date())
+        guard case .claimed(let info) = claim else {
+            Issue.record("a token with no grant was not claimed: \(claim)")
+            return
+        }
+        #expect(info.grantId == "grant-given-at-rotation")
+        try await storage.saveRefreshToken(
+            token: "successor", clientId: "app", scope: "read",
+            expiresAt: info.expiresAt, subject: "alice", grantId: info.grantId)
+
+        let replay = try await storage.claimRefreshToken(
+            token: "legacy", clientId: "app", defaultGrantId: "ignored", now: Date())
+        #expect(replay == .replayed(grantId: "grant-given-at-rotation"))
+        #expect(try await storage.revokeGrant(grantId: "grant-given-at-rotation") == 1,
+                "the successor, and only it: the spent token is not counted")
+        #expect(try await storage.getRefreshTokenInfo(token: "successor") == nil)
+    }
+
     @Test("The subject and grant indexes exist after migration")
     func gainsIndexes() async throws {
         let path = try Self.schemaTenDatabase()

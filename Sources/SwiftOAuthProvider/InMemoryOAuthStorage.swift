@@ -69,6 +69,8 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         var revoked: Bool
         var subject: String?
         var grantId: String?
+        /// When it was exchanged for a successor; `nil` while unspent.
+        var rotatedAt: Date?
     }
 
     private struct DeviceRecord {
@@ -297,7 +299,8 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
             accessTokens[key]?.revoked = true
             changed += 1
         }
-        for key in refreshTokens.keys where refreshTokens[key]?.subject == subject && refreshTokens[key]?.revoked == false {
+        for key in refreshTokens.keys where refreshTokens[key]?.subject == subject
+            && refreshTokens[key]?.revoked == false && refreshTokens[key]?.rotatedAt == nil {
             refreshTokens[key]?.revoked = true
             changed += 1
         }
@@ -327,16 +330,37 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
     ) throws {
         refreshTokens[OAuthStorage.sha256Hex(token)] = RefreshRecord(
             clientId: clientId, scope: scope, expiresAt: expiresAt, revoked: false,
-            subject: subject, grantId: grantId)
+            subject: subject, grantId: grantId, rotatedAt: nil)
     }
 
     /// A live refresh token's details, or `nil` if it is unknown, expired or revoked.
     public func getRefreshTokenInfo(token: String) throws -> RefreshTokenInfo? {
         guard let record = refreshTokens[OAuthStorage.sha256Hex(token)] else { return nil }
-        if record.revoked || Date() >= record.expiresAt { return nil }
+        if record.revoked || record.rotatedAt != nil || Date() >= record.expiresAt { return nil }
         return RefreshTokenInfo(
             clientId: record.clientId, scope: record.scope,
             expiresAt: record.expiresAt, subject: record.subject, grantId: record.grantId)
+    }
+
+    /// Spends a live refresh token for rotation, once. See
+    /// ``OAuthProviderStorage/claimRefreshToken(token:clientId:defaultGrantId:now:)``.
+    public func claimRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, now: Date
+    ) throws -> RefreshTokenClaim {
+        let key = OAuthStorage.sha256Hex(token)
+        guard var record = refreshTokens[key], record.clientId == clientId else { return .unusable }
+        if record.rotatedAt != nil {
+            // Spent already. Claiming always leaves a grant, so there is one.
+            guard let grantId = record.grantId else { return .unusable }
+            return .replayed(grantId: grantId)
+        }
+        guard !record.revoked, now < record.expiresAt else { return .unusable }
+        record.rotatedAt = now
+        record.grantId = record.grantId ?? defaultGrantId
+        refreshTokens[key] = record
+        return .claimed(RefreshTokenInfo(
+            clientId: record.clientId, scope: record.scope, expiresAt: record.expiresAt,
+            subject: record.subject, grantId: record.grantId))
     }
 
     /// Revokes a refresh token on behalf of its client, with the rest of its grant.
@@ -346,7 +370,7 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         let key = OAuthStorage.sha256Hex(token)
         guard let record = refreshTokens[key], record.clientId == clientId else { return 0 }
         var changed = 0
-        if !record.revoked {
+        if !record.revoked && record.rotatedAt == nil {
             refreshTokens[key]?.revoked = true
             changed += 1
         }
@@ -363,7 +387,10 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
             accessTokens[key]?.revoked = true
             changed += 1
         }
-        for key in refreshTokens.keys where refreshTokens[key]?.grantId == grantId && refreshTokens[key]?.revoked == false {
+        // A token already rotated out is dead and stays as it is: it is the evidence that tells
+        // a later replay from an unknown token.
+        for key in refreshTokens.keys where refreshTokens[key]?.grantId == grantId
+            && refreshTokens[key]?.revoked == false && refreshTokens[key]?.rotatedAt == nil {
             refreshTokens[key]?.revoked = true
             changed += 1
         }

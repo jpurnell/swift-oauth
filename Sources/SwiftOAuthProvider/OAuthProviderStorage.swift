@@ -146,8 +146,33 @@ public protocol OAuthProviderStorage: Sendable {
     ) async throws
 
     /// A live refresh token's client, scope, expiry, subject and grant; `nil` if it is unknown,
-    /// expired or revoked.
+    /// expired, revoked, or already spent by ``claimRefreshToken(token:clientId:defaultGrantId:now:)``.
     func getRefreshTokenInfo(token: String) async throws -> RefreshTokenInfo?
+
+    /// Spends a refresh token so that it can be exchanged for a successor — rotation, RFC 9700
+    /// §4.14.2 — once, and remembers that it was spent.
+    ///
+    /// The row is kept, marked, not deleted: "information about the relationship is retained by
+    /// the authorization server", so a second presentation reads as ``RefreshTokenClaim/replayed(grantId:)``
+    /// and not as an unknown token. Concurrent callers presenting one token are answered
+    /// ``RefreshTokenClaim/claimed(_:)`` exactly once between them and the rest as replays.
+    /// A token spent this way is no longer returned by ``getRefreshTokenInfo(token:)``.
+    ///
+    /// A token with no grant (from before schema 11, or saved with none) is given
+    /// `defaultGrantId` by this call, so that its successors share a grant and its replay can
+    /// reach them. A token that has one keeps it.
+    ///
+    /// Only the client the token was issued to can claim it, or replay it: for any other client
+    /// the answer is ``RefreshTokenClaim/unusable`` and the token is left as it was.
+    ///
+    /// - Parameters:
+    ///   - token: The refresh token as presented.
+    ///   - clientId: The authenticated client presenting it.
+    ///   - defaultGrantId: A grant to give the token if it has none.
+    ///   - now: The time to judge expiry by.
+    func claimRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, now: Date
+    ) async throws -> RefreshTokenClaim
 
     /// Revokes a refresh token on behalf of the client it was issued to, and with it the rest of
     /// its grant — RFC 7009 §2.1: "the authorization server SHOULD also invalidate all access
@@ -160,8 +185,8 @@ public protocol OAuthProviderStorage: Sendable {
     ///
     /// A token with no grant (every row from before schema 11) revokes only itself.
     ///
-    /// - Returns: How many tokens changed from live to revoked, the refresh token included;
-    ///   0 for an unknown token, another client's, or one whose grant was already ended.
+    /// - Returns: How many live tokens were revoked, the refresh token included (a refresh token
+    ///   already spent by rotation is not live and is not counted); 0 for an unknown token, another client's, or one whose grant was already ended.
     @discardableResult
     func revokeRefreshToken(token: String, clientId: String) async throws -> Int
 

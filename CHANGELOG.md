@@ -21,16 +21,22 @@ downgrade is provided or tested; a build expecting 10 will not be told to open a
   unrecognised one is ignored, so `unsupported_token_type` is never sent: both kinds are revoked. Revoking a refresh token also revokes
   the access tokens, and the other refresh tokens, of its **grant** (§2.1 SHOULD); revoking an access token leaves its refresh token (§2.1
   "may"). New: `OAuthServer.revoke(token:tokenTypeHint:authenticatedClientId:)`, and on `OAuthProviderStorage` (both stores and the
-  conformance suite, 29 requirements now) `revokeRefreshToken(token:clientId:)` and `revokeGrant(grantId:)`.
+  conformance suite) `revokeRefreshToken(token:clientId:)` and `revokeGrant(grantId:)`.
   `ServerMetadata` gains `revocation_endpoint` and `revocation_endpoint_auth_methods_supported`, present exactly when the deployment
   declares `served.revocation`.
-- **Grants.** Schema 11 adds `grant_id` to `access_tokens` and `refresh_tokens`. Every token a code or an approved device code produces
+- **`OAuthProviderStorage.claimRefreshToken(token:clientId:defaultGrantId:now:) -> RefreshTokenClaim`**, the atomic spend that rotation
+  needs: `.claimed(RefreshTokenInfo)` for exactly one of any number of concurrent callers, `.replayed(grantId:)` for a token already
+  spent (the row is kept, marked `rotated_at`, not deleted, so a replay can be told from an unknown token), and `.unusable` for an
+  unknown, expired, revoked or foreign one. A token with no grant is given `defaultGrantId` when claimed, so a token migrated from
+  before schema 11 rotates into a grant and its replay reaches its successors. `getRefreshTokenInfo` returns `nil` for a spent token.
+  `RefreshTokenRotationPolicy` (`.rotating`, `.reusable`). The conformance suite is now 31 requirements.
+- **Grants.** Schema 11 adds `grant_id` to `access_tokens` and `refresh_tokens` (and `rotated_at` to `refresh_tokens`). Every token a code or an approved device code produces
   carries the grant, and so does every token refreshed from them. `RefreshTokenInfo` gains `grantId` and a public initializer, so a store
   written elsewhere can return one. **Existing rows migrate with a `NULL` grant**: nothing was recorded for them, and linking them by
   guesswork (same client and subject) could end a session other than the compromised one. They revoke one at a time, as before.
   `client_credentials` tokens and token-exchange outputs also have no grant.
 - **`OAuthServer.revokeAllTokens(forSubject:) -> Int`**, and `OAuthProviderStorage.revokeAllTokens(forSubject:)`,
-  on both stores and in the conformance suite (27 requirements now). Ends every access and refresh token a user holds on every client,
+  on both stores and in the conformance suite (a requirement each in the conformance suite). Ends every access and refresh token a user holds on every client,
   and also their authorization codes not yet spent and device codes they approved and the device has not redeemed, so a disabled user's
   pending grant cannot mint fresh tokens afterwards. Returns how many credentials were ended (zero for an unknown subject and for a second
   call). Token-exchange outputs carry the subject token's subject, so they are covered; a `client_credentials` token's subject is its
@@ -43,8 +49,8 @@ downgrade is provided or tested; a build expecting 10 will not be told to open a
   so it cannot mint a token no per-user check or revocation can reach. No default subject is invented: a shared one would make revoking it
   end every unattributed token at once. `client_credentials` (whose subject is the client) and tokens already stored with no subject are
   untouched, and a server built without the argument behaves exactly as before.
-- **`OAuthProviderStorage`**, a `Sendable` protocol of `async throws` requirements: exactly the 24
-  operations `OAuthServer` performs (clients, authorization codes, CSRF tokens, access and refresh
+- **`OAuthProviderStorage`**, a `Sendable` protocol of `async throws` requirements: exactly the operations `OAuthServer` performs (24 when it first
+  shipped, 28 now: `revokeAllTokens(forSubject:)`, `revokeRefreshToken(token:clientId:)`, `revokeGrant(grantId:)`, `claimRefreshToken(...)` were added) (clients, authorization codes, CSRF tokens, access and refresh
   tokens, introspection, revocation, device codes, pushed requests), with `OAuthStorage`'s names
   and labels. `OAuthStorage` conforms by declaration. Its other public methods (cleanup, schema
   inspection, DPoP proof identifiers) stay the SQLite store's own.
@@ -52,11 +58,26 @@ downgrade is provided or tested; a build expecting 10 will not be told to open a
   durable. Credentials are held under the same SHA-256 digests as the SQLite store, and expiry and
   single-use follow the same rules.
 - **`SwiftOAuthProviderConformance`**, a new library product: `ProviderStorageConformanceSuite`,
-  26 requirements, each preceded by a positive control so a store that refuses everything is
+  31 requirements (26 when it first shipped), each preceded by a positive control so a store that refuses everything is
   reported inconclusive rather than passing. Run against both shipped stores in this package's
   tests, and available to run against a store of your own.
 
 ### Changed
+- **Refresh-token rotation is now the default (RFC 9700 §2.2.2, §4.14.2). This changes behaviour for every consumer that does not
+  set it.** `OAuthServer(rotationPolicy:)` is `.rotating` unless you pass `.reusable`. Before, a refresh returned the *same* refresh
+  token ("we'll keep the same one for simplicity") and it stayed valid until it expired. Now every refresh returns a **new** refresh
+  token and spends the old one; the successor keeps the original's scope, subject and **expiry** (rotation replaces a credential, it
+  does not extend the 90 days). Presenting a spent refresh token again revokes the **whole grant**: every access and refresh token
+  descended from the authorization, because the server cannot tell an attacker from a client that lost a response. `invalid_grant`
+  is the answer, as for any dead token. Only the client a token was issued to can spend it or replay it; another client's attempt is
+  `invalid_grant` and changes nothing. A `resource` the server refuses is refused before the token is spent.
+  **Migration:** a client must store the refresh token each response returns and use it next time (this package's own
+  `OAuthConnection` already does). To keep the old behaviour, pass `rotationPolicy: .reusable`. **A grace window for a client that loses
+  the response to a refresh is not built**: it is not in RFC 9700, and until it exists such a client loses its grant and must sign in again.
+  The consumers (FleetWatch, VaultMCP, SwiftPushHub, SwiftMCPServer) have **not** been run against a rotating build, and a real client
+  (Claude Code) should be tried against one before this ships.
+- **A replayed authorization code now revokes the tokens its first redemption issued** (RFC 9700 §4.2.4, SHOULD), under either policy.
+  The grant is named by the code, so no extra storage is needed.
 - **`OAuthProviderStorage.saveAccessToken` and `saveRefreshToken` gain a `grantId: String?` parameter.** A store written elsewhere must
   add it (and `revokeRefreshToken(token:clientId:)`, `revokeGrant(grantId:)`, `revokeAllTokens(forSubject:)`). A caller holding the
   protocol keeps the old spelling through a protocol extension that passes no grant; `OAuthStorage` and `InMemoryOAuthStorage` take it as a

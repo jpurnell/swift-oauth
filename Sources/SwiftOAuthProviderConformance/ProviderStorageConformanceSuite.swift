@@ -70,6 +70,10 @@ public struct ProviderStorageConformanceSuite: Sendable {
             "revoking a grant ends exactly the access and refresh tokens carrying it, and counts them"
         case refreshRevocationByOwner =
             "revoking a refresh token takes its grant, for its own client only, and finds expired rows"
+        // Refresh-token rotation (RFC 9700 §4.14.2)
+        case refreshClaimIsOnce =
+            "a refresh token is claimed once, then reads as replayed with its grant; dead and foreign ones are unusable"
+        case refreshClaimIsAtomic = "concurrent claims of one refresh token succeed exactly once"
         // Revocation by subject
         case revokeAllTokensForSubject =
             "revoking a subject ends its tokens, unspent codes and approved device codes, and counts them"
@@ -280,6 +284,8 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case .pushedRequestIsSingleUse: try await pushedRequest(store, &o)
         case .grantRevocation: try await grantRevocation(store, &o)
         case .refreshRevocationByOwner: try await refreshRevocationByOwner(store, &o)
+        case .refreshClaimIsOnce: try await refreshClaimIsOnce(store, &o)
+        case .refreshClaimIsAtomic: try await refreshClaimIsAtomic(store, &o)
         case .revokeAllTokensForSubject: try await revokeAllForSubject(store, &o)
         }
     }
@@ -646,6 +652,94 @@ public struct ProviderStorageConformanceSuite: Sendable {
                  "an expired refresh token was not found, or its grant was not ended")
         o.expect(isValid(try await store.validateAccessToken(token: "at-g3")) == false,
                  "a live access token outlived its expired refresh token's revocation")
+    }
+
+    /// RFC 9700 §4.14.2: with rotation, "the authorization server issues a new refresh token
+    /// with every access token refresh response. The previous refresh token is invalidated but
+    /// information about the relationship is retained by the authorization server", so that
+    /// presenting the invalidated one can be told from presenting an unknown one.
+    private static func refreshClaimIsOnce(_ store: any OAuthProviderStorage, _ o: inout Observation) async throws {
+        let expiry = future
+        try await store.saveRefreshToken(
+            token: "rt-a", clientId: "c1", scope: "read", expiresAt: expiry, subject: "alice", grantId: "g1")
+        o.control(try await store.getRefreshTokenInfo(token: "rt-a") != nil, "the refresh token was not stored")
+
+        let first = try await store.claimRefreshToken(
+            token: "rt-a", clientId: "c1", defaultGrantId: "unused", now: Date())
+        guard case .claimed(let info) = first else {
+            o.fail("a live refresh token was not claimed: \(first)")
+            return
+        }
+        o.expect(info.clientId == "c1" && info.scope == "read" && info.subject == "alice",
+                 "the claimed token's client, scope or subject differs")
+        o.expect(info.grantId == "g1", "a token with a grant was claimed under another one")
+        o.expect(abs(info.expiresAt.timeIntervalSince(expiry)) < 0.001, "the claimed token's expiry differs")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-a") == nil, "a claimed token is still live")
+        let second = try await store.claimRefreshToken(
+            token: "rt-a", clientId: "c1", defaultGrantId: "unused", now: Date())
+        o.expect(second == .replayed(grantId: "g1"), "a second claim read as \(second), not a replay of g1")
+
+        // Not the owner's: unusable, and the owner's token is not spent by the attempt.
+        try await store.saveRefreshToken(
+            token: "rt-b", clientId: "c1", scope: nil, expiresAt: expiry, subject: nil, grantId: "g2")
+        let foreign = try await store.claimRefreshToken(
+            token: "rt-b", clientId: "c2", defaultGrantId: "unused", now: Date())
+        o.expect(foreign == .unusable, "another client's claim read as \(foreign)")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-b") != nil, "another client's claim spent the token")
+        // And presenting the owner's spent token as another client is not a replay either.
+        let foreignReplay = try await store.claimRefreshToken(
+            token: "rt-a", clientId: "c2", defaultGrantId: "unused", now: Date())
+        o.expect(foreignReplay == .unusable, "another client's replay read as \(foreignReplay)")
+
+        // Dead and unknown.
+        try await store.saveRefreshToken(
+            token: "rt-expired", clientId: "c1", scope: nil, expiresAt: past, subject: nil, grantId: "g3")
+        try await store.saveRefreshToken(
+            token: "rt-revoked", clientId: "c1", scope: nil, expiresAt: expiry, subject: nil, grantId: "g4")
+        try await store.revokeGrant(grantId: "g4")
+        for dead in ["rt-expired", "rt-revoked", "never-issued"] {
+            let claim = try await store.claimRefreshToken(
+                token: dead, clientId: "c1", defaultGrantId: "unused", now: Date())
+            o.expect(claim == .unusable, "\(dead) claimed as \(claim)")
+        }
+
+        // A token saved with no grant gets the supplied one when claimed, so its replay can
+        // reach the successor's line.
+        try await store.saveRefreshToken(
+            token: "rt-legacy", clientId: "c1", scope: nil, expiresAt: expiry, subject: nil, grantId: nil)
+        let legacy = try await store.claimRefreshToken(
+            token: "rt-legacy", clientId: "c1", defaultGrantId: "fresh-grant", now: Date())
+        if case .claimed(let legacyInfo) = legacy {
+            o.expect(legacyInfo.grantId == "fresh-grant", "a token with no grant was not given the supplied one")
+        } else {
+            o.fail("a token with no grant was not claimed: \(legacy)")
+        }
+        let legacyReplay = try await store.claimRefreshToken(
+            token: "rt-legacy", clientId: "c1", defaultGrantId: "another", now: Date())
+        o.expect(legacyReplay == .replayed(grantId: "fresh-grant"),
+                 "the replay of a token that had no grant read as \(legacyReplay)")
+    }
+
+    private static func refreshClaimIsAtomic(_ store: any OAuthProviderStorage, _ o: inout Observation) async throws {
+        try await store.saveRefreshToken(
+            token: "race", clientId: "c1", scope: nil, expiresAt: future, subject: nil, grantId: "g1")
+        let (claimed, replayed) = try await withThrowingTaskGroup(of: RefreshTokenClaim.self) { group in
+            for _ in 0..<24 {
+                group.addTask {
+                    try await store.claimRefreshToken(
+                        token: "race", clientId: "c1", defaultGrantId: "d", now: Date())
+                }
+            }
+            var claimed = 0
+            var replayed = 0
+            for try await claim in group {
+                if case .claimed = claim { claimed += 1 }
+                if case .replayed = claim { replayed += 1 }
+            }
+            return (claimed, replayed)
+        }
+        o.expect(claimed == 1, "\(claimed) of 24 concurrent claims succeeded; exactly 1 should")
+        o.expect(replayed == 23, "the other claims should all read as replays, not \(replayed) of 23")
     }
 
     /// Gap D of the spec-gaps proposal: ending everything one user holds, across clients.
