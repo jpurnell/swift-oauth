@@ -102,7 +102,7 @@ struct RedirectURIMatcherTests {
         uri("http", "192.0.2.1"), "not a uri", "", "/relative/path",
     ])
     func nativeRefused(uri: String) {
-        #expect(RedirectURIMatcher.nativeRegistrationProblem(uri) != nil)
+        #expect(RedirectURIMatcher.nativeRegistrationProblem(uri)?.isEmpty == false)
     }
 }
 
@@ -123,6 +123,18 @@ struct NativeClientServerTests {
         try await server.registerClient(ClientRegistrationRequest(
             clientName: "App", redirectUris: uris, grantTypes: ["authorization_code"],
             tokenEndpointAuthMethod: "none", applicationType: type)).clientId
+    }
+
+    /// The wire code a call was refused with, or `nil` if it was not refused.
+    private static func refusalCode(_ body: () async throws -> Void) async -> String? {
+        do {
+            try await body()
+            return nil
+        } catch let error as OAuthError {
+            return error.code
+        } catch {
+            return "\(error)"
+        }
     }
 
     private static func authorize(
@@ -187,13 +199,11 @@ struct NativeClientServerTests {
         let id = try await Self.register(server, uris: [uri("http", "127.0.0.1")], type: .native)
 
         for presented in [
-            uri("http", "127.0.0.1", port: 51004, path: "/other"), uri("http", "localhost", port: 5000), uri("http", "::1", port: 51004),
-            uri("https", "127.0.0.1", port: 51004),
+            uri("http", "127.0.0.1", port: 51004, path: "/other"), uri("http", "localhost", port: 5000),
+            uri("http", "::1", port: 51004), uri("https", "127.0.0.1", port: 51004),
         ] {
-            do {
-                _ = try await Self.authorize(server, clientId: id, redirect: presented)
-                Issue.record("\(presented) was honoured against the registered loopback URI")
-            } catch is OAuthError {}
+            let code = await Self.refusalCode { _ = try await Self.authorize(server, clientId: id, redirect: presented) }
+            #expect(code == "invalid_request", "\(presented) was honoured against the registered loopback URI")
         }
     }
 
@@ -214,9 +224,9 @@ struct NativeClientServerTests {
     func webExact(store kind: StoreKind) async throws {
         let server = try Self.makeServer(kind)
         let id = try await Self.register(server, uris: [uri("https", "app.example.com")], type: .web)
-        do {
+        let code = await Self.refusalCode {
             _ = try await Self.authorize(server, clientId: id, redirect: uri("https", "app.example.com", port: 8443))
-            Issue.record("a different port was honoured for a web client")
-        } catch is OAuthError {}
+        }
+        #expect(code == "invalid_request", "a different port was honoured for a web client")
     }
 }

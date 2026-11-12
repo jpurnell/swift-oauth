@@ -7,7 +7,7 @@ import Foundation
 /// returns when "the DPoP proof itself was deemed invalid". A replay is an invalid proof, so it
 /// is not given a code of its own.
 ///
-/// A separate type rather than a case of ``OAuthError``: that enum is public and switched over
+/// A separate type rather than a case of `OAuthError`: that enum is public and switched over
 /// by consumers, and a new case would stop their code compiling.
 public enum DPoPProofError: Error, Equatable, Sendable {
     /// The proof failed an RFC 9449 §4.3 check (signature, `htm`, `htu`, freshness, shape).
