@@ -9,9 +9,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The README has said since the first release that provider storage is a protocol with an in-memory
 implementation and a conformance suite. It was not: `OAuthServer` took the concrete SQLite
-`OAuthStorage`. It is now what the README says. No behaviour, schema (still 10) or wire change.
+`OAuthStorage`. It is now what the README says. The schema moves from 10 to **11**, one way (no
+downgrade is provided or tested; a build expecting 10 will not be told to open an 11).
 
 ### Added
+- **`OAuthServer.revokeAllTokens(forSubject:) -> Int`**, and `OAuthProviderStorage.revokeAllTokens(forSubject:)`,
+  on both stores and in the conformance suite (27 requirements now). Ends every access and refresh token a user holds on every client,
+  and also their authorization codes not yet spent and device codes they approved and the device has not redeemed, so a disabled user's
+  pending grant cannot mint fresh tokens afterwards. Returns how many credentials were ended (zero for an unknown subject and for a second
+  call). Token-exchange outputs carry the subject token's subject, so they are covered; a `client_credentials` token's subject is its
+  client id, so revoking that subject revokes the client's tokens, by design. **Rows with a `NULL` subject are not reachable** (pre-schema-9
+  rows, grants made without a subject, and pending device codes, which name nobody until answered): revoke those by client. Schema 11 adds
+  an index on each `subject` column (`access_tokens`, `refresh_tokens`, `authorization_codes`, `device_codes`).
 - **`OAuthServer(requireSubject:)`**, default `false`. With `true`, a grant that names nobody is refused with `server_error`:
   `handleAuthorizationRequest(_:subject:)` refuses a `nil`, empty or blank subject, and `approveDeviceCode(userCode:subject:)` an empty or
   blank one (a refused approval records nothing, so the right user can still approve the same code). For a deployment with user accounts,

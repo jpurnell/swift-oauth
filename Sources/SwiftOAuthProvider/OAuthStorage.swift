@@ -104,8 +104,10 @@ public actor OAuthStorage {
     /// added `clients.application_type`, which until then was dropped on save; version 9 added
     /// `subject` to `access_tokens`, `refresh_tokens` and `authorization_codes`, so a token can
     /// say whose it is (RFC 7662 `sub`); version 10 hashed `device_codes.user_code` and added
-    /// `device_codes.denied`, `last_polled_at` and `poll_interval` for RFC 8628 §3.5.
-    public static let currentSchemaVersion = 10
+    /// `device_codes.denied`, `last_polled_at` and `poll_interval` for RFC 8628 §3.5;
+    /// version 11 indexed the `subject` columns, so revoking everything a user holds is a lookup
+    /// and not a table scan.
+    public static let currentSchemaVersion = 11
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -407,6 +409,18 @@ public actor OAuthStorage {
                         + "failed too (\(error)).")
                 }
                 throw migrationError
+            }
+        }
+
+        // Version 11: revoking by subject (`revokeAllTokens(forSubject:)`) updates by `subject`,
+        // which without an index reads every row of four tables. `IF NOT EXISTS`, so running it
+        // twice is safe. A one-way migration: a build that expects schema 10 will not be told
+        // to open a database at 11, and no downgrade is provided or tested.
+        if version < 11 && targetVersion >= 11 {
+            for table in ["access_tokens", "refresh_tokens", "authorization_codes", "device_codes"] {
+                try executeStatic(
+                    db: db,
+                    sql: "CREATE INDEX IF NOT EXISTS idx_\(table)_subject ON \(table)(subject)")
             }
         }
 
@@ -1308,6 +1322,29 @@ public actor OAuthStorage {
             "UPDATE refresh_tokens SET revoked = 1 WHERE client_id = ?",
             parameters: [clientId]
         )
+    }
+
+    /// Ends everything one user holds. See ``OAuthProviderStorage/revokeAllTokens(forSubject:)``.
+    ///
+    /// Four `UPDATE`s, each naming the live state it ends, so the changes counted are the
+    /// credentials that were live and are not now. Rows with a `NULL` subject never match `=`.
+    @discardableResult
+    public func revokeAllTokens(forSubject subject: String) throws -> Int {
+        let statements = [
+            "UPDATE access_tokens SET revoked = 1 WHERE subject = ? AND revoked = 0",
+            "UPDATE refresh_tokens SET revoked = 1 WHERE subject = ? AND revoked = 0",
+            "UPDATE authorization_codes SET consumed = 1 WHERE subject = ? AND consumed = 0",
+            """
+            UPDATE device_codes SET redeemed = 1
+            WHERE subject = ? AND approved = 1 AND denied = 0 AND redeemed = 0
+            """
+        ]
+        var changed = 0
+        for sql in statements {
+            try execute(sql, parameters: [subject])
+            changed += Int(sqlite3_changes(db))
+        }
+        return changed
     }
 
     /// Checks if the raw token value exists in the database (for testing)

@@ -65,6 +65,9 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case devicePollPacing = "polling too soon is slow_down and widens the interval by five seconds"
         // Pushed authorization requests
         case pushedRequestIsSingleUse = "a pushed request is consumed once, by its own client, before it expires"
+        // Revocation by subject
+        case revokeAllTokensForSubject =
+            "revoking a subject ends its tokens, unspent codes and approved device codes, and counts them"
     }
 
     /// How a requirement came out.
@@ -270,6 +273,7 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case .deviceRedemptionIsOnce: try await deviceRedemptionIsOnce(store, &o)
         case .devicePollPacing: try await devicePollPacing(store, &o)
         case .pushedRequestIsSingleUse: try await pushedRequest(store, &o)
+        case .revokeAllTokensForSubject: try await revokeAllForSubject(store, &o)
         }
     }
 
@@ -536,6 +540,86 @@ public struct ProviderStorageConformanceSuite: Sendable {
                  "revoking one client's tokens revoked another client's access token")
         o.expect(try await store.getRefreshTokenInfo(token: "rt-c2-alice") != nil,
                  "revoking one client's tokens revoked another client's refresh token")
+    }
+
+    /// Gap D of the spec-gaps proposal: ending everything one user holds, across clients.
+    ///
+    /// Alice holds three access tokens (three clients), two refresh tokens, one unspent
+    /// authorization code and one approved, unredeemed device code: seven credentials. Bob, a
+    /// token with no subject, a pending device code (which names nobody until it is answered)
+    /// and a code Alice already spent must all be left as they were. The count is by
+    /// enumeration here, not read back from a store.
+    private static func revokeAllForSubject(_ store: any OAuthProviderStorage, _ o: inout Observation) async throws {
+        let now = Date()
+        for client in ["c1", "c2", "c3"] {
+            try await store.saveAccessToken(
+                token: "at-alice-\(client)", clientId: client, scope: nil, expiresAt: future,
+                audience: nil, keyThumbprint: nil, certificateThumbprint: nil, subject: "alice")
+        }
+        for client in ["c1", "c2"] {
+            try await store.saveRefreshToken(
+                token: "rt-alice-\(client)", clientId: client, scope: nil, expiresAt: future, subject: "alice")
+        }
+        try await store.saveAccessToken(
+            token: "at-bob", clientId: "c1", scope: nil, expiresAt: future,
+            audience: nil, keyThumbprint: nil, certificateThumbprint: nil, subject: "bob")
+        try await store.saveRefreshToken(
+            token: "rt-bob", clientId: "c1", scope: nil, expiresAt: future, subject: "bob")
+        try await store.saveAccessToken(
+            token: "at-nobody", clientId: "c1", scope: nil, expiresAt: future,
+            audience: nil, keyThumbprint: nil, certificateThumbprint: nil, subject: nil)
+        try await store.saveRefreshToken(
+            token: "rt-nobody", clientId: "c1", scope: nil, expiresAt: future, subject: nil)
+        try await store.saveAuthorizationCode(code("code-alice", client: "c1", subject: "alice"))
+        try await store.saveAuthorizationCode(code("code-alice-spent", client: "c1", subject: "alice"))
+        try await store.saveAuthorizationCode(code("code-bob", client: "c1", subject: "bob"))
+        try await store.saveAuthorizationCode(code("code-nobody", client: "c1", subject: nil))
+        _ = try await store.consumeAuthorizationCode(code: "code-alice-spent")
+        try await saveDevice(store, device: "dev-alice", user: "BCDF-GHJK", client: "c2",
+                             expiresAt: now.addingTimeInterval(600), now: now)
+        try await saveDevice(store, device: "dev-bob", user: "WDJB-MJHT", client: "c2",
+                             expiresAt: now.addingTimeInterval(600), now: now)
+        try await saveDevice(store, device: "dev-pending", user: "NPQR-STVW", client: "c2",
+                             expiresAt: now.addingTimeInterval(600), now: now)
+        _ = try await store.approveDeviceCode(userCode: "BCDF-GHJK", subject: "alice", now: now)
+        _ = try await store.approveDeviceCode(userCode: "WDJB-MJHT", subject: "bob", now: now)
+        o.control(isValid(try await store.validateAccessToken(token: "at-alice-c3")),
+                  "the tokens were not stored")
+        o.control(try await store.deviceCodeState(deviceCode: "dev-alice", clientId: "c2", now: now)
+                  == .approved(scope: "read", subject: "alice"), "the device code was not approved")
+
+        let changed = try await store.revokeAllTokens(forSubject: "alice")
+        o.expect(changed == 7, "expected 3 access + 2 refresh + 1 code + 1 device code = 7, got \(changed)")
+
+        for client in ["c1", "c2", "c3"] {
+            o.expect(isValid(try await store.validateAccessToken(token: "at-alice-\(client)")) == false,
+                     "an access token of the subject's at \(client) survived")
+        }
+        for client in ["c1", "c2"] {
+            o.expect(try await store.getRefreshTokenInfo(token: "rt-alice-\(client)") == nil,
+                     "a refresh token of the subject's at \(client) survived")
+        }
+        o.expect(try await store.consumeAuthorizationCode(code: "code-alice") == nil,
+                 "an unspent code of the subject's still redeems")
+        o.expect(try await store.deviceCodeState(deviceCode: "dev-alice", clientId: "c2", now: now) != .approved(scope: "read", subject: "alice"),
+                 "an approved device code of the subject's is still redeemable")
+        o.expect(try await store.markDeviceCodeRedeemed(deviceCode: "dev-alice") == false,
+                 "an approved device code of the subject's could still be spent")
+
+        o.expect(isValid(try await store.validateAccessToken(token: "at-bob")), "another subject's access token was revoked")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-bob") != nil, "another subject's refresh token was revoked")
+        o.expect(try await store.consumeAuthorizationCode(code: "code-bob") != nil, "another subject's code was spent")
+        o.expect(try await store.deviceCodeState(deviceCode: "dev-bob", clientId: "c2", now: now)
+                 == .approved(scope: "read", subject: "bob"), "another subject's device code was ended")
+        o.expect(isValid(try await store.validateAccessToken(token: "at-nobody")), "a token with no subject was revoked")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-nobody") != nil, "a refresh token with no subject was revoked")
+        o.expect(try await store.consumeAuthorizationCode(code: "code-nobody") != nil, "a code with no subject was spent")
+        o.expect(try await store.deviceCodeState(deviceCode: "dev-pending", clientId: "c2", now: now) == .pending,
+                 "a pending device code, which names nobody yet, was ended")
+
+        o.expect(try await store.revokeAllTokens(forSubject: "alice") == 0, "a second revocation changed rows")
+        o.expect(try await store.revokeAllTokens(forSubject: "nobody-by-that-name") == 0,
+                 "an unknown subject changed rows")
     }
 
     // MARK: Refresh tokens

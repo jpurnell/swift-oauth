@@ -109,6 +109,27 @@ public protocol OAuthProviderStorage: Sendable {
     /// Revokes every access and refresh token issued to a client.
     func revokeAllTokensForClient(clientId: String) async throws
 
+    /// Ends everything one user holds: access and refresh tokens on every client, authorization
+    /// codes not yet spent, and device codes the user approved but the device has not redeemed.
+    ///
+    /// The codes matter. Revoking only the tokens would leave a disabled user's approved device
+    /// grant, or a code issued a moment ago, to mint fresh ones afterwards. A code is ended by
+    /// marking it spent, a device code by marking it redeemed, so each then fails as any spent
+    /// credential does.
+    ///
+    /// **Rows with no subject are not reachable.** A token, code or approval stored with a
+    /// `nil` subject (every row from before schema 9, and any grant a deployment made without
+    /// saying who approved) matches no subject and is left alone; those are revocable by client
+    /// only. A device code names nobody until a user answers it, so a pending one is likewise
+    /// out of reach.
+    ///
+    /// - Parameter subject: The user, exactly as it was recorded when the grant was made.
+    /// - Returns: How many credentials changed state: those that were live and now are not.
+    ///   Credentials already revoked, spent or redeemed are not counted, so a second call
+    ///   returns 0, as does a subject nobody holds anything for.
+    @discardableResult
+    func revokeAllTokens(forSubject subject: String) async throws -> Int
+
     // MARK: Refresh tokens
 
     /// Saves a refresh token under its digest.

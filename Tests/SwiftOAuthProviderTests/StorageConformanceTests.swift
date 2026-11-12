@@ -69,6 +69,7 @@ private actor RefusingStore: OAuthProviderStorage {
     func introspectAccessToken(token: String) throws -> IntrospectionResult { .inactive }
     func revokeAccessToken(token: String) throws {}
     func revokeAllTokensForClient(clientId: String) throws {}
+    func revokeAllTokens(forSubject subject: String) throws -> Int { 0 }
     func saveRefreshToken(token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?) throws {}
     func getRefreshTokenInfo(token: String) throws -> RefreshTokenInfo? { nil }
     func saveDeviceCode(

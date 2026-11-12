@@ -286,6 +286,31 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         }
     }
 
+    /// Ends everything one user holds. See ``OAuthProviderStorage/revokeAllTokens(forSubject:)``.
+    @discardableResult
+    public func revokeAllTokens(forSubject subject: String) throws -> Int {
+        var changed = 0
+        for key in accessTokens.keys where accessTokens[key]?.subject == subject && accessTokens[key]?.revoked == false {
+            accessTokens[key]?.revoked = true
+            changed += 1
+        }
+        for key in refreshTokens.keys where refreshTokens[key]?.subject == subject && refreshTokens[key]?.revoked == false {
+            refreshTokens[key]?.revoked = true
+            changed += 1
+        }
+        for key in codes.keys where codes[key]?.code.subject == subject && codes[key]?.consumed == false {
+            codes[key]?.consumed = true
+            changed += 1
+        }
+        for key in deviceCodes.keys {
+            guard let record = deviceCodes[key], record.subject == subject,
+                  record.approved, !record.denied, !record.redeemed else { continue }
+            deviceCodes[key]?.redeemed = true
+            changed += 1
+        }
+        return changed
+    }
+
     // MARK: - Refresh tokens
 
     /// Saves a refresh token under its digest, replacing one with the same value.

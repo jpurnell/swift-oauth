@@ -1498,6 +1498,32 @@ public actor OAuthServer {
         try await storage.revokeAccessToken(token: token)
     }
 
+    /// Ends every token a user holds, on every client, and the grants still on their way.
+    ///
+    /// The operational half of disabling a user: after it, no access or refresh token naming
+    /// `subject` is honoured, an authorization code issued for them and not yet redeemed fails,
+    /// and a device code they approved and the device has not collected fails. Without the last
+    /// two, a revoked user's pending grant would mint fresh tokens a moment later.
+    ///
+    /// Tokens made by token exchange carry the subject token's subject, so they are covered.
+    /// A `client_credentials` token's subject is its client's own identifier (RFC 9068 §2.2), so
+    /// revoking that identifier here revokes the client's tokens, by design.
+    ///
+    /// **Rows with no subject are not reachable.** Tokens issued before schema 9, and any grant
+    /// the deployment made without saying who approved it (see `requireSubject`), have no
+    /// subject to match; revoke those by client. A device code names nobody until a user answers
+    /// it, so a pending one is out of reach too.
+    ///
+    /// - Parameter subject: The user, as the deployment passed it when approving their grant.
+    /// - Returns: How many credentials were ended: tokens, unspent codes and approved device
+    ///   codes that were live. Zero for a subject nobody holds anything for, and for a second
+    ///   call. Meant to be logged.
+    /// - Throws: Only if storage fails.
+    @discardableResult
+    public func revokeAllTokens(forSubject subject: String) async throws -> Int {
+        try await storage.revokeAllTokens(forSubject: subject)
+    }
+
     // MARK: - Client Authentication
 
     /// Authenticates a client using various methods
