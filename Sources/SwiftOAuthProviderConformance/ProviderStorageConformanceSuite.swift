@@ -65,6 +65,9 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case devicePollPacing = "polling too soon is slow_down and widens the interval by five seconds"
         // Pushed authorization requests
         case pushedRequestIsSingleUse = "a pushed request is consumed once, by its own client, before it expires"
+        // DPoP proof identifiers
+        case proofIdentifierIsClaimedOnce = "a DPoP jti is claimed once, independently of others, and again only after its window is swept"
+        case proofIdentifierClaimIsAtomic = "concurrent claims of one DPoP jti succeed exactly once"
     }
 
     /// How a requirement came out.
@@ -270,6 +273,8 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case .deviceRedemptionIsOnce: try await deviceRedemptionIsOnce(store, &o)
         case .devicePollPacing: try await devicePollPacing(store, &o)
         case .pushedRequestIsSingleUse: try await pushedRequest(store, &o)
+        case .proofIdentifierIsClaimedOnce: try await proofClaimedOnce(store, &o)
+        case .proofIdentifierClaimIsAtomic: try await proofClaimIsAtomic(store, &o)
         }
     }
 
@@ -760,5 +765,41 @@ public struct ProviderStorageConformanceSuite: Sendable {
                  "a refused attempt by another client spent the pushed request")
         o.expect(try await store.consumePushedRequest(requestURI: "never-issued", clientId: "c1") == nil,
                  "an unknown reference was consumed")
+    }
+
+    // MARK: DPoP proof identifiers (RFC 9449 §11.1)
+
+    private static func proofClaimedOnce(_ store: any OAuthProviderStorage, _ o: inout Observation) async throws {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let window = start.addingTimeInterval(300)
+        o.control(try await store.claimProofIdentifier("jti-a", expiresAt: window),
+                  "a fresh proof identifier was not claimed")
+        o.expect(try await store.claimProofIdentifier("jti-a", expiresAt: window) == false,
+                 "a replayed proof identifier was claimed again")
+        o.expect(try await store.claimProofIdentifier("jti-b", expiresAt: window),
+                 "a different proof identifier was refused")
+        o.expect(try await store.sweepExpiredProofIdentifiers(now: start.addingTimeInterval(299)) == 0,
+                 "an identifier inside its window was swept")
+        o.expect(try await store.claimProofIdentifier("jti-a", expiresAt: window) == false,
+                 "an identifier inside its window was claimable again")
+        o.expect(try await store.sweepExpiredProofIdentifiers(now: start.addingTimeInterval(301)) == 2,
+                 "identifiers past their window were not both swept")
+        o.expect(try await store.claimProofIdentifier("jti-a", expiresAt: start.addingTimeInterval(900)),
+                 "an identifier past its swept window could not be claimed again")
+    }
+
+    private static func proofClaimIsAtomic(
+        _ store: any OAuthProviderStorage, _ o: inout Observation
+    ) async throws {
+        let expiry = future
+        let winners = try await withThrowingTaskGroup(of: Bool.self) { group in
+            for _ in 0..<24 {
+                group.addTask { try await store.claimProofIdentifier("jti-race", expiresAt: expiry) }
+            }
+            var count = 0
+            for try await won in group where won { count += 1 }
+            return count
+        }
+        o.expect(winners == 1, "\(winners) of 24 concurrent claims succeeded; exactly 1 should")
     }
 }

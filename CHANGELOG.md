@@ -22,7 +22,7 @@ implementation and a conformance suite. It was not: `OAuthServer` took the concr
   operations `OAuthServer` performs (clients, authorization codes, CSRF tokens, access and refresh
   tokens, introspection, revocation, device codes, pushed requests), with `OAuthStorage`'s names
   and labels. `OAuthStorage` conforms by declaration. Its other public methods (cleanup, schema
-  inspection, DPoP proof identifiers) stay the SQLite store's own.
+  inspection) stay the SQLite store's own. (The DPoP proof-identifier operations, below, joined the protocol afterwards.)
 - **`InMemoryOAuthStorage`**, an actor implementing it, for tests and single-process use. Not
   durable. Credentials are held under the same SHA-256 digests as the SQLite store, and expiry and
   single-use follow the same rules.
@@ -30,6 +30,27 @@ implementation and a conformance suite. It was not: `OAuthServer` took the concr
   26 requirements, each preceded by a positive control so a store that refuses everything is
   reported inconclusive rather than passing. Run against both shipped stores in this package's
   tests, and available to run against a store of your own.
+
+- **DPoP replay protection is now reachable from the server.** `claimProofIdentifier(_:expiresAt:)` and
+  `sweepExpiredProofIdentifiers(now:)` are `OAuthProviderStorage` requirements (the first with the SQLite
+  method's name and labels), implemented by `InMemoryOAuthStorage`, with two new conformance requirements
+  (a `jti` is claimed once and again only after its window is swept; concurrent claims have exactly one
+  winner). `OAuthServer.verifyDPoPProof(_:method:url:now:)` runs `DPoPProof.verify`, then claims the `jti`
+  until `iat` plus `DPoPProof.acceptableClockSkew`, and throws `DPoPProofError` (`errorCode`
+  `invalid_dpop_proof`, RFC 9449 §5 and §7.1, with a `DPoP` `WWW-Authenticate` challenge for resources) for a
+  bad proof or a replay. A proof refused by an earlier check does not spend its `jti`. `OAuthStorage` gained
+  `sweepExpiredProofIdentifiers(now:)`.
+
+### Known gaps
+- **The 1.0.0-beta.4 entries and the "complete surface" table that say DPoP has "replay protection" were
+  not true of the server.** `claimProofIdentifier` existed on the SQLite store and was called only by tests;
+  nothing in `Sources/` verified a proof, so no proof was ever checked server-side. Fixed in part above: a
+  consumer's `DPoP`-scheme handling can now call `OAuthServer.verifyDPoPProof` and get replay refusal.
+- **`OAuthServer` still cannot issue a DPoP-bound token** (RFC 9449 §5). The token endpoint takes no `DPoP`
+  header, every `saveAccessToken` call passes no `keyThumbprint`, and responses are `token_type: Bearer`.
+  `validateBearerToken` refuses a bound token as a bearer token (§7.2) but there is no `DPoP`-scheme entry
+  point, so binding is only usable by a consumer that issues and checks it itself. Also absent: the `ath`
+  check (§4.3), a check that a `jwk` carries no private key, and server-supplied nonces (§8).
 
 ### Changed
 - **`OAuthServer.init(storage:)` takes `any OAuthProviderStorage`.** Source compatible: a caller

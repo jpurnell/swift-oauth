@@ -82,6 +82,10 @@ introspection (RFC 7662), revocation (RFC 7009), dynamic registration (RFC 7591)
 9126), JAR (RFC 9101), DPoP (RFC 9449), mTLS-bound tokens (RFC 8705), resource indicators (RFC
 8707), and both metadata documents (RFC 8414, RFC 9728).
 
+DPoP is partial. The client half creates proofs and the server can verify one and refuse a replayed
+`jti` (`OAuthServer.verifyDPoPProof`), but the token endpoint does not yet issue DPoP-bound tokens; see
+the CHANGELOG's "Known gaps".
+
 Client credentials is on both halves, and on the provider it is **opt-in**. A deployment
 issues the grant only if it lists `.clientCredentials` in its `ServedCapabilities`; `.core`
 does not, and still answers `unsupported_grant_type`. Even then it goes only to service

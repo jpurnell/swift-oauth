@@ -86,4 +86,6 @@ private actor RefusingStore: OAuthProviderStorage {
         codeChallenge: String?, codeChallengeMethod: String?, expiresAt: Date
     ) throws {}
     func consumePushedRequest(requestURI: String, clientId: String) throws -> PushedAuthorizationRequest? { nil }
+    func claimProofIdentifier(_ identifier: String, expiresAt: Date) throws -> Bool { false }
+    func sweepExpiredProofIdentifiers(now: Date) throws -> Int { 0 }
 }

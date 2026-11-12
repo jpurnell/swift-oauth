@@ -25,7 +25,7 @@ import SwiftOAuthCore
 /// ## What the requirements are
 ///
 /// Exactly the operations ``OAuthServer`` performs, and no more. ``OAuthStorage`` has further
-/// public methods (cleanup, schema inspection, DPoP proof identifiers); those are the SQLite
+/// public methods (cleanup, schema inspection); those are the SQLite
 /// store's own and a conforming store need not offer them.
 ///
 /// The requirements carry no default arguments, because a protocol requirement cannot. A caller
@@ -188,6 +188,22 @@ public protocol OAuthProviderStorage: Sendable {
     /// Returns what was pushed and spends it; `nil` if the reference is unknown, expired,
     /// spent, or another client's — one answer for all four.
     func consumePushedRequest(requestURI: String, clientId: String) async throws -> PushedAuthorizationRequest?
+
+    // MARK: DPoP proof identifiers (RFC 9449 §11.1)
+
+    /// Records a DPoP proof's `jti`, refusing one already recorded.
+    ///
+    /// `true` for exactly one of any number of callers presenting the same identifier, including
+    /// concurrently: the store decides, not a read followed by a write. `expiresAt` is no earlier
+    /// than the proof stops being acceptable; a record may be dropped after it.
+    func claimProofIdentifier(_ identifier: String, expiresAt: Date) async throws -> Bool
+
+    /// Drops proof identifiers whose `expiresAt` is at or before `now`; returns how many.
+    ///
+    /// After this an identifier whose window has passed can be claimed again, which is safe
+    /// because a proof that old fails the freshness check before it reaches the store.
+    @discardableResult
+    func sweepExpiredProofIdentifiers(now: Date) async throws -> Int
 }
 
 extension OAuthStorage: OAuthProviderStorage {}

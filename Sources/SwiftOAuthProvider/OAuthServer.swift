@@ -1489,6 +1489,47 @@ public actor OAuthServer {
         try await storage.validateAccessToken(token: token)
     }
 
+    // MARK: - DPoP Proof Verification
+
+    /// Verifies a DPoP proof and spends its `jti` — RFC 9449 §4.3 and §11.1.
+    ///
+    /// The one place this server accepts a proof. It runs the proof's own checks
+    /// (``DPoPProof/verify(_:method:url:now:)``: `typ`, signature, `htm`, `htu`, `iat`), then
+    /// claims the `jti` through the store until the proof would no longer be fresh, so a second
+    /// presentation of the same proof is refused, including when two arrive at once. A proof
+    /// refused by an earlier check does not use up its identifier.
+    ///
+    /// Not checked here, because they need the access token or a nonce this server has not
+    /// issued: `ath`, the match between the token's bound key and
+    /// ``DPoPProof/Verified/thumbprint``, and `nonce` (§8). A resource server presenting a
+    /// bound token compares the thumbprint itself.
+    ///
+    /// - Parameters:
+    ///   - proof: The `DPoP` header value.
+    ///   - method: The method of the request that carried it.
+    ///   - url: The URI of the request that carried it.
+    ///   - now: The current time, injectable for testing the acceptance window.
+    /// - Returns: What the proof asserts.
+    /// - Throws: ``DPoPProofError`` for a bad or replayed proof; a storage error otherwise.
+    public func verifyDPoPProof(
+        _ proof: String, method: String, url: URL, now: Date = Date()
+    ) async throws -> DPoPProof.Verified {
+        let verified: DPoPProof.Verified
+        do {
+            verified = try DPoPProof.verify(proof, method: method, url: url, now: now)
+        } catch {
+            throw DPoPProofError.invalidProof("The DPoP proof did not verify: \(error)")
+        }
+        // A proof is acceptable until `iat` plus the skew allowance; the record need not
+        // outlive that, and a proof older than it fails verification before reaching here.
+        try await storage.sweepExpiredProofIdentifiers(now: now)
+        let expiresAt = verified.issuedAt.addingTimeInterval(DPoPProof.acceptableClockSkew)
+        guard try await storage.claimProofIdentifier(verified.identifier, expiresAt: expiresAt) else {
+            throw DPoPProofError.replayed
+        }
+        return verified
+    }
+
     // MARK: - Token Revocation
 
     /// Revokes an access token

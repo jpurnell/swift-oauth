@@ -20,6 +20,9 @@ Most of the work of an authorization server is declining things precisely.
   error is the vulnerability itself.
 - **An authorization code presented twice.** ``OAuthStorage`` consumes codes rather than
   reading them, so replay finds nothing.
+- **A DPoP proof presented twice.** ``OAuthServer/verifyDPoPProof(_:method:url:now:)`` claims
+  each proof's `jti` through the store for the proof's acceptance window and refuses a repeat
+  with ``DPoPProofError``. Issuing DPoP-bound tokens is not yet supported; see the changelog.
 - **A PKCE verifier that does not derive the stored challenge.** Compared in constant
   time, via `PKCE`.
 - **A consent submission without a matching CSRF token.** ``CSRFValidationResult``

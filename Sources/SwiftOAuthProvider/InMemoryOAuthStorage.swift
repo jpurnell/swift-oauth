@@ -98,6 +98,7 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
     private var refreshTokens: [String: RefreshRecord] = [:]
     private var deviceCodes: [String: DeviceRecord] = [:]
     private var pushedRequests: [String: PushedRecord] = [:]
+    private var proofIdentifiers: [String: Date] = [:]
 
     /// RFC 8628 §3.2's default interval, used when a stored one is not usable.
     private static let defaultPollInterval: TimeInterval = 5
@@ -455,5 +456,23 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
               !record.consumed, record.expiresAt > Date() else { return nil }
         pushedRequests[key]?.consumed = true
         return record.request
+    }
+
+    // MARK: - DPoP proof identifiers
+
+    /// Records a proof's `jti`; `false` if it is already recorded. Actor isolation makes the
+    /// check and the insert one step, so concurrent callers cannot both win.
+    public func claimProofIdentifier(_ identifier: String, expiresAt: Date) throws -> Bool {
+        guard proofIdentifiers[identifier] == nil else { return false }
+        proofIdentifiers[identifier] = expiresAt
+        return true
+    }
+
+    /// Drops identifiers whose window has passed as of `now`, returning how many.
+    @discardableResult
+    public func sweepExpiredProofIdentifiers(now: Date) throws -> Int {
+        let before = proofIdentifiers.count
+        proofIdentifiers = proofIdentifiers.filter { $0.value > now }
+        return before - proofIdentifiers.count
     }
 }

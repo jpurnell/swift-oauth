@@ -1283,9 +1283,18 @@ public actor OAuthStorage {
     ///
     /// - Returns: How many were removed.
     public func sweepExpiredProofIdentifiers() throws -> Int {
+        try sweepExpiredProofIdentifiers(now: Date())
+    }
+
+    /// Removes proof identifiers whose window has passed as of `now`.
+    ///
+    /// - Parameter now: The time to judge expiry by, injectable so a test need not wait.
+    /// - Returns: How many were removed.
+    @discardableResult
+    public func sweepExpiredProofIdentifiers(now: Date) throws -> Int {
         try execute(
             "DELETE FROM dpop_proofs WHERE expires_at <= ?",
-            parameters: [Date().timeIntervalSince1970])
+            parameters: [now.timeIntervalSince1970])
         return Int(sqlite3_changes(db))
     }
 
