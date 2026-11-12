@@ -208,9 +208,9 @@ struct RevocationEndpointTests {
 
     // MARK: - §2.1: the token must belong to the requesting client
 
-    @Test("Another client's token is not revoked, and the answer is the one an unknown token gets",
+    @Test("Another client's token is refused with invalid_grant (§2.1) and is not revoked; an unknown token is still 200 (§2.2)",
           arguments: StoreKind.allCases)
-    func otherClientsTokenIsSafe(store kind: StoreKind) async throws {
+    func otherClientsTokenIsRefused(store kind: StoreKind) async throws {
         let server = try Self.makeServer(try kind.makeStore())
         let handler = OAuthHTTPHandler(server: server)
         let victim = try await Self.register(server, confidential: true)
@@ -225,13 +225,34 @@ struct RevocationEndpointTests {
         let unknown = await handler.handleRevocationRequest(
             body: Self.form(token: "never-issued", client: attacker), authHeader: nil)
 
+        // §2.1: "If this validation fails, the request is refused and the client is informed of the
+        // error"; RFC 6749 §5.2's invalid_grant is the code for "issued to another client".
+        for response in [foreign, foreignRefresh] {
+            #expect(response.statusCode == 400)
+            #expect(response.body.contains("invalid_grant"))
+        }
+        // §2.2: "invalid tokens do not cause an error response". A string nobody holds is 200.
+        #expect(unknown.statusCode == 200)
+        #expect(unknown.body.isEmpty)
+        // And the refusal revoked nothing: the victim's tokens still work.
         #expect(try await Self.isActive(server, issued.accessToken))
         _ = try await Self.refresh(server, client: victim, token: refreshToken)
-        for response in [foreign, foreignRefresh] {
-            #expect(response.statusCode == unknown.statusCode)
-            #expect(response.body == unknown.body)
-            #expect(response.headers == unknown.headers)
-        }
+    }
+
+    @Test("A client still revokes its own access and refresh tokens, with the same 200",
+          arguments: StoreKind.allCases)
+    func ownTokensStillRevoke(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(try kind.makeStore())
+        let handler = OAuthHTTPHandler(server: server)
+        let client = try await Self.register(server, confidential: true)
+        let issued = try await Self.issue(server, client: client)
+        let refreshToken = try #require(issued.refreshToken)
+
+        let own = await handler.handleRevocationRequest(
+            body: Self.form(token: refreshToken, client: client), authHeader: nil)
+
+        #expect(own.statusCode == 200)
+        #expect(!(try await Self.isActive(server, issued.accessToken)), "§2.1: the grant's access tokens go too")
     }
 
     // MARK: - Client authentication

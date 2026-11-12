@@ -16,7 +16,10 @@ downgrade is provided or tested; a build expecting 10 will not be told to open a
 - **An RFC 7009 revocation endpoint on the provider.** `OAuthHTTPHandler.handleRevocationRequest(body:authHeader:)`, which a deployment routes
   at the path in `ServedCapabilities.revocation` (accepted and never read until now). The client authenticates first (§2.1), so an
   unauthenticated confidential client learns nothing about a token; a public client names itself with `client_id`. A valid, unknown,
-  expired, already revoked or another client's token all answer `200` with an empty body (§2.2); a missing `token` is `invalid_request`; a
+  expired or already revoked token answers `200` with an empty body (§2.2: "invalid tokens do not cause an error response"). **A live token
+  issued to another client is refused** with `400 invalid_grant` and nothing is revoked (§2.1: "If this validation fails, the request is
+  refused and the client is informed of the error"; §2.2.1 defers to RFC 6749 §5.2, whose `invalid_grant` covers a grant "issued to
+  another client"); a missing `token` is `invalid_request`; a
   storage failure is `503` with `Retry-After` (§2.2.1). `token_type_hint` is a hint (§2.1: the server extends its search) and an
   unrecognised one is ignored, so `unsupported_token_type` is never sent: both kinds are revoked. Revoking a refresh token also revokes
   the access tokens, and the other refresh tokens, of its **grant** (§2.1 SHOULD); revoking an access token leaves its refresh token (§2.1

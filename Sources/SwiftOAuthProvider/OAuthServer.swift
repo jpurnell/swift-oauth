@@ -1674,11 +1674,14 @@ public actor OAuthServer {
     /// Looks the token up as the hinted kind first and then as the other: §2.1 makes the hint
     /// advisory ("if the server is unable to locate the token using the given hint, it MUST
     /// extend its search"). Revokes it only if it was issued to `authenticatedClientId` (§2.1:
-    /// the server verifies the token was issued to the requesting client). Anything else
-    /// returns normally and changes nothing: an unknown token, an expired or already revoked
-    /// one, and another client's. §2.2 says an invalid token is not an error, and answering
-    /// differently for another client's would tell a caller that a string it holds is a live
-    /// token.
+    /// the server verifies the token was issued to the requesting client). A *live* token issued
+    /// to another client is refused: this throws `OAuthError.invalidGrant(_:)` and revokes
+    /// nothing (§2.1: "the request is refused and the client is informed of the error"). Anything
+    /// that is not a live token returns normally and changes nothing: an unknown token, an
+    /// expired one, an already revoked one (§2.2: "invalid tokens do not cause an error
+    /// response"). The refusal does tell an authenticated client that a string it holds is a
+    /// live token of someone else's; RFC 7009 §5 accepts that, since guessing a token is worth
+    /// far more to an attacker than revoking it.
     ///
     /// Revoking a refresh token also revokes the access tokens of the same grant (§2.1,
     /// SHOULD), and the rest of the grant's refresh tokens. Revoking an access token does not
@@ -1708,18 +1711,34 @@ public actor OAuthServer {
                 guard case .valid(let held) = try await storage.validateAccessToken(token: token) else {
                     continue
                 }
-                if held.clientId == authenticatedClientId {
-                    try await storage.revokeAccessToken(token: token)
-                }
+                try Self.requireOwnership(held.clientId, authenticatedClientId)
+                try await storage.revokeAccessToken(token: token)
                 return
             case .refreshToken:
-                // 0 means not found, another client's, or already ended: nothing more to search
-                // for among refresh tokens, but the other kind has not been tried yet.
+                if let held = try await storage.getRefreshTokenInfo(token: token) {
+                    try Self.requireOwnership(held.clientId, authenticatedClientId)
+                }
+                // 0 means not found or already ended: nothing more to search for among refresh
+                // tokens, but the other kind has not been tried yet.
                 if try await storage.revokeRefreshToken(
                     token: token, clientId: authenticatedClientId) > 0 {
                     return
                 }
             }
+        }
+    }
+
+    /// Refuses a revocation of a token that was issued to a different client.
+    ///
+    /// RFC 7009 §2.1: the server "verifies whether the token was issued to the client making the
+    /// revocation request. If this validation fails, the request is refused and the client is
+    /// informed of the error." §2.2.1 defers to RFC 6749 §5.2 for the code, and `invalid_grant` is
+    /// the one defined for a grant "issued to another client". Nothing is revoked. This is only for
+    /// a token that is live: a string nobody holds, or a token already ended, is answered `200`
+    /// (§2.2, "invalid tokens do not cause an error response").
+    private static func requireOwnership(_ owner: String, _ requester: String) throws {
+        guard owner == requester else {
+            throw OAuthError.invalidGrant("The token was issued to another client.")
         }
     }
 

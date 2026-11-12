@@ -848,10 +848,12 @@ public struct OAuthHTTPHandler: Sendable {
     /// to that client.
     ///
     /// The answer is `200` with an empty body for success **and** for a token that is invalid,
-    /// expired, already revoked, unknown or another client's (§2.2: "invalid tokens do not
-    /// cause an error response since the client cannot handle such an error in a reasonable
-    /// way"), so the status says nothing about whether the token existed. A request with no
-    /// `token` is `invalid_request` (400). `token_type_hint` is advisory and an unrecognised one
+    /// expired, already revoked or unknown (§2.2: "invalid tokens do not cause an error
+    /// response since the client cannot handle such an error in a reasonable way"). A live token
+    /// issued to a *different* client is refused with `invalid_grant` (400) and nothing is
+    /// revoked (§2.1: "the request is refused and the client is informed of the error"; RFC
+    /// 6749 §5.2 names `invalid_grant` for a grant "issued to another client"). A request with
+    /// no `token` is `invalid_request` (400). `token_type_hint` is advisory and an unrecognised one
     /// is ignored. `unsupported_token_type` is never sent: both kinds are revoked.
     ///
     /// A storage failure is `503` with `Retry-After` (§2.2.1): the client must assume the token

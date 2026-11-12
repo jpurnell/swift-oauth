@@ -52,9 +52,9 @@ pass it unchanged.
 RFC 7009 is served by ``OAuthHTTPHandler/handleRevocationRequest(body:authHeader:)``, which a
 deployment routes at the path it declares in ``ServedCapabilities/revocation``; the metadata
 names `revocation_endpoint` exactly when that is declared. The client authenticates first. A
-valid, unknown, expired, already revoked or another client's token all answer `200` with an
-empty body (§2.2), so the status says nothing about whether the token existed; a store failure
-answers `503` (§2.2.1). Both kinds of token are revoked, the `token_type_hint` is only a hint,
+valid, unknown, expired or already revoked token answers `200` with an empty body (§2.2); a live
+token issued to another client is refused with `invalid_grant` and nothing is revoked (§2.1); a
+store failure answers `503` (§2.2.1). Both kinds of token are revoked, the `token_type_hint` is only a hint,
 and revoking a refresh token also revokes the access tokens of the same grant (§2.1).
 
 A *grant* is the authorization a user gave once. Every token issued from one code, or one
