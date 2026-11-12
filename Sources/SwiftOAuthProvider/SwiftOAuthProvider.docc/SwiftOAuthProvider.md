@@ -17,7 +17,9 @@ Most of the work of an authorization server is declining things precisely.
 
 - **A redirect URI that was not registered.** Checked before anything is issued and
   before any redirect happens, because redirecting to an unregistered URI to report the
-  error is the vulnerability itself.
+  error is the vulnerability itself. The match is exact, except that a loopback IP literal
+  (`127.0.0.1`, `[::1]`) registered over `http` may be presented with any port, as RFC 8252
+  requires; see ``RedirectURIMatcher``.
 - **An authorization code presented twice.** ``OAuthStorage`` consumes codes rather than
   reading them, so replay finds nothing.
 - **A DPoP proof presented twice.** ``OAuthServer/verifyDPoPProof(_:method:url:now:)`` claims

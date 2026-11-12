@@ -41,7 +41,20 @@ implementation and a conformance suite. It was not: `OAuthServer` took the concr
   bad proof or a replay. A proof refused by an earlier check does not spend its `jti`. `OAuthStorage` gained
   `sweepExpiredProofIdentifiers(now:)`.
 
+- **`RedirectURIMatcher`** (RFC 8252). `matches(registered:presented:)` is now the comparison at both places the
+  server checks a redirect URI (`handleAuthorizationRequest` and `validateAuthorizationRequest`). It is an exact
+  match, except that for a registered `http` URI whose host is the IP literal `127.0.0.1` or `[::1]` the port is
+  ignored (§7.3, §8.4) and scheme, host, path and query must still be equal. `localhost` is not a loopback literal
+  (§8.3) and stays an exact match; the two literals do not match each other. A native app on an ephemeral port can
+  now be honoured against a registration of `http://127.0.0.1/cb`. `nativeRegistrationProblem(_:)` says why a
+  native client may not register a URI.
+
 ### Known gaps
+- **RFC 8252 is partly implemented.** Not done: a claimed `https` redirect (§7.2) is matched as a plain string with
+  no check of the app-link association; a native client holding a secret is not treated as public (§8.5, not
+  examined); no refusal to auto-approve from a prior grant (§8.6, a consent-page decision). Clients that arrive by
+  Client ID Metadata Document are not subject to the native registration check below, though their redirects are
+  matched by the rule above.
 - **The 1.0.0-beta.4 entries and the "complete surface" table that say DPoP has "replay protection" were
   not true of the server.** `claimProofIdentifier` existed on the SQLite store and was called only by tests;
   nothing in `Sources/` verified a proof, so no proof was ever checked server-side. Fixed in part above: a
@@ -53,6 +66,13 @@ implementation and a conformance suite. It was not: `OAuthServer` took the concr
   check (§4.3), a check that a `jwk` carries no private key, and server-supplied nonces (§8).
 
 ### Changed
+- **A `.native` client can no longer register a redirect URI with a bare private-use scheme** (RFC 8252 §8.4:
+  a scheme with no period SHOULD be rejected). `registerClient` refuses `myapp:/cb` with `invalid_client_metadata`
+  (there is no `invalid_redirect_uri` case; RFC 7591 §3.2.2's name for it) and accepts only `https`, `http` with a
+  loopback IP literal, or a private-use scheme containing a `.`. `.web` clients keep today's rules. **Migration:**
+  register a reverse-DNS scheme such as `com.example.app:/cb`, and change the app to match; clients already stored
+  with a bare scheme still work, because the check is at registration only. FleetWatch's
+  `biz.keepitfun.fleetwatch://oauth` passes.
 - **`OAuthServer.init(storage:)` takes `any OAuthProviderStorage`.** Source compatible: a caller
   passing an `OAuthStorage` compiles unchanged. `TokenSubjectTests` and the device-endpoint tests
   now run against both stores.

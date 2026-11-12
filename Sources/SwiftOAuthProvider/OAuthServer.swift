@@ -824,7 +824,9 @@ public actor OAuthServer {
     /// - Parameter request: Client registration request
     /// - Returns: Registered client with generated credentials
     /// - Throws: `OAuthError.invalidRequest(nil)` if request is invalid, and
-    ///   `OAuthError.invalidClientMetadata(_:)` for a request naming `client_credentials`.
+    ///   `OAuthError.invalidClientMetadata(_:)` for a request naming `client_credentials`, or for
+    ///   a `.native` application whose redirect URI is not `https`, a loopback IP literal over
+    ///   `http`, or a reverse-DNS private-use scheme (RFC 8252 §7, §8.4).
     ///   Anyone who can reach this endpoint can register, so a client able to obtain tokens
     ///   with no user present is created by an operator instead (`createServiceClient`).
     public func registerClient(_ request: ClientRegistrationRequest) async throws -> ClientRegistrationResponse {
@@ -838,6 +840,16 @@ public actor OAuthServer {
         guard !request.grantTypes.contains(GrantType.clientCredentials.rawValue) else {
             throw OAuthError.invalidClientMetadata(
                 "client_credentials clients are created by an operator, not through registration.")
+        }
+        // RFC 8252 §7 and §8.4: what a native application may register. There is no
+        // `invalid_redirect_uri` case here (RFC 7591 §3.2.2 names that code); registration's
+        // existing refusal for metadata that cannot be honoured is `invalid_client_metadata`.
+        if request.applicationType == .native {
+            for uri in request.redirectUris {
+                if let problem = RedirectURIMatcher.nativeRegistrationProblem(uri) {
+                    throw OAuthError.invalidClientMetadata(problem)
+                }
+            }
         }
 
         // Generate credentials
@@ -1056,7 +1068,9 @@ public actor OAuthServer {
         }
 
         // Validate redirect URI
-        guard client.redirectUris.contains(request.redirectUri) else {
+        guard client.redirectUris.contains(where: {
+            RedirectURIMatcher.matches(registered: $0, presented: request.redirectUri)
+        }) else {
             throw OAuthError.invalidRequest(nil)
         }
 
@@ -1159,7 +1173,9 @@ public actor OAuthServer {
         }
 
         // Validate redirect URI
-        guard client.redirectUris.contains(request.redirectUri) else {
+        guard client.redirectUris.contains(where: {
+            RedirectURIMatcher.matches(registered: $0, presented: request.redirectUri)
+        }) else {
             throw OAuthError.invalidRequest(nil)
         }
 
