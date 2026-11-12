@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`OAuthServer(requireSubject:)`**, default `false`. With `true`, a grant that names nobody is refused with `server_error`:
+  `handleAuthorizationRequest(_:subject:)` refuses a `nil`, empty or blank subject, and `approveDeviceCode(userCode:subject:)` an empty or
+  blank one (a refused approval records nothing, so the right user can still approve the same code). For a deployment with user accounts,
+  so it cannot mint a token no per-user check or revocation can reach. No default subject is invented: a shared one would make revoking it
+  end every unattributed token at once. `client_credentials` (whose subject is the client) and tokens already stored with no subject are
+  untouched, and a server built without the argument behaves exactly as before.
+
 ## [1.0.0-beta.10] — 2026-10-31
 
 A token this package issued was refused on its first use. A client that parses
@@ -1799,7 +1807,7 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...HEAD
 [1.0.0-beta.10]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...v1.0.0-beta.8
