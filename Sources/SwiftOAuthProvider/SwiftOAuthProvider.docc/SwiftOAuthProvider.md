@@ -47,6 +47,38 @@ substitute to the same behaviour — including the parts that are easy to get su
 such as consuming a code exactly once under concurrent presentation — and both shipped stores
 pass it unchanged.
 
+### Revoking tokens
+
+RFC 7009 is served by ``OAuthHTTPHandler/handleRevocationRequest(body:authHeader:)``, which a
+deployment routes at the path it declares in ``ServedCapabilities/revocation``; the metadata
+names `revocation_endpoint` exactly when that is declared. The client authenticates first. A
+valid, unknown, expired, already revoked or another client's token all answer `200` with an
+empty body (§2.2), so the status says nothing about whether the token existed; a store failure
+answers `503` (§2.2.1). Both kinds of token are revoked, the `token_type_hint` is only a hint,
+and revoking a refresh token also revokes the access tokens of the same grant (§2.1).
+
+A *grant* is the authorization a user gave once. Every token issued from one code, or one
+approved device code, carries the same grant identifier, as does every token refreshed from
+them. It is what lets one revocation reach the access tokens made from a refresh token. Tokens
+stored before schema 11, and `client_credentials` and exchanged tokens, have none and revoke one
+at a time.
+
+``OAuthServer/revokeAllTokens(forSubject:)`` ends everything one user holds, on every client,
+including authorization codes not yet spent and device codes they approved and the device has
+not collected. Rows with no subject are not reachable by it; revoke those by client.
+
+### Refresh-token rotation
+
+``OAuthServer`` rotates refresh tokens by default (``RefreshTokenRotationPolicy/rotating``; RFC 9700
+§2.2.2 and §4.14.2). Each refresh returns a new refresh token and spends the one presented,
+keeping its scope, subject and expiry. A spent token presented again revokes the whole grant,
+since the server cannot tell an attacker from a client that lost a response, and the same
+happens to the tokens a replayed authorization code issued (§4.2.4). A client must therefore
+store the refresh token every response returns. There is **no grace window** for a client that
+lost a response: it is not in the RFC, and such a client signs in again.
+``RefreshTokenRotationPolicy/reusable`` keeps the earlier behaviour, one refresh token valid until
+it expires, for a deployment whose clients cannot yet do that.
+
 ### Metadata
 
 ``ServerMetadata`` is RFC 8414 and ``ProtectedResourceMetadata`` is RFC 9728. Both are
@@ -80,6 +112,8 @@ change to what the server accepts cannot drift from what it advertises.
 - ``TokenRequest``
 - ``TokenValidationResult``
 - ``RefreshTokenInfo``
+- ``RefreshTokenClaim``
+- ``RefreshTokenRotationPolicy``
 
 ### Advertising the server
 

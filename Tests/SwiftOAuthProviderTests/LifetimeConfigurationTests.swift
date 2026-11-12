@@ -341,10 +341,11 @@ struct LifetimeConfigurationTests {
         let redeemed = try await server.redeemDeviceCode(device.deviceCode, clientId: "tv-app")
         #expect(redeemed.expiresIn == 1799)
 
-        // Four access tokens and two refresh tokens: the code grant and the device grant each
-        // issue a refresh token; a refresh and an exchange do not.
+        // Four access tokens and three refresh tokens: the code grant and the device grant each
+        // issue a refresh token, and so does the refresh, because the default policy rotates
+        // (RFC 9700 §4.14.2); an exchange does not.
         #expect(try fixture.rows() == Rows(
-            accessTokens: 4, refreshTokens: 2, authorizationCodes: 1, consumedCodes: 1,
+            accessTokens: 4, refreshTokens: 3, authorizationCodes: 1, consumedCodes: 1,
             redeemedDeviceCodes: 1))
     }
 

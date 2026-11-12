@@ -96,6 +96,9 @@ public actor OAuthServer {
     /// Whether a grant that names nobody is refused. See the initializer's `requireSubject`.
     private let requireSubject: Bool
 
+    /// What the refresh grant does with the refresh token it is given.
+    private let rotationPolicy: RefreshTokenRotationPolicy
+
     /// The clock the device grant is judged by: issue, expiry, polling pace, and throttling.
     private let clock: @Sendable () -> Date
 
@@ -167,6 +170,19 @@ public actor OAuthServer {
     ///     invent a subject: a shared default would make revoking it end every unattributed
     ///     token at once. `client_credentials` is unaffected, because its subject is the client
     ///     itself, and tokens already stored with no subject are not touched.
+    ///   - rotationPolicy: What a refresh does with the refresh token presented. Defaults to
+    ///     ``RefreshTokenRotationPolicy/rotating``, as RFC 9700 §2.2.2 requires of a public client
+    ///     whose token is not sender-constrained: every refresh returns a **new** refresh token and
+    ///     spends the old one, and presenting a spent token again revokes the whole grant. Pass
+    ///     ``RefreshTokenRotationPolicy/reusable`` to keep the earlier behaviour, in which the same
+    ///     refresh token is returned and stays valid until it expires.
+    ///
+    ///     **This default changed behaviour for every deployment that did not set it.** A client
+    ///     that stores the first refresh token and never updates it breaks at its second refresh.
+    ///     A client that loses the response to a refresh and retries presents a spent token, and
+    ///     its grant is revoked (RFC 9700 §4.14.2 accepts that: the server cannot tell it from an
+    ///     attacker). **There is no grace window**; one is a known mitigation but is not in the
+    ///     RFC text and is not built here.
     ///   - now: The clock the device grant is judged by — when its codes expire, whether a poll
     ///     came too soon, and how long a user who typed wrong codes waits. Defaults to the
     ///     system clock; injectable so that pacing and expiry are testable without waiting.
@@ -186,9 +202,11 @@ public actor OAuthServer {
         clientCredentialsTokenLifetime: TimeInterval = 900,   // 15 minutes
         resourcePolicy: ResourceIndicatorPolicy? = nil,
         requireSubject: Bool = false,
+        rotationPolicy: RefreshTokenRotationPolicy = .rotating,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.requireSubject = requireSubject
+        self.rotationPolicy = rotationPolicy
         self.clock = now
         self.storage = storage
         self.issuer = issuer
@@ -312,6 +330,12 @@ public actor OAuthServer {
             // endpoint the consumer does not route makes a discoverable 404, and that failure
             // lands on their clients rather than here.
             introspectionEndpoint: served.introspection,
+            // Named only by a deployment that routes it, and with the methods the endpoint
+            // really accepts: it authenticates through the same `authenticateClient` the token
+            // endpoint does, so the lists are one list.
+            revocationEndpoint: served.revocation,
+            revocationEndpointAuthMethodsSupported: served.revocation == nil
+                ? nil : served.clientAuthenticationMethods.map(\.rawValue),
             pushedAuthorizationRequestEndpoint: served.pushedAuthorizationRequest,
             deviceAuthorizationEndpoint: served.deviceAuthorization,
             // Advertised only by a deployment that honours proofs. The algorithms are this
@@ -779,15 +803,18 @@ public actor OAuthServer {
             let refreshToken = TokenGenerator.generateRefreshToken()
             let now = Date()
 
-            // The user who approved, so introspection can say whose session this is.
+            // The user who approved, so introspection can say whose session this is. One grant
+            // for both, so revoking the refresh token ends the access token too.
+            let grantId = UUID().uuidString
             try await storage.saveAccessToken(
                 token: accessToken, clientId: clientId, scope: scope,
                 expiresAt: now.addingTimeInterval(accessTokenLifetime), audience: nil,
                 keyThumbprint: nil, certificateThumbprint: nil,
-                subject: subject)
+                subject: subject, grantId: grantId)
             try await storage.saveRefreshToken(
                 token: refreshToken, clientId: clientId, scope: scope,
-                expiresAt: now.addingTimeInterval(refreshTokenLifetime), subject: subject)
+                expiresAt: now.addingTimeInterval(refreshTokenLifetime), subject: subject,
+                grantId: grantId)
 
             return TokenResponse(
                 accessToken: accessToken,
@@ -1258,6 +1285,12 @@ public actor OAuthServer {
 
         // Consume the authorization code (single-use)
         guard let authCode = try await storage.consumeAuthorizationCode(code: code) else {
+            // Spent already, or never issued. RFC 9700 §4.2.4: a code presented a second time
+            // is a sign it was stolen, and the server "SHOULD revoke all tokens issued
+            // previously based on that code". The grant is named by the code, so a code
+            // nobody issued names a grant that has no tokens and this changes nothing. The
+            // answer is the same either way, so it does not tell which this was.
+            try await storage.revokeGrant(grantId: Self.grantIdentifier(forCode: code))
             throw OAuthError.invalidGrant(nil)
         }
 
@@ -1331,7 +1364,8 @@ public actor OAuthServer {
             audience = authCode.audience
         }
 
-        // Store tokens
+        // Store tokens, labelled with the grant this code began.
+        let grantId = Self.grantIdentifier(forCode: code)
         try await storage.saveAccessToken(
             token: accessToken,
             clientId: request.clientId,
@@ -1339,7 +1373,8 @@ public actor OAuthServer {
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
             audience: audience,
             keyThumbprint: nil, certificateThumbprint: nil,
-            subject: authCode.subject
+            subject: authCode.subject,
+            grantId: grantId
         )
 
         if let rt = refreshToken {
@@ -1348,7 +1383,8 @@ public actor OAuthServer {
                 clientId: request.clientId,
                 scope: authCode.scope,
                 expiresAt: now.addingTimeInterval(refreshTokenLifetime),
-                subject: authCode.subject
+                subject: authCode.subject,
+                grantId: grantId
             )
         }
 
@@ -1441,8 +1477,8 @@ public actor OAuthServer {
     }
 
     private func handleRefreshTokenGrant(_ request: TokenRequest) async throws -> TokenResponse {
-        // Only the access-token lifetime: this grant returns the refresh token it was given
-        // and issues no new one.
+        // Only the access-token lifetime: a refresh token's expiry is carried over from the
+        // token presented, so no refresh-token lifetime is computed here.
         let expiresIn = try wholeSeconds(of: .accessToken)
 
         // First check if client exists and can use refresh_token grant
@@ -1458,6 +1494,19 @@ public actor OAuthServer {
             throw OAuthError.invalidRequest(nil)
         }
 
+        switch rotationPolicy {
+        case .reusable:
+            return try await refreshKeepingToken(request, refreshToken: refreshToken, expiresIn: expiresIn)
+        case .rotating:
+            return try await refreshRotating(request, refreshToken: refreshToken, expiresIn: expiresIn)
+        }
+    }
+
+    /// The refresh grant under ``RefreshTokenRotationPolicy/reusable``: a new access token, and
+    /// the refresh token presented is returned as it came and stays valid.
+    private func refreshKeepingToken(
+        _ request: TokenRequest, refreshToken: String, expiresIn: Int
+    ) async throws -> TokenResponse {
         // Validate refresh token
         guard let tokenInfo = try await storage.getRefreshTokenInfo(token: refreshToken) else {
             throw OAuthError.invalidGrant(nil)
@@ -1467,25 +1516,13 @@ public actor OAuthServer {
             throw OAuthError.invalidGrant(nil)
         }
 
-        // Generate new access token
-        let newAccessToken = TokenGenerator.generateAccessToken()
-        let now = Date()
-
         // Checked on refresh too. A token that could shed its audience by being refreshed
         // would make the binding good only until the first renewal.
         let audience = try resourcePolicy.audience(for: request.resource)
 
-        try await storage.saveAccessToken(
-            token: newAccessToken,
-            clientId: request.clientId,
-            scope: tokenInfo.scope,
-            expiresAt: now.addingTimeInterval(accessTokenLifetime),
-            audience: audience,
-            keyThumbprint: nil, certificateThumbprint: nil,
-            subject: tokenInfo.subject
-        )
+        let newAccessToken = try await issueRefreshedAccessToken(
+            request, info: tokenInfo, audience: audience)
 
-        // Optionally rotate refresh token (we'll keep the same one for simplicity)
         return TokenResponse(
             accessToken: newAccessToken,
             tokenType: "Bearer",
@@ -1493,6 +1530,71 @@ public actor OAuthServer {
             refreshToken: refreshToken, // Return same refresh token
             scope: tokenInfo.scope
         )
+    }
+
+    /// The refresh grant under ``RefreshTokenRotationPolicy/rotating`` — RFC 9700 §4.14.2.
+    ///
+    /// The presented token is spent first, atomically, and only for the client it was issued
+    /// to; a successor is then issued under the same grant. A spent token presented again
+    /// revokes the grant, which is every access and refresh token descended from the code that
+    /// began it, and answers `invalid_grant` like any dead token.
+    ///
+    /// Everything that can be refused is decided before the token is spent, because a spent
+    /// token cannot be put back: a `resource` this server refuses must not cost the client its
+    /// refresh token.
+    private func refreshRotating(
+        _ request: TokenRequest, refreshToken: String, expiresIn: Int
+    ) async throws -> TokenResponse {
+        let audience = try resourcePolicy.audience(for: request.resource)
+
+        let info: RefreshTokenInfo
+        switch try await storage.claimRefreshToken(
+            token: refreshToken, clientId: request.clientId,
+            defaultGrantId: UUID().uuidString, now: Date()) {
+        case .claimed(let claimed):
+            info = claimed
+        case .replayed(let grantId):
+            try await storage.revokeGrant(grantId: grantId)
+            throw OAuthError.invalidGrant(nil)
+        case .unusable:
+            throw OAuthError.invalidGrant(nil)
+        }
+
+        // The successor has what the original had, including its expiry: rotation replaces a
+        // credential, it does not extend the period a user agreed to.
+        let successor = TokenGenerator.generateRefreshToken()
+        try await storage.saveRefreshToken(
+            token: successor, clientId: info.clientId, scope: info.scope,
+            expiresAt: info.expiresAt, subject: info.subject, grantId: info.grantId)
+
+        let newAccessToken = try await issueRefreshedAccessToken(request, info: info, audience: audience)
+
+        return TokenResponse(
+            accessToken: newAccessToken,
+            tokenType: "Bearer",
+            expiresIn: expiresIn,
+            refreshToken: successor,
+            scope: info.scope
+        )
+    }
+
+    /// Stores and returns the access token a refresh issues, under the refresh token's grant.
+    private func issueRefreshedAccessToken(
+        _ request: TokenRequest, info: RefreshTokenInfo, audience: URL?
+    ) async throws -> String {
+        let newAccessToken = TokenGenerator.generateAccessToken()
+        try await storage.saveAccessToken(
+            token: newAccessToken,
+            clientId: request.clientId,
+            scope: info.scope,
+            expiresAt: Date().addingTimeInterval(accessTokenLifetime),
+            audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
+            subject: info.subject,
+            // The same grant as the refresh token, so revoking either ends both.
+            grantId: info.grantId
+        )
+        return newAccessToken
     }
 
     // MARK: - Token Validation
@@ -1550,9 +1652,110 @@ public actor OAuthServer {
 
     /// Revokes an access token
     ///
+    /// Only an access token, and without asking who is asking. For RFC 7009 revocation of
+    /// either kind of token on behalf of an authenticated client, see
+    /// ``revoke(token:tokenTypeHint:authenticatedClientId:)``.
+    ///
     /// - Parameter token: The token to revoke
     public func revokeToken(_ token: String) async throws {
         try await storage.revokeAccessToken(token: token)
+    }
+
+    /// The `token_type_hint` of an RFC 7009 request.
+    public enum TokenTypeHint: String, Sendable {
+        /// `access_token`.
+        case accessToken = "access_token"
+        /// `refresh_token`.
+        case refreshToken = "refresh_token"
+    }
+
+    /// Revokes a token on behalf of the client that presented it — RFC 7009 §2.
+    ///
+    /// Looks the token up as the hinted kind first and then as the other: §2.1 makes the hint
+    /// advisory ("if the server is unable to locate the token using the given hint, it MUST
+    /// extend its search"). Revokes it only if it was issued to `authenticatedClientId` (§2.1:
+    /// the server verifies the token was issued to the requesting client). Anything else
+    /// returns normally and changes nothing: an unknown token, an expired or already revoked
+    /// one, and another client's. §2.2 says an invalid token is not an error, and answering
+    /// differently for another client's would tell a caller that a string it holds is a live
+    /// token.
+    ///
+    /// Revoking a refresh token also revokes the access tokens of the same grant (§2.1,
+    /// SHOULD), and the rest of the grant's refresh tokens. Revoking an access token does not
+    /// touch its refresh token (§2.1 says it *may*; ending a session because one short-lived
+    /// token was discarded is not what a client asking for that wants). A token with no grant
+    /// (one issued before schema 11, a `client_credentials` token) is revoked on its own.
+    ///
+    /// The caller authenticates the client first. ``OAuthHTTPHandler/handleRevocationRequest(body:authHeader:)``
+    /// does; a caller of this method directly must.
+    ///
+    /// `unsupported_token_type` (§2.2.1) is never the answer: this server revokes both kinds,
+    /// and an unrecognised hint is ignored.
+    ///
+    /// - Parameters:
+    ///   - token: The token to revoke.
+    ///   - tokenTypeHint: What the client says it is, if anything.
+    ///   - authenticatedClientId: The client that authenticated to ask.
+    /// - Throws: Only if storage fails, which the HTTP handler answers with 503 (§2.2.1).
+    public func revoke(
+        token: String, tokenTypeHint: TokenTypeHint?, authenticatedClientId: String
+    ) async throws {
+        let order: [TokenTypeHint] = tokenTypeHint == .refreshToken
+            ? [.refreshToken, .accessToken] : [.accessToken, .refreshToken]
+        for kind in order {
+            switch kind {
+            case .accessToken:
+                guard case .valid(let held) = try await storage.validateAccessToken(token: token) else {
+                    continue
+                }
+                if held.clientId == authenticatedClientId {
+                    try await storage.revokeAccessToken(token: token)
+                }
+                return
+            case .refreshToken:
+                // 0 means not found, another client's, or already ended: nothing more to search
+                // for among refresh tokens, but the other kind has not been tried yet.
+                if try await storage.revokeRefreshToken(
+                    token: token, clientId: authenticatedClientId) > 0 {
+                    return
+                }
+            }
+        }
+    }
+
+    /// The grant a code begins, named by the code.
+    ///
+    /// Derived rather than stored, so a code that is presented a second time (RFC 9700 §4.2.4)
+    /// names the grant its first redemption created without the store having to remember which
+    /// code made which tokens. A digest, so the identifier on a token row is not the code.
+    static func grantIdentifier(forCode code: String) -> String {
+        "code:" + OAuthStorage.sha256Hex("authorization_code:" + code)
+    }
+
+    /// Ends every token a user holds, on every client, and the grants still on their way.
+    ///
+    /// The operational half of disabling a user: after it, no access or refresh token naming
+    /// `subject` is honoured, an authorization code issued for them and not yet redeemed fails,
+    /// and a device code they approved and the device has not collected fails. Without the last
+    /// two, a revoked user's pending grant would mint fresh tokens a moment later.
+    ///
+    /// Tokens made by token exchange carry the subject token's subject, so they are covered.
+    /// A `client_credentials` token's subject is its client's own identifier (RFC 9068 §2.2), so
+    /// revoking that identifier here revokes the client's tokens, by design.
+    ///
+    /// **Rows with no subject are not reachable.** Tokens issued before schema 9, and any grant
+    /// the deployment made without saying who approved it (see `requireSubject`), have no
+    /// subject to match; revoke those by client. A device code names nobody until a user answers
+    /// it, so a pending one is out of reach too.
+    ///
+    /// - Parameter subject: The user, as the deployment passed it when approving their grant.
+    /// - Returns: How many credentials were ended: tokens, unspent codes and approved device
+    ///   codes that were live. Zero for a subject nobody holds anything for, and for a second
+    ///   call. Meant to be logged.
+    /// - Throws: Only if storage fails.
+    @discardableResult
+    public func revokeAllTokens(forSubject subject: String) async throws -> Int {
+        try await storage.revokeAllTokens(forSubject: subject)
     }
 
     // MARK: - Client Authentication
@@ -1615,6 +1818,29 @@ public actor OAuthServer {
 }
 
 // MARK: - Server Metadata
+
+/// What the refresh grant does with the refresh token it is given.
+///
+/// RFC 9700 §2.2.2: "Refresh tokens for public clients MUST be sender-constrained or use refresh
+/// token rotation." The refresh tokens this provider issues are not sender-constrained, so
+/// rotation is the default.
+public enum RefreshTokenRotationPolicy: Sendable, Equatable {
+
+    /// Every refresh returns a new refresh token and spends the old one (RFC 9700 §4.14.2).
+    ///
+    /// Presenting a spent refresh token revokes the whole grant, every access and refresh token
+    /// descended from the authorization the user gave, because the server cannot tell the
+    /// attacker from the client that lost a response. A successor keeps the original's scope,
+    /// subject and expiry.
+    case rotating
+
+    /// The refresh token is returned as presented and stays valid until it expires.
+    ///
+    /// What this provider did before rotation existed. **Not RFC 9700 §2.2.2 conforming** for a
+    /// public client; an explicit opt-out for a deployment whose clients cannot yet store a
+    /// replacement token.
+    case reusable
+}
 
 /// Who this deployment is, as a protected resource — RFC 9728 §2.
 ///
@@ -1874,6 +2100,18 @@ public struct ServerMetadata: Codable, Sendable {
     /// completely it is implemented: a client does not guess endpoints.
     public let introspectionEndpoint: String?
 
+    /// Where a client revokes a token — RFC 7009, advertised by RFC 8414 §2.
+    ///
+    /// Present exactly when the deployment declares ``ServedCapabilities/revocation``, so the
+    /// document never names an endpoint nobody routes.
+    public let revocationEndpoint: String?
+
+    /// How a client authenticates to the revocation endpoint — RFC 8414 §2.
+    ///
+    /// Absent whenever ``revocationEndpoint`` is. When present it is the token endpoint's own
+    /// list: both authenticate through the same code, so they cannot differ.
+    public let revocationEndpointAuthMethodsSupported: [String]?
+
     /// Where a client pushes an authorization request — RFC 9126 §5.
     public let pushedAuthorizationRequestEndpoint: String?
 
@@ -1897,6 +2135,8 @@ public struct ServerMetadata: Codable, Sendable {
         case tokenEndpointAuthMethodsSupported = "token_endpoint_auth_methods_supported"
         case scopesSupported = "scopes_supported"
         case introspectionEndpoint = "introspection_endpoint"
+        case revocationEndpoint = "revocation_endpoint"
+        case revocationEndpointAuthMethodsSupported = "revocation_endpoint_auth_methods_supported"
         case pushedAuthorizationRequestEndpoint = "pushed_authorization_request_endpoint"
         case deviceAuthorizationEndpoint = "device_authorization_endpoint"
         case dpopSigningAlgValuesSupported = "dpop_signing_alg_values_supported"

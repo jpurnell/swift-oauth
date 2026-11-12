@@ -85,6 +85,10 @@ public protocol OAuthProviderStorage: Sendable {
     // MARK: Access tokens
 
     /// Saves an access token under its digest.
+    ///
+    /// `grantId` is the grant this token was issued under, or `nil` for a token that belongs to
+    /// none (a `client_credentials` or exchanged token, or a caller that does not track grants).
+    /// See ``revokeGrant(grantId:)``.
     func saveAccessToken(
         token: String,
         clientId: String,
@@ -93,7 +97,8 @@ public protocol OAuthProviderStorage: Sendable {
         audience: URL?,
         keyThumbprint: String?,
         certificateThumbprint: String?,
-        subject: String?
+        subject: String?,
+        grantId: String?
     ) async throws
 
     /// Whether a token may be honoured, and what is known about it when it may.
@@ -109,16 +114,92 @@ public protocol OAuthProviderStorage: Sendable {
     /// Revokes every access and refresh token issued to a client.
     func revokeAllTokensForClient(clientId: String) async throws
 
+    /// Ends everything one user holds: access and refresh tokens on every client, authorization
+    /// codes not yet spent, and device codes the user approved but the device has not redeemed.
+    ///
+    /// The codes matter. Revoking only the tokens would leave a disabled user's approved device
+    /// grant, or a code issued a moment ago, to mint fresh ones afterwards. A code is ended by
+    /// marking it spent, a device code by marking it redeemed, so each then fails as any spent
+    /// credential does.
+    ///
+    /// **Rows with no subject are not reachable.** A token, code or approval stored with a
+    /// `nil` subject (every row from before schema 9, and any grant a deployment made without
+    /// saying who approved) matches no subject and is left alone; those are revocable by client
+    /// only. A device code names nobody until a user answers it, so a pending one is likewise
+    /// out of reach.
+    ///
+    /// - Parameter subject: The user, exactly as it was recorded when the grant was made.
+    /// - Returns: How many credentials changed state: those that were live and now are not.
+    ///   Credentials already revoked, spent or redeemed are not counted, so a second call
+    ///   returns 0, as does a subject nobody holds anything for.
+    @discardableResult
+    func revokeAllTokens(forSubject subject: String) async throws -> Int
+
     // MARK: Refresh tokens
 
     /// Saves a refresh token under its digest.
+    ///
+    /// `grantId` is the grant this token was issued under, or `nil`. See ``revokeGrant(grantId:)``.
     func saveRefreshToken(
-        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?
+        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?,
+        grantId: String?
     ) async throws
 
-    /// A live refresh token's client, scope, expiry and subject; `nil` if it is unknown,
-    /// expired or revoked.
+    /// A live refresh token's client, scope, expiry, subject and grant; `nil` if it is unknown,
+    /// expired, revoked, or already spent by ``claimRefreshToken(token:clientId:defaultGrantId:now:)``.
     func getRefreshTokenInfo(token: String) async throws -> RefreshTokenInfo?
+
+    /// Spends a refresh token so that it can be exchanged for a successor — rotation, RFC 9700
+    /// §4.14.2 — once, and remembers that it was spent.
+    ///
+    /// The row is kept, marked, not deleted: "information about the relationship is retained by
+    /// the authorization server", so a second presentation reads as ``RefreshTokenClaim/replayed(grantId:)``
+    /// and not as an unknown token. Concurrent callers presenting one token are answered
+    /// ``RefreshTokenClaim/claimed(_:)`` exactly once between them and the rest as replays.
+    /// A token spent this way is no longer returned by ``getRefreshTokenInfo(token:)``.
+    ///
+    /// A token with no grant (from before schema 11, or saved with none) is given
+    /// `defaultGrantId` by this call, so that its successors share a grant and its replay can
+    /// reach them. A token that has one keeps it.
+    ///
+    /// Only the client the token was issued to can claim it, or replay it: for any other client
+    /// the answer is ``RefreshTokenClaim/unusable`` and the token is left as it was.
+    ///
+    /// - Parameters:
+    ///   - token: The refresh token as presented.
+    ///   - clientId: The authenticated client presenting it.
+    ///   - defaultGrantId: A grant to give the token if it has none.
+    ///   - now: The time to judge expiry by.
+    func claimRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, now: Date
+    ) async throws -> RefreshTokenClaim
+
+    /// Revokes a refresh token on behalf of the client it was issued to, and with it the rest of
+    /// its grant — RFC 7009 §2.1: "the authorization server SHOULD also invalidate all access
+    /// tokens based on the same authorization grant".
+    ///
+    /// Finds the row in whatever state it is in. An expired or already revoked token is still
+    /// the client's to revoke, and the grant's other tokens may still be live. A token issued
+    /// to another client is left exactly as it is and reads as not found: a client must not be
+    /// able to end another's grant, or to learn that a token exists.
+    ///
+    /// A token with no grant (every row from before schema 11) revokes only itself.
+    ///
+    /// - Returns: How many live tokens were revoked, the refresh token included (a refresh token
+    ///   already spent by rotation is not live and is not counted); 0 for an unknown token, another client's, or one whose grant was already ended.
+    @discardableResult
+    func revokeRefreshToken(token: String, clientId: String) async throws -> Int
+
+    /// Revokes every access and refresh token issued under one grant.
+    ///
+    /// A grant is the authorization a user gave once: the label the server puts on the access
+    /// and refresh tokens that one code (or approved device code) produced, and on every token
+    /// refreshed from them. Tokens with no grant are never matched.
+    ///
+    /// - Returns: How many tokens changed from live to revoked. 0 for an unknown grant and for
+    ///   one already ended.
+    @discardableResult
+    func revokeGrant(grantId: String) async throws -> Int
 
     // MARK: Device codes (RFC 8628)
 
@@ -204,6 +285,39 @@ public protocol OAuthProviderStorage: Sendable {
     /// because a proof that old fails the freshness check before it reaches the store.
     @discardableResult
     func sweepExpiredProofIdentifiers(now: Date) async throws -> Int
+}
+
+extension OAuthProviderStorage {
+
+    /// Saves an access token that belongs to no grant.
+    ///
+    /// The requirement takes a `grantId`; this is the call as it was before grants existed, for
+    /// a caller (a `client_credentials` token, a test) that has none.
+    public func saveAccessToken(
+        token: String,
+        clientId: String,
+        scope: String?,
+        expiresAt: Date,
+        audience: URL?,
+        keyThumbprint: String?,
+        certificateThumbprint: String?,
+        subject: String?
+    ) async throws {
+        try await saveAccessToken(
+            token: token, clientId: clientId, scope: scope, expiresAt: expiresAt,
+            audience: audience, keyThumbprint: keyThumbprint,
+            certificateThumbprint: certificateThumbprint, subject: subject, grantId: nil)
+    }
+
+    /// Saves a refresh token that belongs to no grant. See
+    /// ``saveAccessToken(token:clientId:scope:expiresAt:audience:keyThumbprint:certificateThumbprint:subject:)``.
+    public func saveRefreshToken(
+        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?
+    ) async throws {
+        try await saveRefreshToken(
+            token: token, clientId: clientId, scope: scope, expiresAt: expiresAt,
+            subject: subject, grantId: nil)
+    }
 }
 
 extension OAuthStorage: OAuthProviderStorage {}

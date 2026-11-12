@@ -85,6 +85,13 @@ introspection (RFC 7662), revocation (RFC 7009), dynamic registration (RFC 7591)
 DPoP is partial. The client half creates proofs and the server can verify one and refuse a replayed
 `jti` (`OAuthServer.verifyDPoPProof`), but the token endpoint does not yet issue DPoP-bound tokens; see
 the CHANGELOG's "Known gaps".
+On the provider, refresh tokens **rotate by default** (RFC 9700 §2.2.2, §4.14.2): each refresh returns a
+new refresh token and spends the old one, and presenting a spent one revokes the whole grant. A client
+must store the token every response returns. `OAuthServer(rotationPolicy: .reusable)` keeps the earlier
+behaviour. The provider also serves RFC 7009 revocation (route
+`OAuthHTTPHandler.handleRevocationRequest` at `ServedCapabilities.revocation`; both token kinds, and
+revoking a refresh token ends the access tokens of its grant), and `revokeAllTokens(forSubject:)` ends
+everything one user holds. The SQLite schema is at 11, one way.
 
 Client credentials is on both halves, and on the provider it is **opt-in**. A deployment
 issues the grant only if it lists `.clientCredentials` in its `ServedCapabilities`; `.core`
