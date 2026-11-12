@@ -114,11 +114,9 @@ extension TokenTransport {
 /// No more than ``OAuthResponseTooLarge/maximumResponseBytes`` of a response body is read. A
 /// longer one cancels the transfer and throws ``OAuthResponseTooLarge``.
 ///
-/// `URLSession` is thread-safe and documented as such, but corelibs-foundation has not always
-/// marked it `Sendable` — so the stored property passes the check on Apple platforms and has
-/// failed on Linux alone. The value is immutable and never mutated after init.
-// Justification: URLSession is thread-safe; the stored session is immutable after init.
-public struct URLSessionTokenTransport: TokenTransport, @unchecked Sendable {
+/// `URLSession` is `Sendable` on every platform this package builds for, and the stored value
+/// is never mutated after init, so this type's `Sendable` conformance is checked, not asserted.
+public struct URLSessionTokenTransport: TokenTransport, Sendable {
 
     private let session: URLSession
 

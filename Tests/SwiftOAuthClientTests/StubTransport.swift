@@ -95,25 +95,19 @@ actor StubTransport: TokenTransport {
 ///
 /// Waiting for a token to expire in real time would make the suite slow and, worse,
 /// timing-dependent: passing on an idle machine and failing on a loaded one.
-// Justification: mutable `instant` is guarded by `lock`; no other state exists.
-final class TestClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var instant: Date
+final class TestClock: Sendable {
+    private let instant: Guarded<Date>
 
     init(at instant: Date = Date(timeIntervalSince1970: 1_767_225_600)) {
-        self.instant = instant
+        self.instant = Guarded(instant)
     }
 
     var now: Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return instant
+        instant.withLock { $0 }
     }
 
     func advance(by interval: TimeInterval) {
-        lock.lock()
-        defer { lock.unlock() }
-        instant = instant.addingTimeInterval(interval)
+        instant.withLock { $0 = $0.addingTimeInterval(interval) }
     }
 }
 

@@ -115,24 +115,23 @@ struct DeviceAuthorizationWireTests {
 struct DeviceSignInWireTests {
 
     /// One scripted answer per request, in order.
-    // Justification: `answers` and `index` are read and written only under `lock`.
-    final class Script: @unchecked Sendable {
-        private let lock = NSLock()
+    final class Script: Sendable {
         private let answers: [RedirectWireServer.Behaviour]
-        private var index = 0
+        private let index = Guarded(0)
 
         init(_ answers: [RedirectWireServer.Behaviour]) {
             self.answers = answers
         }
 
         func next() -> RedirectWireServer.Behaviour {
-            lock.lock()
-            defer { lock.unlock() }
-            guard index < answers.count else {
+            let position = index.withLock { index -> Int in
+                defer { index += 1 }
+                return index
+            }
+            guard position < answers.count else {
                 return .respond(status: 500, headers: [:], body: "")
             }
-            defer { index += 1 }
-            return answers[index]
+            return answers[position]
         }
     }
 

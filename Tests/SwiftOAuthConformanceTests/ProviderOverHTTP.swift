@@ -94,21 +94,15 @@ actor ProviderOverHTTP: DeviceAuthorizationTransport, IntrospectionTransport {
 }
 
 /// A clock the provider reads and a test moves, shared by the halves under test.
-// Justification: mutable `current` is read and written only under `lock`.
-final class SharedClock: @unchecked Sendable {
-    private var current = Date(timeIntervalSince1970: 1_800_000_000)
-    private let lock = NSLock()
+final class SharedClock: Sendable {
+    private let current = Guarded(Date(timeIntervalSince1970: 1_800_000_000))
 
     var now: Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return current
+        current.withLock { $0 }
     }
 
     func advance(_ seconds: TimeInterval) {
-        lock.lock()
-        defer { lock.unlock() }
-        current = current.addingTimeInterval(seconds)
+        current.withLock { $0 = $0.addingTimeInterval(seconds) }
     }
 }
 

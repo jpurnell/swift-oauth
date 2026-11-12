@@ -236,9 +236,13 @@ enum CredentialRequest {
         defer { carrier.finishTasksAndInvalidate() }
         let task = carrier.dataTask(with: request)
         #else
-        let receiver = trust.map {
-            PinnedTrustReceiver(trust: $0, limit: limit, endpoint: endpoint, answer: answer)
-        } ?? ResponseReceiver(limit: limit, endpoint: endpoint, answer: answer)
+        let receiver: any URLSessionDataDelegate
+        if let trust {
+            receiver = PinnedTrustReceiver(
+                trust: trust, limit: limit, endpoint: endpoint, answer: answer)
+        } else {
+            receiver = ResponseReceiver(limit: limit, endpoint: endpoint, answer: answer)
+        }
         let task = session.dataTask(with: request)
         // Assigned before the task starts; a task delegate takes precedence over the
         // session's for the callbacks it implements.
@@ -302,10 +306,8 @@ enum CredentialRequest {
 
 /// Holds the default session where a `static let` can keep it.
 ///
-/// `URLSession` is documented as thread-safe on every platform but has not been declared
-/// `Sendable` by every toolchain this package builds with.
-// Justification: URLSession is thread-safe; the stored session is immutable after init.
-private struct SessionBox: @unchecked Sendable {
+/// `URLSession` is `Sendable`, so this box's conformance is checked by the compiler.
+private struct SessionBox: Sendable {
     let session: URLSession
 }
 
@@ -331,8 +333,7 @@ struct TestServerTrust: Sendable {
 /// One per request. It declines every redirect — the `3xx` then arrives as the response, and
 /// that response says everything there is to report — and it counts the body as it comes,
 /// cancelling the transfer the moment the count passes the limit.
-// Justification: every mutable field is in `state`, which is read and written only under `lock`.
-class ResponseReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+final class ResponseReceiver: NSObject, URLSessionDataDelegate, Sendable {
 
     /// What has arrived so far.
     private struct State {
@@ -345,8 +346,7 @@ class ResponseReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let limit: Int
     private let endpoint: String
     private let answer: AsyncThrowingStream<(Data, URLResponse), any Error>.Continuation
-    private let lock = NSLock()
-    private var state = State()
+    private let state = Guarded(State())
 
     /// Creates a receiver.
     ///
@@ -365,10 +365,8 @@ class ResponseReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
 
     /// Runs `body` with the state locked.
-    private func withState<Value>(_ body: (inout State) -> Value) -> Value {
-        lock.lock()
-        defer { lock.unlock() }
-        return body(&state)
+    private func withState<Value: Sendable>(_ body: @Sendable (inout State) -> Value) -> Value {
+        state.withLock(body)
     }
 
     func urlSession(
@@ -493,14 +491,16 @@ class ResponseReceiver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
 #if !canImport(FoundationNetworking)
 /// A receiver that also answers the TLS server-trust challenge, for tests.
 ///
-/// A subclass, so that the ordinary receiver does not implement the challenge method at all.
-/// A task delegate that implemented it would be asked in place of a caller's session
-/// delegate, and "perform default handling" from there would skip certificate pinning the
-/// caller had set up. Only a request given a ``TestServerTrust`` gets this class.
-// Justification: adds one immutable field to a superclass whose mutable state is lock-guarded.
-final class PinnedTrustReceiver: ResponseReceiver, @unchecked Sendable {
+/// Separate from ``ResponseReceiver``, so that the ordinary receiver does not implement the
+/// challenge method at all. A task delegate that implemented it would be asked in place of a
+/// caller's session delegate, and "perform default handling" from there would skip
+/// certificate pinning the caller had set up. Only a request given a ``TestServerTrust`` gets
+/// this class. It owns an ordinary receiver and passes the four body callbacks to it, so the
+/// redirect refusal and the size limit are the same code either way.
+final class PinnedTrustReceiver: NSObject, URLSessionDataDelegate, Sendable {
 
     private let trust: TestServerTrust
+    private let receiver: ResponseReceiver
 
     /// Creates a receiver that accepts the certificates `trust` names.
     ///
@@ -516,7 +516,38 @@ final class PinnedTrustReceiver: ResponseReceiver, @unchecked Sendable {
         answer: AsyncThrowingStream<(Data, URLResponse), any Error>.Continuation
     ) {
         self.trust = trust
-        super.init(limit: limit, endpoint: endpoint, answer: answer)
+        self.receiver = ResponseReceiver(limit: limit, endpoint: endpoint, answer: answer)
+        super.init()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        receiver.urlSession(
+            session, task: task, willPerformHTTPRedirection: response, newRequest: request,
+            completionHandler: completionHandler)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void
+    ) {
+        receiver.urlSession(
+            session, dataTask: dataTask, didReceive: response, completionHandler: completionHandler)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        receiver.urlSession(session, dataTask: dataTask, didReceive: data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        receiver.urlSession(session, task: task, didCompleteWithError: error)
     }
 
     func urlSession(

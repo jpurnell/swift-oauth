@@ -5,25 +5,19 @@ import CSQLite
 @testable import SwiftOAuthProvider
 
 /// A clock a test moves by hand.
-// Justification: mutable `current` is read and written only under `lock`.
-final class ManualClock: @unchecked Sendable {
-    private var current: Date
-    private let lock = NSLock()
+final class ManualClock: Sendable {
+    private let current: Guarded<Date>
 
     init(_ start: Date = Date(timeIntervalSince1970: 1_800_000_000)) {
-        current = start
+        current = Guarded(start)
     }
 
     var now: Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return current
+        current.withLock { $0 }
     }
 
     func advance(_ seconds: TimeInterval) {
-        lock.lock()
-        defer { lock.unlock() }
-        current = current.addingTimeInterval(seconds)
+        current.withLock { $0 = $0.addingTimeInterval(seconds) }
     }
 }
 

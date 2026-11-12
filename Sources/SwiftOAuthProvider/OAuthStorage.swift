@@ -41,8 +41,10 @@ public actor OAuthStorage {
 
     // MARK: - Properties
 
-    // Justification: SQLite with serialized threading mode is thread-safe; all access is through actor-isolated methods
-    private nonisolated(unsafe) let db: OpaquePointer
+    /// Owns the open SQLite handle and closes it when the last reference goes. It is held as
+    /// this actor's isolated state, so every use of the handle is serialized by the actor.
+    private let handle: DatabaseHandle
+    private var db: OpaquePointer { handle.pointer }
     private let path: String
 
     // MARK: - Initialization
@@ -84,14 +86,10 @@ public actor OAuthStorage {
             throw OAuthStorageError.databaseError("Database handle is nil")
         }
 
-        self.db = validDb
+        self.handle = DatabaseHandle(validDb)
 
         // Enable foreign keys and create tables
         try Self.initializeDatabase(db: validDb, targetVersion: schemaVersion)
-    }
-
-    deinit {
-        sqlite3_close(db)
     }
 
     /// The schema this build expects.
@@ -1654,3 +1652,19 @@ public enum OAuthStorageError: Error, Sendable {
 // MARK: - SQLite Helpers
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+/// An open SQLite connection, closed in its own `deinit`.
+///
+/// Deliberately not `Sendable`: it is only ever held as isolated state of ``OAuthStorage``,
+/// so the compiler, rather than a comment, is what keeps it on one actor.
+private final class DatabaseHandle {
+    let pointer: OpaquePointer
+
+    init(_ pointer: OpaquePointer) {
+        self.pointer = pointer
+    }
+
+    deinit {
+        sqlite3_close(pointer)
+    }
+}

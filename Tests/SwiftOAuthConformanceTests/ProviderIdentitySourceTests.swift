@@ -163,20 +163,14 @@ struct ProviderIdentitySourceTests {
 }
 
 /// Keeps every refusal reason the store reports to the operator.
-// Justification: `stored` is read and written only under `lock`.
-final class Refusals: @unchecked Sendable {
-    private var stored: [OAuthIdentityRefusal] = []
-    private let lock = NSLock()
+final class Refusals: Sendable {
+    private let stored = Guarded<[OAuthIdentityRefusal]>([])
 
     func record(_ refusal: OAuthIdentityRefusal) {
-        lock.lock()
-        defer { lock.unlock() }
-        stored.append(refusal)
+        stored.withLock { $0.append(refusal) }
     }
 
     var seen: [OAuthIdentityRefusal] {
-        lock.lock()
-        defer { lock.unlock() }
-        return stored
+        stored.withLock { $0 }
     }
 }

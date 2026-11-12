@@ -402,22 +402,16 @@ actor RecordingAudit: IdentityAudit {
 }
 
 /// Keeps every refusal reason the store reports to the operator.
-// Justification: `stored` is read and written only under `lock`.
-final class Observed: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: [OAuthIdentityRefusal] = []
+final class Observed: Sendable {
+    private let stored = Guarded<[OAuthIdentityRefusal]>([])
 
     var reasons: [OAuthIdentityRefusal] {
-        lock.lock()
-        defer { lock.unlock() }
-        return stored
+        stored.withLock { $0 }
     }
 
     var record: OAuthIdentityStore.RefusalObserver {
         { [self] reason in
-            lock.lock()
-            defer { lock.unlock() }
-            stored.append(reason)
+            stored.withLock { $0.append(reason) }
         }
     }
 }

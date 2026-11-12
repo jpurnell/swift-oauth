@@ -112,8 +112,7 @@ public struct TokenIntrospector: Sendable {
 /// uses yours, as configured; on Linux its configuration is used and its delegate is not, as
 /// ``URLSessionTokenTransport`` describes. Either way no more than
 /// ``OAuthResponseTooLarge/maximumResponseBytes`` of an answer is read.
-// Justification: URLSession is thread-safe; the stored session is immutable after init.
-public struct URLSessionIntrospectionTransport: IntrospectionTransport, @unchecked Sendable {
+public struct URLSessionIntrospectionTransport: IntrospectionTransport, Sendable {
 
     private let session: URLSession
 

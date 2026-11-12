@@ -344,20 +344,14 @@ struct BasicChallengeTests {
 }
 
 /// A session delegate that counts the body bytes it is shown.
-// Justification: the one mutable field is read and written only under `lock`.
-final class BodyObserver: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
+final class BodyObserver: NSObject, URLSessionDataDelegate, Sendable {
+    private let count = Guarded(0)
 
     var bytesSeen: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
+        count.withLock { $0 }
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        lock.lock()
-        defer { lock.unlock() }
-        count += data.count
+        count.withLock { $0 += data.count }
     }
 }
