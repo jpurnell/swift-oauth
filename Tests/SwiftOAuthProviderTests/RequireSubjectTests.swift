@@ -18,8 +18,8 @@ struct RequireSubjectTests {
     static let issuer = "https://auth.example.com"
     static let redirect = "https://app.example.com/cb"
 
-    private static func makeServer(requireSubject: Bool?) throws -> OAuthServer {
-        let storage = try OAuthStorage(path: ":memory:")
+    private static func makeServer(requireSubject: Bool?, store kind: StoreKind) throws -> OAuthServer {
+        let storage = try kind.makeStore()
         let served = try ServedCapabilities(
             grantTypes: [.authorizationCode, .refreshToken, .clientCredentials, .deviceCode],
             clientAuthenticationMethods: [.clientSecretBasic, .clientSecretPost, .none],
@@ -65,9 +65,9 @@ struct RequireSubjectTests {
 
     // MARK: - The authorization code grant
 
-    @Test("With requireSubject, an authorization request naming nobody is refused with server_error")
-    func codeWithNoSubjectIsRefused() async throws {
-        let server = try Self.makeServer(requireSubject: true)
+    @Test("With requireSubject, an authorization request naming nobody is refused with server_error", arguments: StoreKind.allCases)
+    func codeWithNoSubjectIsRefused(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(requireSubject: true, store: kind)
         let clientId = try await Self.registerPublicClient(server)
         let request = try Self.authorizationRequest(clientId: clientId)
 
@@ -79,9 +79,9 @@ struct RequireSubjectTests {
         }
     }
 
-    @Test("With requireSubject, an empty or blank subject is not a subject")
-    func blankSubjectIsRefused() async throws {
-        let server = try Self.makeServer(requireSubject: true)
+    @Test("With requireSubject, an empty or blank subject is not a subject", arguments: StoreKind.allCases)
+    func blankSubjectIsRefused(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(requireSubject: true, store: kind)
         let clientId = try await Self.registerPublicClient(server)
 
         for blank in ["", "   ", "\n\t"] {
@@ -94,9 +94,9 @@ struct RequireSubjectTests {
         }
     }
 
-    @Test("With requireSubject, a named subject is issued a code, and the token carries it")
-    func namedSubjectStillWorks() async throws {
-        let server = try Self.makeServer(requireSubject: true)
+    @Test("With requireSubject, a named subject is issued a code, and the token carries it", arguments: StoreKind.allCases)
+    func namedSubjectStillWorks(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(requireSubject: true, store: kind)
         let clientId = try await Self.registerPublicClient(server)
         let verifier = PKCE.generateCodeVerifier()
         let challenge = try PKCE.generateCodeChallenge(verifier: verifier, method: .s256)
@@ -114,9 +114,9 @@ struct RequireSubjectTests {
         #expect(introspected.subject == "ada")
     }
 
-    @Test("By default a request naming nobody is still issued a code, as before")
-    func defaultIsUnchanged() async throws {
-        for server in [try Self.makeServer(requireSubject: nil), try Self.makeServer(requireSubject: false)] {
+    @Test("By default a request naming nobody is still issued a code, as before", arguments: StoreKind.allCases)
+    func defaultIsUnchanged(store kind: StoreKind) async throws {
+        for server in [try Self.makeServer(requireSubject: nil, store: kind), try Self.makeServer(requireSubject: false, store: kind)] {
             let clientId = try await Self.registerPublicClient(server)
             let request = try Self.authorizationRequest(clientId: clientId)
 
@@ -128,9 +128,9 @@ struct RequireSubjectTests {
 
     // MARK: - The device grant
 
-    @Test("With requireSubject, approving a device code with no subject is refused, and the device stays pending")
-    func deviceApprovalWithBlankSubjectIsRefused() async throws {
-        let server = try Self.makeServer(requireSubject: true)
+    @Test("With requireSubject, approving a device code with no subject is refused, and the device stays pending", arguments: StoreKind.allCases)
+    func deviceApprovalWithBlankSubjectIsRefused(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(requireSubject: true, store: kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
 
         let refused = await Self.refusal { try await server.approveDeviceCode(userCode: issued.userCode, subject: "  ") }
@@ -146,9 +146,9 @@ struct RequireSubjectTests {
         #expect(try await server.introspect(token: tokens.accessToken).subject == "ada")
     }
 
-    @Test("By default a device code can still be approved with a blank subject, as before")
-    func deviceDefaultIsUnchanged() async throws {
-        let server = try Self.makeServer(requireSubject: nil)
+    @Test("By default a device code can still be approved with a blank subject, as before", arguments: StoreKind.allCases)
+    func deviceDefaultIsUnchanged(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(requireSubject: nil, store: kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
 
         try await server.approveDeviceCode(userCode: issued.userCode, subject: "")
@@ -159,9 +159,9 @@ struct RequireSubjectTests {
 
     // MARK: - What it must not touch
 
-    @Test("With requireSubject, client_credentials still works: its subject is the client itself")
-    func clientCredentialsIsUnaffected() async throws {
-        let server = try Self.makeServer(requireSubject: true)
+    @Test("With requireSubject, client_credentials still works: its subject is the client itself", arguments: StoreKind.allCases)
+    func clientCredentialsIsUnaffected(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(requireSubject: true, store: kind)
         let service = try await server.createServiceClient(name: "svc", scopes: ["read"])
 
         let tokens = try await server.handleTokenRequest(TokenRequest(
