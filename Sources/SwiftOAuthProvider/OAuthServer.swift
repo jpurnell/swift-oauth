@@ -54,7 +54,7 @@ public actor OAuthServer {
 
     // MARK: - Properties
 
-    private let storage: OAuthStorage
+    private let storage: any OAuthProviderStorage
     private let issuer: String
 
     /// The scopes this deployment offers, advertised in both metadata documents.
@@ -92,6 +92,9 @@ public actor OAuthServer {
     private let refreshTokenLifetime: TimeInterval
     private let authorizationCodeLifetime: TimeInterval
     private let clientCredentialsTokenLifetime: TimeInterval
+
+    /// Whether a grant that names nobody is refused. See the initializer's `requireSubject`.
+    private let requireSubject: Bool
 
     /// The clock the device grant is judged by: issue, expiry, polling pace, and throttling.
     private let clock: @Sendable () -> Date
@@ -153,11 +156,22 @@ public actor OAuthServer {
     ///   - resourcePolicy: Which resources this server issues tokens for — RFC 8707. Defaults
     ///     to ``ResourceIndicatorPolicy/protecting(_:)`` over the issuer, which is the value the
     ///     server already publishes as its own resource identifier.
+    ///   - requireSubject: Whether to refuse a grant that names nobody. Defaults to `false`, so a
+    ///     server built without it behaves as it always has.
+    ///
+    ///     With `true`, ``handleAuthorizationRequest(_:subject:)`` refuses a `nil`, empty or
+    ///     blank subject, and ``approveDeviceCode(userCode:subject:)`` refuses an empty or
+    ///     blank one, each with `server_error`: the deployment forgot to say who approved, and
+    ///     that is its defect, not the client's. A deployment with user accounts turns this on so
+    ///     it can never mint a token that no per-user check or revocation can reach. It does not
+    ///     invent a subject: a shared default would make revoking it end every unattributed
+    ///     token at once. `client_credentials` is unaffected, because its subject is the client
+    ///     itself, and tokens already stored with no subject are not touched.
     ///   - now: The clock the device grant is judged by — when its codes expire, whether a poll
     ///     came too soon, and how long a user who typed wrong codes waits. Defaults to the
     ///     system clock; injectable so that pacing and expiry are testable without waiting.
     public init(
-        storage: OAuthStorage,
+        storage: any OAuthProviderStorage,
         issuer: String,
         scopesSupported: [String]?,
         served: ServedCapabilities,
@@ -171,8 +185,10 @@ public actor OAuthServer {
         authorizationCodeLifetime: TimeInterval = 600,    // 10 minutes
         clientCredentialsTokenLifetime: TimeInterval = 900,   // 15 minutes
         resourcePolicy: ResourceIndicatorPolicy? = nil,
+        requireSubject: Bool = false,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        self.requireSubject = requireSubject
         self.clock = now
         self.storage = storage
         self.issuer = issuer
@@ -190,6 +206,22 @@ public actor OAuthServer {
         self.refreshTokenLifetime = refreshTokenLifetime
         self.authorizationCodeLifetime = authorizationCodeLifetime
         self.clientCredentialsTokenLifetime = clientCredentialsTokenLifetime
+    }
+
+    // MARK: - Required subject
+
+    /// Refuses a grant that names nobody, when this server was built with `requireSubject`.
+    ///
+    /// Says what is wrong and nothing about the request: the description reaches the client,
+    /// who did nothing wrong and can do nothing about it, and the operator who can already
+    /// knows which route forgot.
+    private func refuseIfSubjectMissing(_ subject: String?) throws {
+        guard requireSubject else { return }
+        guard let subject, !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw OAuthError.serverError(
+                "This server requires every approval to name the user who gave it, and this one "
+                + "named nobody.")
+        }
     }
 
     // MARK: - Configured lifetimes
@@ -404,6 +436,7 @@ public actor OAuthServer {
             token: issued, clientId: clientId, scope: issuedScope,
             expiresAt: Date().addingTimeInterval(accessTokenLifetime),
             audience: request.resource,
+            keyThumbprint: nil, certificateThumbprint: nil,
             // RFC 8693 §1.1: the issued token acts for the subject token's subject. Dropping it
             // would leave the downstream service unable to say on whose behalf it acts.
             subject: subject.subject)
@@ -632,6 +665,7 @@ public actor OAuthServer {
     private func answerDeviceCode(
         userCode: String, subject: String, approving: Bool
     ) async throws {
+        if approving { try refuseIfSubjectMissing(subject) }
         let at = clock()
         try refuseIfThrottled(subject, at: at)
         guard let canonical = TokenGenerator.normalizedUserCode(userCode) else {
@@ -749,6 +783,7 @@ public actor OAuthServer {
             try await storage.saveAccessToken(
                 token: accessToken, clientId: clientId, scope: scope,
                 expiresAt: now.addingTimeInterval(accessTokenLifetime), audience: nil,
+                keyThumbprint: nil, certificateThumbprint: nil,
                 subject: subject)
             try await storage.saveRefreshToken(
                 token: refreshToken, clientId: clientId, scope: scope,
@@ -1008,6 +1043,8 @@ public actor OAuthServer {
     public func handleAuthorizationRequest(
         _ request: AuthorizationRequest, subject: String? = nil
     ) async throws -> AuthorizationResponse {
+        try refuseIfSubjectMissing(subject)
+
         // Validate response type
         guard request.responseType == "code" else {
             throw OAuthError.invalidRequest(nil)
@@ -1150,7 +1187,8 @@ public actor OAuthServer {
     ///   - redirectUri: Redirect URI from authorization request
     /// - Returns: The generated CSRF token
     public func generateCSRFToken(clientId: String, redirectUri: String) async throws -> String {
-        return try await storage.generateCSRFToken(clientId: clientId, redirectUri: redirectUri)
+        return try await storage.generateCSRFToken(
+            clientId: clientId, redirectUri: redirectUri, expiresIn: 600)
     }
 
     /// Validates and consumes a CSRF token
@@ -1284,6 +1322,7 @@ public actor OAuthServer {
             scope: authCode.scope,
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
             audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
             subject: authCode.subject
         )
 
@@ -1350,6 +1389,7 @@ public actor OAuthServer {
             scope: scope,
             expiresAt: Date().addingTimeInterval(clientCredentialsTokenLifetime),
             audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
             // No resource owner: the client acts for itself, so it is the subject — the
             // convention RFC 9068 §2.2 writes down for exactly this grant.
             subject: request.clientId
@@ -1425,6 +1465,7 @@ public actor OAuthServer {
             scope: tokenInfo.scope,
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
             audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
             subject: tokenInfo.subject
         )
 

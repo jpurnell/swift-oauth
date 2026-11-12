@@ -7,6 +7,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+The README has said since the first release that provider storage is a protocol with an in-memory
+implementation and a conformance suite. It was not: `OAuthServer` took the concrete SQLite
+`OAuthStorage`. It is now what the README says. No behaviour, schema (still 10) or wire change.
+
+### Added
+- **`OAuthServer(requireSubject:)`**, default `false`. With `true`, a grant that names nobody is refused with `server_error`:
+  `handleAuthorizationRequest(_:subject:)` refuses a `nil`, empty or blank subject, and `approveDeviceCode(userCode:subject:)` an empty or
+  blank one (a refused approval records nothing, so the right user can still approve the same code). For a deployment with user accounts,
+  so it cannot mint a token no per-user check or revocation can reach. No default subject is invented: a shared one would make revoking it
+  end every unattributed token at once. `client_credentials` (whose subject is the client) and tokens already stored with no subject are
+  untouched, and a server built without the argument behaves exactly as before.
+- **`OAuthProviderStorage`**, a `Sendable` protocol of `async throws` requirements: exactly the 24
+  operations `OAuthServer` performs (clients, authorization codes, CSRF tokens, access and refresh
+  tokens, introspection, revocation, device codes, pushed requests), with `OAuthStorage`'s names
+  and labels. `OAuthStorage` conforms by declaration. Its other public methods (cleanup, schema
+  inspection, DPoP proof identifiers) stay the SQLite store's own.
+- **`InMemoryOAuthStorage`**, an actor implementing it, for tests and single-process use. Not
+  durable. Credentials are held under the same SHA-256 digests as the SQLite store, and expiry and
+  single-use follow the same rules.
+- **`SwiftOAuthProviderConformance`**, a new library product: `ProviderStorageConformanceSuite`,
+  26 requirements, each preceded by a positive control so a store that refuses everything is
+  reported inconclusive rather than passing. Run against both shipped stores in this package's
+  tests, and available to run against a store of your own.
+
+### Changed
+- **`OAuthServer.init(storage:)` takes `any OAuthProviderStorage`.** Source compatible: a caller
+  passing an `OAuthStorage` compiles unchanged. `TokenSubjectTests` and the device-endpoint tests
+  now run against both stores.
+
 ## [1.0.0-beta.10] — 2026-10-31
 
 A token this package issued was refused on its first use. A client that parses
@@ -1799,7 +1828,7 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...HEAD
 [1.0.0-beta.10]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...v1.0.0-beta.8

@@ -1519,7 +1519,7 @@ public actor OAuthStorage {
     /// A fast hash is the right one here. Every value stored this way is 256 bits of
     /// generator output, so there is no dictionary to slow down, and a password KDF would cost
     /// every token request its latency for nothing.
-    private static func sha256Hex(_ value: String) -> String {
+    static func sha256Hex(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))
         return digest.map { ($0 < 16 ? "0" : "") + String($0, radix: 16, uppercase: false) }.joined()
     }
