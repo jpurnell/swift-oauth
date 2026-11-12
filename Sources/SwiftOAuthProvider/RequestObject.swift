@@ -71,8 +71,13 @@ public struct RequestObject: Sendable, Equatable {
         // Signature first. Nothing below this line runs for a token that does not verify.
         let payload = try CompactJWS.verify(token, using: key)
 
-        // silent: claims that will not parse are a malformed request object, thrown by this guard
-        guard let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: payload)
+        } catch {
+            throw Failure.malformedClaims
+        }
+        guard let claims = parsed as? [String: Any] else {
             throw Failure.malformedClaims
         }
 

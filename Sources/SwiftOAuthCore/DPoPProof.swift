@@ -148,21 +148,33 @@ public enum DPoPProof {
         // with the key it yields — a signature that verifies against a key the attacker chose
         // proves only that the attacker can sign, which is why the thumbprint is what a token
         // is bound to rather than the proof alone.
-        guard let headerData = CompactJWS.unverifiedHeader(proof),
-              // silent: an unparseable header is a malformed proof, thrown as such by this guard
-              let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any],
+        guard let headerData = CompactJWS.unverifiedHeader(proof) else {
+            throw Failure.malformedHeader
+        }
+        let parsedHeader: Any
+        do {
+            parsedHeader = try JSONSerialization.jsonObject(with: headerData)
+        } catch {
+            throw Failure.malformedHeader
+        }
+        guard let header = parsedHeader as? [String: Any],
               header["typ"] as? String == "dpop+jwt" else {
             throw Failure.malformedHeader
         }
-        guard let jwk = header["jwk"] as? [String: Any],
-              let publicKey = Self.publicKey(from: jwk) else {
+        guard let jwk = header["jwk"] as? [String: Any] else {
             throw Failure.missingKey
         }
+        let publicKey = try Self.publicKey(from: jwk)
 
         let payload = try CompactJWS.verify(proof, using: publicKey)
 
-        // silent: claims that will not parse are a malformed proof, thrown by this guard
-        guard let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+        let parsedClaims: Any
+        do {
+            parsedClaims = try JSONSerialization.jsonObject(with: payload)
+        } catch {
+            throw Failure.malformedClaims
+        }
+        guard let claims = parsedClaims as? [String: Any],
               let identifier = claims["jti"] as? String,
               let issued = claims["iat"] as? TimeInterval else {
             throw Failure.malformedClaims
@@ -231,14 +243,20 @@ public enum DPoPProof {
     }
 
     /// Rebuilds a public key from a JWK's coordinates.
-    static func publicKey(from jwk: [String: Any]) -> P256.Signing.PublicKey? {
+    ///
+    /// - Throws: ``Failure/missingKey`` when the JWK is not a P-256 key, its coordinates are
+    ///   not 32 bytes each, or they are not a valid point.
+    static func publicKey(from jwk: [String: Any]) throws -> P256.Signing.PublicKey {
         guard jwk["kty"] as? String == "EC", jwk["crv"] as? String == "P-256",
               let x = (jwk["x"] as? String).flatMap(CompactJWS.decodeBase64URL),
               let y = (jwk["y"] as? String).flatMap(CompactJWS.decodeBase64URL),
               x.count == 32, y.count == 32 else {
-            return nil
+            throw Failure.missingKey
         }
-        // silent: coordinates that are not a valid point yield no key, which the caller reads as absent
-        return try? P256.Signing.PublicKey(rawRepresentation: x + y)
+        do {
+            return try P256.Signing.PublicKey(rawRepresentation: x + y)
+        } catch {
+            throw Failure.missingKey
+        }
     }
 }

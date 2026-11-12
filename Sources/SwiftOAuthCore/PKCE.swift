@@ -148,6 +148,20 @@ public enum PKCE {
         }
     }
 
+    /// Generates a verifier and the S256 challenge derived from it, as one step.
+    ///
+    /// A verifier this package generates is 43 unreserved characters, so it is valid by
+    /// construction and deriving its challenge cannot fail. Going through
+    /// ``generateCodeChallenge(verifier:method:)`` would put a throwing path in front of a
+    /// caller that has nothing to do when it throws. `package`, not `public`: a caller with a
+    /// verifier from elsewhere needs the validating overload, and must keep using it.
+    ///
+    /// - Returns: The verifier to keep and the challenge to send.
+    package static func generateVerifierAndChallenge() -> (verifier: String, challenge: String) {
+        let verifier = generateCodeVerifier()
+        return (verifier, computeS256Challenge(verifier: verifier))
+    }
+
     /// Verifies a code challenge against a code verifier
     ///
     /// This is used by the authorization server when processing the token

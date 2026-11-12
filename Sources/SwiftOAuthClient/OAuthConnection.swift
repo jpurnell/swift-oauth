@@ -154,14 +154,10 @@ public actor OAuthConnection {
     /// - Returns: The URL to open, and what to hold until the callback arrives.
     public func beginAuthorization(redirectURI: String) -> BegunAuthorization {
         let state = TokenGenerator.generateToken()
-        let verifier = PKCE.generateCodeVerifier()
-
-        // A verifier this function just generated is valid by construction; the throwing path
-        // exists for verifiers from elsewhere. Falling back to the verifier itself would be
-        // `plain` by accident, so an empty challenge is used instead — the provider rejects
-        // it, which is the correct outcome for a state that should be unreachable.
-        // silent: unreachable for a generated verifier, and the fallback fails closed
-        let challenge = (try? PKCE.generateCodeChallenge(verifier: verifier, method: .s256)) ?? ""
+        // A verifier this function generates is valid by construction, so its challenge is
+        // derived without the validating, throwing overload — there is no failure to handle
+        // and no fallback to choose.
+        let (verifier, challenge) = PKCE.generateVerifierAndChallenge()
 
         return BegunAuthorization(
             url: authorizationURL(state: state, challenge: challenge, redirectURI: redirectURI),

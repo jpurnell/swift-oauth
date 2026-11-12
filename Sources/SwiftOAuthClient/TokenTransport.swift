@@ -220,11 +220,14 @@ public struct URLSessionTokenTransport: TokenTransport, Sendable {
             // A provider returns its reason in the body; the status alone does not
             // distinguish "wrong secret" from "revoked grant", and those need different
             // responses from the caller.
-            // silent: a body that will not decode leaves only the status to report, which the fallback below does
-            if let body = try? JSONDecoder().decode(OAuthErrorResponse.self, from: data) {
-                throw body.oauthError
+            // A body that will not decode leaves only the status to report.
+            let body: OAuthErrorResponse
+            do {
+                body = try JSONDecoder().decode(OAuthErrorResponse.self, from: data)
+            } catch {
+                throw OAuthError.serverError("HTTP \(http.statusCode)")
             }
-            throw OAuthError.serverError("HTTP \(http.statusCode)")
+            throw body.oauthError
         }
     }
 

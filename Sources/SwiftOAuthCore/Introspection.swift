@@ -107,13 +107,20 @@ public struct IntrospectionResult: Codable, Sendable, Equatable {
         // fails at the point a token is being checked rather than at configuration time.
         // Typed explicitly: `.map` on a bare `String?` resolves to `Sequence.map` and yields
         // an array of characters, which compiles nowhere useful and reads as a decoder bug.
-        // silent: `aud` may be a string or an array; failing the first shape is how the second is tried
-        let singleAudience: String? = try? container.decodeIfPresent(String.self, forKey: .aud)
-        if let singleAudience {
-            audience = [singleAudience]
-        } else {
-            audience = try container.decodeIfPresent([String].self, forKey: .aud)
+        let decodedAudience: [String]?
+        do {
+            if let single = try container.decodeIfPresent(String.self, forKey: .aud) {
+                decodedAudience = [single]
+            } else {
+                decodedAudience = nil
+            }
+        } catch let failure as DecodingError {
+            // Only "this is not a string" means "try the array shape"; anything else is a
+            // real failure and is thrown.
+            guard case .typeMismatch = failure else { throw failure }
+            decodedAudience = try container.decodeIfPresent([String].self, forKey: .aud)
         }
+        audience = decodedAudience
 
         expiry = try container.decodeIfPresent(TimeInterval.self, forKey: .exp)
             .map { Date(timeIntervalSince1970: $0) }

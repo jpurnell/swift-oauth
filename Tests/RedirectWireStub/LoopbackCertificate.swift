@@ -89,8 +89,12 @@ public struct LoopbackCertificate: Sendable {
                 .flatMap({ String(data: $0, encoding: .utf8) }) else {
             return nil
         }
-        // silent: a certificate that will not parse is the same as none installed — the tests that need it are skipped, by name
-        guard let der = try? NIOSSLCertificate(bytes: Array(pem.utf8), format: .pem).toDERBytes() else {
+        // A certificate that will not parse is the same as none installed: the tests that need
+        // it are skipped, by name.
+        let der: [UInt8]
+        do {
+            der = try NIOSSLCertificate(bytes: Array(pem.utf8), format: .pem).toDERBytes()
+        } catch {
             return nil
         }
         return LoopbackCertificate(der: der, pem: pem, keyPEM: keyPEM)
