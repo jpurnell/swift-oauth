@@ -45,6 +45,10 @@ let package = Package(
         .library(name: "SwiftOAuthCore", targets: ["SwiftOAuthCore"]),
         .library(name: "SwiftOAuthProvider", targets: ["SwiftOAuthProvider"]),
         .library(name: "SwiftOAuthClient", targets: ["SwiftOAuthClient"]),
+        // The bar every provider store is held to, shipped as a library rather than as tests so
+        // a store written elsewhere runs the same suite — SwiftIdentity's `ConformanceSuite`
+        // pattern. A product of its own because a consumer's *tests* link it, not its server.
+        .library(name: "SwiftOAuthProviderConformance", targets: ["SwiftOAuthProviderConformance"]),
         // mTLS lives in its own product, so linking NIO is something a consumer opts into.
         //
         // Being precise about what that buys: SwiftPM resolves every package-level dependency
@@ -145,6 +149,14 @@ let package = Package(
             resources: [.copy("SwiftOAuthProvider.docc")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The storage conformance suite: behaviour a provider store must exhibit, run against
+        // whatever store a factory returns. No dependency on a test framework, so it is a
+        // library a consumer can link from their own tests.
+        .target(
+            name: "SwiftOAuthProviderConformance",
+            dependencies: ["SwiftOAuthCore", "SwiftOAuthProvider"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .target(
             name: "SwiftOAuthClient",
             dependencies: [
@@ -195,7 +207,7 @@ let package = Package(
             // CSQLite so a migration test can plant a row in the old schema directly. The
             // package's own API cannot write one — every write names the current columns — so
             // without raw SQL the survival of pre-migration data is untestable.
-            dependencies: ["SwiftOAuthProvider", "CSQLite"],
+            dependencies: ["SwiftOAuthProvider", "SwiftOAuthProviderConformance", "CSQLite"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The two halves against each other. Neither depends on the other in production —
