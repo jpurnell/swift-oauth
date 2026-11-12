@@ -27,9 +27,18 @@ run SQLite for its tokens, and a test should not touch disk.
 | `OAuthProviderStorage` | registered clients, authorization codes, issued tokens, CSRF tokens |
 | `OAuthClientStorage` | credentials obtained from other systems, per connection |
 
-Ships with SQLite and in-memory provider storage, and in-memory and encrypted-file client
-storage. A conformance suite ships too, so your own implementation can be held to the same
-expectations.
+Provider storage ships two ways: `OAuthStorage`, the SQLite store a deployment runs on, and
+`InMemoryOAuthStorage`, which is for tests and single-process use and is **not durable**: a restart
+forgets every client, code and token. `OAuthServer` takes `any OAuthProviderStorage`, so either, or
+your own, can sit behind it. Client storage ships in-memory and encrypted-file.
+
+The `SwiftOAuthProviderConformance` product is the suite a provider store is held to, run against
+both shipped stores here and available to run against yours:
+
+```swift
+let report = await ProviderStorageConformanceSuite { try MyStore() }.run()
+precondition(report.isConformant, report.summary)
+```
 
 ## Why the client half is a library
 
@@ -114,7 +123,7 @@ let who = await authenticator.authentication(for: [OAuthAccessToken(tokens.acces
 It fails closed, tells the caller nothing about why, and passes SwiftIdentity's conformance
 suite unchanged.
 
-692 tests; the quality gate runs with no errors and no warnings. Linux CI was green at 1.0.0-beta.9 (not yet re-run at beta.10), `SwiftOAuthIdentity` included. 1.0.0-beta.8 did not build on Linux, because `swift-identity` 0.7.0 did not; beta.9 requires 0.7.1.
+688 tests (a parameterised test counts once); the quality gate runs with no errors and no warnings. Linux CI was green at 1.0.0-beta.9 (not yet re-run at beta.10), `SwiftOAuthIdentity` included. 1.0.0-beta.8 did not build on Linux, because `swift-identity` 0.7.0 did not; beta.9 requires 0.7.1.
 
 Three adoptions exercised it rather than a test suite alone: LedgeOS on the client half,
 SwiftMCPServer and SwiftMCPClient on the provider half. Eight defects in this package were found by a

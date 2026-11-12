@@ -137,12 +137,19 @@ public struct ProviderStorageConformanceSuite: Sendable {
 
     /// Runs one requirement against a fresh store.
     public func run(_ requirement: Requirement) async -> Result {
+        // A store that throws is a store that failed the requirement, not a reason to stop
+        // judging: the throw is read off the task's result rather than caught.
+        let factory = makeStore
+        let outcome = await Task { () async throws -> Observation in
+            let store = try await factory()
+            var seen = Observation()
+            try await Self.check(requirement, store, &seen)
+            return seen
+        }.result
         var observation = Observation()
-        do {
-            let store = try await makeStore()
-            try await Self.check(requirement, store, &observation)
-        } catch {
-            observation.fail("threw \(error)")
+        switch outcome {
+        case .success(let seen): observation = seen
+        case .failure(let error): observation.fail("threw \(error)")
         }
         let verdict: Verdict
         if !observation.controlFailures.isEmpty {
@@ -416,12 +423,12 @@ public struct ProviderStorageConformanceSuite: Sendable {
         _ store: any OAuthProviderStorage, _ o: inout Observation
     ) async throws {
         try await store.saveAuthorizationCode(code("race"))
-        let winners = await withTaskGroup(of: Bool.self) { group in
+        let winners = try await withThrowingTaskGroup(of: Bool.self) { group in
             for _ in 0..<24 {
-                group.addTask { (try? await store.consumeAuthorizationCode(code: "race")) != nil }
+                group.addTask { try await store.consumeAuthorizationCode(code: "race") != nil }
             }
             var count = 0
-            for await won in group where won { count += 1 }
+            for try await won in group where won { count += 1 }
             return count
         }
         o.expect(winners == 1, "\(winners) of 24 concurrent redemptions succeeded; exactly 1 should")
@@ -685,12 +692,12 @@ public struct ProviderStorageConformanceSuite: Sendable {
         let now = Date()
         try await saveDevice(store, expiresAt: now.addingTimeInterval(600), now: now)
         _ = try await store.approveDeviceCode(userCode: userCode, subject: "alice", now: now)
-        let winners = await withTaskGroup(of: Bool.self) { group in
+        let winners = try await withThrowingTaskGroup(of: Bool.self) { group in
             for _ in 0..<24 {
-                group.addTask { (try? await store.markDeviceCodeRedeemed(deviceCode: "dev-1")) == true }
+                group.addTask { try await store.markDeviceCodeRedeemed(deviceCode: "dev-1") }
             }
             var count = 0
-            for await won in group where won { count += 1 }
+            for try await won in group where won { count += 1 }
             return count
         }
         o.expect(winners == 1, "\(winners) of 24 concurrent redemptions spent the code; exactly 1 should")

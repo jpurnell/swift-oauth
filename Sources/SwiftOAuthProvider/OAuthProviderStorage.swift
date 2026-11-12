@@ -73,7 +73,10 @@ public protocol OAuthProviderStorage: Sendable {
 
     /// Issues a token binding a consent form to one client and redirect URI.
     ///
-    /// - Parameter expiresIn: Its lifetime in seconds. `OAuthStorage` defaults to ten minutes.
+    /// - Parameters:
+    ///   - clientId: The client the consent form is for.
+    ///   - redirectUri: The redirect URI the form will send the user to.
+    ///   - expiresIn: Its lifetime in seconds. ``OAuthStorage`` defaults to ten minutes.
     func generateCSRFToken(clientId: String, redirectUri: String, expiresIn: TimeInterval) async throws -> String
 
     /// Validates a token for this client and redirect URI, and spends it if valid.
@@ -97,7 +100,7 @@ public protocol OAuthProviderStorage: Sendable {
     func validateAccessToken(token: String) async throws -> TokenValidationResult
 
     /// What RFC 7662 §2.2 reports about a token: its claims if active, and
-    /// ``IntrospectionResult/inactive`` — alike — for one that is expired, revoked or unknown.
+    /// `IntrospectionResult.inactive` — alike — for one that is expired, revoked or unknown.
     func introspectAccessToken(token: String) async throws -> IntrospectionResult
 
     /// Revokes one access token. Revoking an unknown token is not an error (RFC 7009 §2.2).
@@ -122,6 +125,11 @@ public protocol OAuthProviderStorage: Sendable {
     /// Stores a device code and the user code a person will type, both as digests.
     ///
     /// - Parameters:
+    ///   - deviceCode: The device's credential.
+    ///   - userCode: The code a person will type.
+    ///   - clientId: The client the codes belong to.
+    ///   - scope: What it asked for.
+    ///   - expiresAt: When both codes stop working.
     ///   - interval: The polling interval the device was told, in seconds.
     ///   - now: When the codes were issued.
     func saveDeviceCode(

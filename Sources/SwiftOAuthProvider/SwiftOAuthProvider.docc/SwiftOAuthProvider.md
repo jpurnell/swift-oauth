@@ -34,11 +34,13 @@ Most of the work of an authorization server is declining things precisely.
 
 ### Storage is yours
 
-``OAuthStorage`` ships as the SQLite implementation, and it is one implementation of an
-expectation, not the expectation itself. A service already behind Postgres should not run
-SQLite for its tokens. The conformance suite that ships with the package holds any
+``OAuthProviderStorage`` is the expectation: exactly the operations ``OAuthServer`` performs.
+``OAuthStorage`` is the SQLite implementation, and ``InMemoryOAuthStorage`` is the one for tests
+and single-process use, which does not survive a restart. A service already behind Postgres
+should not run SQLite for its tokens. The `SwiftOAuthProviderConformance` product holds any
 substitute to the same behaviour — including the parts that are easy to get subtly wrong,
-such as consuming a code exactly once under concurrent presentation.
+such as consuming a code exactly once under concurrent presentation — and both shipped stores
+pass it unchanged.
 
 ### Metadata
 
@@ -81,5 +83,7 @@ change to what the server accepts cannot drift from what it advertises.
 
 ### Persistence
 
+- ``OAuthProviderStorage``
 - ``OAuthStorage``
+- ``InMemoryOAuthStorage``
 - ``OAuthStorageError``
