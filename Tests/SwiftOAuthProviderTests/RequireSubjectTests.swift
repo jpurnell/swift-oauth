@@ -63,6 +63,12 @@ struct RequireSubjectTests {
         }
     }
 
+    /// Whether a refusal is the `server_error` a deployment's own omission is reported as.
+    private static func isServerError(_ error: OAuthError?) -> Bool {
+        if case .serverError(_)? = error { return true }
+        return false
+    }
+
     // MARK: - The authorization code grant
 
     @Test("With requireSubject, an authorization request naming nobody is refused with server_error", arguments: StoreKind.allCases)
@@ -73,10 +79,7 @@ struct RequireSubjectTests {
 
         let refused = await Self.refusal { _ = try await server.handleAuthorizationRequest(request, subject: nil) }
 
-        guard case .serverError(_)? = refused else {
-            Issue.record("expected server_error, got \(String(describing: refused))")
-            return
-        }
+        #expect(Self.isServerError(refused), "expected server_error, got \(String(describing: refused))")
     }
 
     @Test("With requireSubject, an empty or blank subject is not a subject", arguments: StoreKind.allCases)
@@ -87,10 +90,9 @@ struct RequireSubjectTests {
         for blank in ["", "   ", "\n\t"] {
             let request = try Self.authorizationRequest(clientId: clientId)
             let refused = await Self.refusal { _ = try await server.handleAuthorizationRequest(request, subject: blank) }
-            guard case .serverError(_)? = refused else {
-                Issue.record("subject \(String(reflecting: blank)) was not refused: \(String(describing: refused))")
-                return
-            }
+            #expect(
+                Self.isServerError(refused),
+                "subject \(String(reflecting: blank)) was not refused: \(String(describing: refused))")
         }
     }
 
@@ -135,10 +137,7 @@ struct RequireSubjectTests {
 
         let refused = await Self.refusal { try await server.approveDeviceCode(userCode: issued.userCode, subject: "  ") }
 
-        guard case .serverError(_)? = refused else {
-            Issue.record("expected server_error, got \(String(describing: refused))")
-            return
-        }
+        #expect(Self.isServerError(refused), "expected server_error, got \(String(describing: refused))")
         // Still pending: the refused approval must not have recorded anything, so the right
         // user can still approve the same code.
         try await server.approveDeviceCode(userCode: issued.userCode, subject: "ada")
