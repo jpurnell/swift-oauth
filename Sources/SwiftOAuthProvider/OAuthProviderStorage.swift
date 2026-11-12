@@ -86,9 +86,9 @@ public protocol OAuthProviderStorage: Sendable {
 
     /// Saves an access token under its digest.
     ///
-    /// - Parameter grantId: The grant this token was issued under, or `nil` for a token that
-    ///   belongs to none (a `client_credentials` or exchanged token, or a caller that does not
-    ///   track grants). See ``revokeGrant(grantId:)``.
+    /// `grantId` is the grant this token was issued under, or `nil` for a token that belongs to
+    /// none (a `client_credentials` or exchanged token, or a caller that does not track grants).
+    /// See ``revokeGrant(grantId:)``.
     func saveAccessToken(
         token: String,
         clientId: String,
@@ -139,8 +139,7 @@ public protocol OAuthProviderStorage: Sendable {
 
     /// Saves a refresh token under its digest.
     ///
-    /// - Parameter grantId: The grant this token was issued under, or `nil`. See
-    ///   ``revokeGrant(grantId:)``.
+    /// `grantId` is the grant this token was issued under, or `nil`. See ``revokeGrant(grantId:)``.
     func saveRefreshToken(
         token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?,
         grantId: String?
