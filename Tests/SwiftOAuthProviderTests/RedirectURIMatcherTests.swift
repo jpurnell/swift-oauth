@@ -6,6 +6,15 @@ import Testing
 
 /// Builds a URI from components, so a test states which part differs rather than hiding it in a
 /// string.
+///
+/// **Why these tests use plain `http` at all.** A loopback redirect is `http`, not `https`, by the
+/// RFC: "Loopback redirect URIs use the "http" scheme and are constructed with the loopback IP
+/// literal and whatever port the client is listening on" (RFC 8252 §7.3), and the request never
+/// leaves the device (§8.3). These are fixtures for that rule, not endpoints the code reaches.
+/// Building them from parts also keeps `http://` string literals, which the gate's
+/// insecure-transport rule flags wherever it sees them, out of this file; the four tests that
+/// assert a plaintext endpoint is *refused* keep their literals and say why beside each one
+/// (`// SECURITY:`).
 private func uri(
     _ scheme: String, _ host: String, port: Int? = nil, path: String = "/cb",
     query: String? = nil, fragment: String? = nil, user: String? = nil
