@@ -150,7 +150,8 @@ struct RefreshRotationTests {
         #expect(after.scope == before.scope && after.scope == "read")
         #expect(after.subject == "alice")
         #expect(after.expiresAt == before.expiresAt, "rotation must not extend the 90 days a user agreed to")
-        #expect(after.grantId == before.grantId && after.grantId != nil)
+        let grant = try #require(before.grantId)
+        #expect(after.grantId == grant)
         #expect(second.scope == "read")
         let introspected = try await server.introspect(token: second.accessToken)
         #expect(introspected.subject == "alice")
@@ -361,6 +362,7 @@ struct RefreshRotationTests {
 
         let refreshed = try await Self.refresh(server, clientId: client, token: original)
 
-        #expect(refreshed.refreshToken != nil && refreshed.refreshToken != original)
+        let successor = try #require(refreshed.refreshToken)
+        #expect(successor != original)
     }
 }
