@@ -16,6 +16,7 @@ struct StorageConformanceTests {
     /// The stores under test, by name, each a factory for a fresh empty one.
     enum Store: String, CaseIterable, Sendable, CustomTestStringConvertible {
         case sqlite = "SQLite (OAuthStorage, :memory:)"
+        case inMemory = "InMemoryOAuthStorage"
 
         var testDescription: String { rawValue }
 
@@ -23,6 +24,8 @@ struct StorageConformanceTests {
             switch self {
             case .sqlite:
                 return ProviderStorageConformanceSuite { try OAuthStorage(path: ":memory:") }
+            case .inMemory:
+                return ProviderStorageConformanceSuite { InMemoryOAuthStorage() }
             }
         }
     }

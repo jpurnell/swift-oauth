@@ -7,8 +7,8 @@ import Testing
 @Suite("RFC 8628 — the device endpoint")
 struct DeviceAuthorizationEndpointTests {
 
-    private func makeServer() async throws -> (OAuthServer, OAuthStorage) {
-        let storage = try OAuthStorage(path: ":memory:")
+    private func makeServer(_ kind: StoreKind) async throws -> (OAuthServer, any OAuthProviderStorage) {
+        let storage = try kind.makeStore()
         let server = OAuthServer(
             storage: storage, issuer: "https://mcp.example.com", scopesSupported: ["mcp:tools", "mcp:resources", "mcp:prompts"], served: .core, resourceIdentity: .colocated,
             resourcePolicy: ResourceIndicatorPolicy(known: [], allowsUnspecified: true))
@@ -16,9 +16,9 @@ struct DeviceAuthorizationEndpointTests {
     }
 
     /// A device asking to sign in gets both codes and somewhere to send the user.
-    @Test("A device authorization request issues both codes")
-    func requestIssuesCodes() async throws {
-        let (server, _) = try await makeServer()
+    @Test("A device authorization request issues both codes", arguments: StoreKind.allCases)
+    func requestIssuesCodes(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
 
         let response = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
 
@@ -31,9 +31,9 @@ struct DeviceAuthorizationEndpointTests {
 
     /// The user code is short enough to read off a screen and type — §6.1 asks for that
     /// explicitly, and a code that is merely random is not usable on a TV remote.
-    @Test("The user code is short and readable")
-    func userCodeIsReadable() async throws {
-        let (server, _) = try await makeServer()
+    @Test("The user code is short and readable", arguments: StoreKind.allCases)
+    func userCodeIsReadable(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
 
         let response = try await server.authorizeDevice(clientId: "tv-app", scope: nil)
         let bare = response.userCode.replacingOccurrences(of: "-", with: "")
@@ -47,9 +47,9 @@ struct DeviceAuthorizationEndpointTests {
     }
 
     /// The device and user codes are different things, and the device code is the credential.
-    @Test("The device code is long and distinct from the user code")
-    func deviceCodeIsACredential() async throws {
-        let (server, _) = try await makeServer()
+    @Test("The device code is long and distinct from the user code", arguments: StoreKind.allCases)
+    func deviceCodeIsACredential(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
 
         let response = try await server.authorizeDevice(clientId: "tv-app", scope: nil)
 
@@ -58,9 +58,9 @@ struct DeviceAuthorizationEndpointTests {
     }
 
     /// Two requests do not collide.
-    @Test("Each request issues fresh codes")
-    func codesAreUnique() async throws {
-        let (server, _) = try await makeServer()
+    @Test("Each request issues fresh codes", arguments: StoreKind.allCases)
+    func codesAreUnique(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
 
         let first = try await server.authorizeDevice(clientId: "tv-app", scope: nil)
         let second = try await server.authorizeDevice(clientId: "tv-app", scope: nil)
@@ -71,9 +71,9 @@ struct DeviceAuthorizationEndpointTests {
 
     /// Polling before the user has finished is `authorization_pending` — the normal state of a
     /// working flow, and the answer a client will receive most of the time.
-    @Test("Polling before approval is authorization_pending")
-    func pollingBeforeApprovalIsPending() async throws {
-        let (server, _) = try await makeServer()
+    @Test("Polling before approval is authorization_pending", arguments: StoreKind.allCases)
+    func pollingBeforeApprovalIsPending(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
 
         let error = await #expect(throws: OAuthError.self) {
@@ -84,9 +84,9 @@ struct DeviceAuthorizationEndpointTests {
     }
 
     /// After approval, the device code exchanges for tokens.
-    @Test("An approved device code exchanges for a token")
-    func approvedCodeIssuesToken() async throws {
-        let (server, _) = try await makeServer()
+    @Test("An approved device code exchanges for a token", arguments: StoreKind.allCases)
+    func approvedCodeIssuesToken(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
 
         try await server.approveDeviceCode(userCode: issued.userCode, subject: "user-1")
@@ -97,9 +97,9 @@ struct DeviceAuthorizationEndpointTests {
 
     /// A device code is single-use. Redeeming twice is how one leaked code becomes two
     /// sessions.
-    @Test("A device code cannot be redeemed twice")
-    func deviceCodeIsSingleUse() async throws {
-        let (server, _) = try await makeServer()
+    @Test("A device code cannot be redeemed twice", arguments: StoreKind.allCases)
+    func deviceCodeIsSingleUse(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
         try await server.approveDeviceCode(userCode: issued.userCode, subject: "user-1")
         _ = try await server.redeemDeviceCode(issued.deviceCode, clientId: "tv-app")
@@ -113,9 +113,9 @@ struct DeviceAuthorizationEndpointTests {
     ///
     /// Without this check, a device code observed in transit is redeemable by anyone who can
     /// name a client id — and client ids are public by design.
-    @Test("Another client cannot redeem a device code")
-    func deviceCodeIsBoundToItsClient() async throws {
-        let (server, _) = try await makeServer()
+    @Test("Another client cannot redeem a device code", arguments: StoreKind.allCases)
+    func deviceCodeIsBoundToItsClient(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
         try await server.approveDeviceCode(userCode: issued.userCode, subject: "user-1")
 
@@ -126,9 +126,9 @@ struct DeviceAuthorizationEndpointTests {
 
     /// An unknown user code cannot be approved — otherwise the approval page is an oracle for
     /// guessing short codes, which are short precisely so they can be typed.
-    @Test("An unknown user code cannot be approved")
-    func unknownUserCodeIsRefused() async throws {
-        let (server, _) = try await makeServer()
+    @Test("An unknown user code cannot be approved", arguments: StoreKind.allCases)
+    func unknownUserCodeIsRefused(store kind: StoreKind) async throws {
+        let (server, _) = try await makeServer(kind)
 
         await #expect(throws: OAuthError.self) {
             try await server.approveDeviceCode(userCode: "ZZZZ-ZZZZ", subject: "user-1")
