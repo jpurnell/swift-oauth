@@ -54,7 +54,7 @@ public actor OAuthServer {
 
     // MARK: - Properties
 
-    private let storage: OAuthStorage
+    private let storage: any OAuthProviderStorage
     private let issuer: String
 
     /// The scopes this deployment offers, advertised in both metadata documents.
@@ -171,7 +171,7 @@ public actor OAuthServer {
     ///     came too soon, and how long a user who typed wrong codes waits. Defaults to the
     ///     system clock; injectable so that pacing and expiry are testable without waiting.
     public init(
-        storage: OAuthStorage,
+        storage: any OAuthProviderStorage,
         issuer: String,
         scopesSupported: [String]?,
         served: ServedCapabilities,
@@ -436,6 +436,7 @@ public actor OAuthServer {
             token: issued, clientId: clientId, scope: issuedScope,
             expiresAt: Date().addingTimeInterval(accessTokenLifetime),
             audience: request.resource,
+            keyThumbprint: nil, certificateThumbprint: nil,
             // RFC 8693 §1.1: the issued token acts for the subject token's subject. Dropping it
             // would leave the downstream service unable to say on whose behalf it acts.
             subject: subject.subject)
@@ -782,6 +783,7 @@ public actor OAuthServer {
             try await storage.saveAccessToken(
                 token: accessToken, clientId: clientId, scope: scope,
                 expiresAt: now.addingTimeInterval(accessTokenLifetime), audience: nil,
+                keyThumbprint: nil, certificateThumbprint: nil,
                 subject: subject)
             try await storage.saveRefreshToken(
                 token: refreshToken, clientId: clientId, scope: scope,
@@ -1185,7 +1187,8 @@ public actor OAuthServer {
     ///   - redirectUri: Redirect URI from authorization request
     /// - Returns: The generated CSRF token
     public func generateCSRFToken(clientId: String, redirectUri: String) async throws -> String {
-        return try await storage.generateCSRFToken(clientId: clientId, redirectUri: redirectUri)
+        return try await storage.generateCSRFToken(
+            clientId: clientId, redirectUri: redirectUri, expiresIn: 600)
     }
 
     /// Validates and consumes a CSRF token
@@ -1319,6 +1322,7 @@ public actor OAuthServer {
             scope: authCode.scope,
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
             audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
             subject: authCode.subject
         )
 
@@ -1385,6 +1389,7 @@ public actor OAuthServer {
             scope: scope,
             expiresAt: Date().addingTimeInterval(clientCredentialsTokenLifetime),
             audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
             // No resource owner: the client acts for itself, so it is the subject — the
             // convention RFC 9068 §2.2 writes down for exactly this grant.
             subject: request.clientId
@@ -1460,6 +1465,7 @@ public actor OAuthServer {
             scope: tokenInfo.scope,
             expiresAt: now.addingTimeInterval(accessTokenLifetime),
             audience: audience,
+            keyThumbprint: nil, certificateThumbprint: nil,
             subject: tokenInfo.subject
         )
 

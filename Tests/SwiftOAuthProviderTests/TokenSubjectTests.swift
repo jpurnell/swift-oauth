@@ -18,9 +18,9 @@ struct TokenSubjectTests {
     static let issuer = "https://auth.example.com"
 
     private static func makeServer(
-        served: ServedCapabilities? = nil
-    ) throws -> (OAuthServer, OAuthStorage) {
-        let storage = try OAuthStorage(path: ":memory:")
+        _ kind: StoreKind = .sqlite, served: ServedCapabilities? = nil
+    ) throws -> (OAuthServer, any OAuthProviderStorage) {
+        let storage = try kind.makeStore()
         let server = OAuthServer(
             storage: storage, issuer: issuer, scopesSupported: ["read", "write"],
             served: try served ?? ServedCapabilities(
@@ -61,9 +61,9 @@ struct TokenSubjectTests {
 
     // MARK: - Each grant
 
-    @Test("The device grant's token carries the approver as sub, and the issuer as iss")
-    func deviceGrantCarriesApprover() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("The device grant's token carries the approver as sub, and the issuer as iss", arguments: StoreKind.allCases)
+    func deviceGrantCarriesApprover(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let issued = try await server.authorizeDevice(clientId: "tv-app", scope: "read")
         try await server.approveDeviceCode(userCode: issued.userCode, subject: "user-ada")
 
@@ -76,9 +76,9 @@ struct TokenSubjectTests {
         #expect(introspected.clientId == "tv-app")
     }
 
-    @Test("A client_credentials token carries its own client_id as sub")
-    func clientCredentialsCarriesClientId() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("A client_credentials token carries its own client_id as sub", arguments: StoreKind.allCases)
+    func clientCredentialsCarriesClientId(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let service = try await server.createServiceClient(name: "svc", scopes: ["read"])
 
         let tokens = try await server.handleTokenRequest(TokenRequest(
@@ -91,9 +91,9 @@ struct TokenSubjectTests {
         #expect(introspected.issuer == Self.issuer)
     }
 
-    @Test("An authorization code granted for a subject issues a token carrying it")
-    func authorizationCodeCarriesSubject() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("An authorization code granted for a subject issues a token carrying it", arguments: StoreKind.allCases)
+    func authorizationCodeCarriesSubject(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let clientId = try await Self.registerPublicClient(server)
 
         let tokens = try await Self.codeGrant(server, clientId: clientId, subject: "user-ada")
@@ -105,9 +105,9 @@ struct TokenSubjectTests {
 
     /// A deployment that does not say who approved gets a token naming nobody — and the
     /// introspection still names the issuer. A subject is never invented.
-    @Test("A code granted with no subject issues a token with no sub, never an invented one")
-    func authorizationCodeWithoutSubject() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("A code granted with no subject issues a token with no sub, never an invented one", arguments: StoreKind.allCases)
+    func authorizationCodeWithoutSubject(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let clientId = try await Self.registerPublicClient(server)
 
         let tokens = try await Self.codeGrant(server, clientId: clientId, subject: nil)
@@ -123,9 +123,12 @@ struct TokenSubjectTests {
     /// the browser says.
     @Test("Consent over HTTP takes the subject from the caller, not the form", arguments: [
         ("user-ada", "user-ada"), (nil, nil)
-    ] as [(String?, String?)])
-    func consentTakesSubjectFromCaller(given: String?, expected: String?) async throws {
-        let (server, _) = try Self.makeServer()
+    ] as [(String?, String?)], StoreKind.allCases)
+    func consentTakesSubjectFromCaller(
+        subjects: (given: String?, expected: String?), store kind: StoreKind
+    ) async throws {
+        let (given, expected) = subjects
+        let (server, _) = try Self.makeServer(kind)
         let clientId = try await Self.registerPublicClient(server)
         let handler = OAuthHTTPHandler(server: server)
         let verifier = PKCE.generateCodeVerifier()
@@ -150,9 +153,9 @@ struct TokenSubjectTests {
         #expect(try await server.introspect(token: tokens.accessToken).subject == expected)
     }
 
-    @Test("A refreshed token keeps the subject the refresh token was issued for")
-    func refreshKeepsSubject() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("A refreshed token keeps the subject the refresh token was issued for", arguments: StoreKind.allCases)
+    func refreshKeepsSubject(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let clientId = try await Self.registerPublicClient(server)
         let first = try await Self.codeGrant(server, clientId: clientId, subject: "user-ada")
         let refreshToken = try #require(first.refreshToken)
@@ -167,12 +170,13 @@ struct TokenSubjectTests {
 
     /// RFC 8693 §1.1: the exchanged token acts for the same subject. Delegation that dropped
     /// the subject would make the downstream service unable to say on whose behalf it acts.
-    @Test("An exchanged token keeps the subject token's subject")
-    func exchangeKeepsSubject() async throws {
-        let (server, storage) = try Self.makeServer()
+    @Test("An exchanged token keeps the subject token's subject", arguments: StoreKind.allCases)
+    func exchangeKeepsSubject(store kind: StoreKind) async throws {
+        let (server, storage) = try Self.makeServer(kind)
         try await storage.saveAccessToken(
             token: "subject-token", clientId: "gateway", scope: "read write",
-            expiresAt: Date().addingTimeInterval(3600), audience: nil, subject: "user-ada")
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: "user-ada")
 
         let exchanged = try await server.exchangeToken(
             TokenExchangeRequest(
@@ -183,12 +187,13 @@ struct TokenSubjectTests {
         #expect(introspected.subject == "user-ada")
     }
 
-    @Test("Validation reports the subject a token was issued for")
-    func validationReportsSubject() async throws {
-        let (_, storage) = try Self.makeServer()
+    @Test("Validation reports the subject a token was issued for", arguments: StoreKind.allCases)
+    func validationReportsSubject(store kind: StoreKind) async throws {
+        let (_, storage) = try Self.makeServer(kind)
         try await storage.saveAccessToken(
             token: "live", clientId: "app", scope: "read",
-            expiresAt: Date().addingTimeInterval(3600), audience: nil, subject: "user-ada")
+            expiresAt: Date().addingTimeInterval(3600), audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: "user-ada")
 
         let result = try await storage.validateAccessToken(token: "live")
         guard case .valid(let token) = result else {
@@ -203,9 +208,9 @@ struct TokenSubjectTests {
     /// RFC 7662 §2.2: an inactive response carries nothing but `active`. Adding `iss` to active
     /// answers must not leak onto inactive ones, where it would confirm which server a dead
     /// token came from.
-    @Test("An inactive answer is still {\"active\":false} and nothing else")
-    func inactiveCarriesNoIssuer() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("An inactive answer is still {\"active\":false} and nothing else", arguments: StoreKind.allCases)
+    func inactiveCarriesNoIssuer(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let introspected = try await server.introspect(token: "never-issued")
 
         #expect(introspected == .inactive)
@@ -213,9 +218,9 @@ struct TokenSubjectTests {
                 == #"{"active":false}"#)
     }
 
-    @Test("Over HTTP, an active answer's body carries sub and iss")
-    func httpBodyCarriesSubAndIss() async throws {
-        let (server, _) = try Self.makeServer()
+    @Test("Over HTTP, an active answer's body carries sub and iss", arguments: StoreKind.allCases)
+    func httpBodyCarriesSubAndIss(store kind: StoreKind) async throws {
+        let (server, _) = try Self.makeServer(kind)
         let service = try await server.createServiceClient(name: "svc", scopes: ["read"])
         let tokens = try await server.handleTokenRequest(TokenRequest(
             grantType: "client_credentials", code: nil, redirectUri: nil,
@@ -239,6 +244,7 @@ struct TokenSubjectTests {
 
     /// A token stored before subjects were recorded keeps working, and names nobody — the
     /// honest answer, since nobody was recorded.
+    /// SQLite only: a schema migration has no in-memory counterpart.
     @Test("Upgrading keeps an earlier release's tokens, with no subject")
     func upgradeKeepsTokens() async throws {
         let path = FileManager.default.temporaryDirectory
