@@ -14,6 +14,7 @@ import os
 /// - `/token` - Token endpoint, including the device grant (RFC 8628 §3.4)
 /// - the device authorization endpoint (RFC 8628 §3.1), at whatever path
 ///   ``ServedCapabilities/deviceAuthorization`` names
+/// - the revocation endpoint (RFC 7009), at whatever path ``ServedCapabilities/revocation`` names
 /// - `/device` - Where a user enters a device's code (RFC 8628 §3.3)
 ///
 /// This is a stateless handler that delegates to OAuthServer for business logic.
@@ -835,6 +836,79 @@ public struct OAuthHTTPHandler: Sendable {
             logger.error("Unexpected error handling introspection: \(error.localizedDescription, privacy: .public)")
             #endif
             return errorResponse(.serverError(nil))
+        }
+    }
+
+    /// Handles a token revocation request — RFC 7009 §2.
+    ///
+    /// **Client authentication comes first** (§2.1), before the token is looked at, so an
+    /// unauthenticated caller learns nothing about whether it exists: a confidential client that
+    /// does not authenticate is answered `invalid_client` (401) and nothing is revoked. A public
+    /// client names itself with `client_id`, and the token is then revoked only if it was issued
+    /// to that client.
+    ///
+    /// The answer is `200` with an empty body for success **and** for a token that is invalid,
+    /// expired, already revoked, unknown or another client's (§2.2: "invalid tokens do not
+    /// cause an error response since the client cannot handle such an error in a reasonable
+    /// way"), so the status says nothing about whether the token existed. A request with no
+    /// `token` is `invalid_request` (400). `token_type_hint` is advisory and an unrecognised one
+    /// is ignored. `unsupported_token_type` is never sent: both kinds are revoked.
+    ///
+    /// A storage failure is `503` with `Retry-After` (§2.2.1): the client must assume the token
+    /// still exists, which on a failed write is the truth. Answering `200` would tell it a
+    /// token was revoked that was not; answering `500` would read as "your request was wrong".
+    ///
+    /// Route a `POST` to this at the path named in ``ServedCapabilities/revocation``, which is
+    /// also what the metadata advertises.
+    ///
+    /// - Parameters:
+    ///   - body: The URL-encoded form body: `token`, optionally `token_type_hint`, and
+    ///     `client_id` (and `client_secret`) unless authenticating with Basic.
+    ///   - authHeader: The `Authorization` header, for a confidential client.
+    /// - Returns: `200` and an empty body, or `invalid_client`, `invalid_request`, or `503`.
+    public func handleRevocationRequest(
+        body: String, authHeader: String?
+    ) async -> OAuthHTTPResponse {
+        let params = parseFormBody(body)
+
+        guard let clientId = params["client_id"] ?? Self.clientId(fromBasic: authHeader) else {
+            return errorResponse(.invalidClient(nil))
+        }
+
+        do {
+            let authenticated = try await server.authenticateClient(
+                clientId: clientId,
+                authHeader: authHeader,
+                bodyClientSecret: params["client_secret"]
+            )
+            guard authenticated else {
+                return errorResponse(.invalidClient(nil))
+            }
+
+            guard let token = params["token"], !token.isEmpty else {
+                return errorResponse(.invalidRequest(nil))
+            }
+
+            try await server.revoke(
+                token: token,
+                tokenTypeHint: params["token_type_hint"].flatMap(OAuthServer.TokenTypeHint.init(rawValue:)),
+                authenticatedClientId: clientId)
+            return OAuthHTTPResponse(
+                statusCode: 200, contentType: "application/json", body: "", headers: Self.uncached)
+        // logging: an OAuth error *is* the response; nothing is discarded by converting it
+        } catch let error as OAuthError {
+            return errorResponse(error)
+        } catch {
+            #if canImport(os)
+            logger.error("Revocation could not be completed: \(error.localizedDescription, privacy: .public)")
+            #endif
+            return OAuthHTTPResponse(
+                statusCode: 503,
+                contentType: "application/json",
+                body: Self.errorBody(
+                    code: OAuthError.temporarilyUnavailable(nil).code,
+                    description: "The token could not be revoked right now. Assume it still exists and try again."),
+                headers: Self.uncached.merging(["Retry-After": "30"]) { current, _ in current })
         }
     }
 

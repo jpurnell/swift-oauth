@@ -9,7 +9,7 @@ import SwiftOAuthProvider
 /// form body, the provider's answer is a status and a body, and the client reads that body with
 /// its own types — a success as the response type, a refusal as an RFC 6749 §5.2 error. Nothing
 /// is handed across as a Swift value.
-actor ProviderOverHTTP: DeviceAuthorizationTransport, IntrospectionTransport {
+actor ProviderOverHTTP: DeviceAuthorizationTransport, IntrospectionTransport, TokenTransport {
 
     private let handler: OAuthHTTPHandler
     private(set) var tokenRequests = 0
@@ -41,6 +41,24 @@ actor ProviderOverHTTP: DeviceAuthorizationTransport, IntrospectionTransport {
         let (body, authorization) = Self.form(parameters, credentials: credentials, method: method)
         return try Self.read(
             await handler.handleTokenRequest(body: body, authHeader: authorization))
+    }
+
+    // MARK: - TokenTransport (revocation)
+
+    func revoke(
+        endpoint: URL,
+        parameters: [String: String],
+        credentials: ClientCredentials,
+        method: ClientAuthenticationMethod
+    ) async throws {
+        let (body, authorization) = Self.form(parameters, credentials: credentials, method: method)
+        let response = await handler.handleRevocationRequest(body: body, authHeader: authorization)
+        // As the real transport: any 2xx confirms, the body is ignored (RFC 7009 §2.2), and
+        // anything else is the §5.2 error it carries.
+        guard (200..<300).contains(response.statusCode) else {
+            throw try JSONDecoder().decode(
+                OAuthErrorResponse.self, from: Data(response.body.utf8)).oauthError
+        }
     }
 
     // MARK: - IntrospectionTransport

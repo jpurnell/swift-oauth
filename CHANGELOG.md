@@ -13,6 +13,22 @@ implementation and a conformance suite. It was not: `OAuthServer` took the concr
 downgrade is provided or tested; a build expecting 10 will not be told to open an 11).
 
 ### Added
+- **An RFC 7009 revocation endpoint on the provider.** `OAuthHTTPHandler.handleRevocationRequest(body:authHeader:)`, which a deployment routes
+  at the path in `ServedCapabilities.revocation` (accepted and never read until now). The client authenticates first (§2.1), so an
+  unauthenticated confidential client learns nothing about a token; a public client names itself with `client_id`. A valid, unknown,
+  expired, already revoked or another client's token all answer `200` with an empty body (§2.2); a missing `token` is `invalid_request`; a
+  storage failure is `503` with `Retry-After` (§2.2.1). `token_type_hint` is a hint (§2.1: the server extends its search) and an
+  unrecognised one is ignored, so `unsupported_token_type` is never sent: both kinds are revoked. Revoking a refresh token also revokes
+  the access tokens, and the other refresh tokens, of its **grant** (§2.1 SHOULD); revoking an access token leaves its refresh token (§2.1
+  "may"). New: `OAuthServer.revoke(token:tokenTypeHint:authenticatedClientId:)`, and on `OAuthProviderStorage` (both stores and the
+  conformance suite, 29 requirements now) `revokeRefreshToken(token:clientId:)` and `revokeGrant(grantId:)`.
+  `ServerMetadata` gains `revocation_endpoint` and `revocation_endpoint_auth_methods_supported`, present exactly when the deployment
+  declares `served.revocation`.
+- **Grants.** Schema 11 adds `grant_id` to `access_tokens` and `refresh_tokens`. Every token a code or an approved device code produces
+  carries the grant, and so does every token refreshed from them. `RefreshTokenInfo` gains `grantId` and a public initializer, so a store
+  written elsewhere can return one. **Existing rows migrate with a `NULL` grant**: nothing was recorded for them, and linking them by
+  guesswork (same client and subject) could end a session other than the compromised one. They revoke one at a time, as before.
+  `client_credentials` tokens and token-exchange outputs also have no grant.
 - **`OAuthServer.revokeAllTokens(forSubject:) -> Int`**, and `OAuthProviderStorage.revokeAllTokens(forSubject:)`,
   on both stores and in the conformance suite (27 requirements now). Ends every access and refresh token a user holds on every client,
   and also their authorization codes not yet spent and device codes they approved and the device has not redeemed, so a disabled user's
@@ -41,6 +57,10 @@ downgrade is provided or tested; a build expecting 10 will not be told to open a
   tests, and available to run against a store of your own.
 
 ### Changed
+- **`OAuthProviderStorage.saveAccessToken` and `saveRefreshToken` gain a `grantId: String?` parameter.** A store written elsewhere must
+  add it (and `revokeRefreshToken(token:clientId:)`, `revokeGrant(grantId:)`, `revokeAllTokens(forSubject:)`). A caller holding the
+  protocol keeps the old spelling through a protocol extension that passes no grant; `OAuthStorage` and `InMemoryOAuthStorage` take it as a
+  defaulted argument, so their callers compile unchanged.
 - **`OAuthServer.init(storage:)` takes `any OAuthProviderStorage`.** Source compatible: a caller
   passing an `OAuthStorage` compiles unchanged. `TokenSubjectTests` and the device-endpoint tests
   now run against both stores.

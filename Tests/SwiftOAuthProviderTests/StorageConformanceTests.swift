@@ -63,15 +63,19 @@ private actor RefusingStore: OAuthProviderStorage {
     }
     func saveAccessToken(
         token: String, clientId: String, scope: String?, expiresAt: Date, audience: URL?,
-        keyThumbprint: String?, certificateThumbprint: String?, subject: String?
+        keyThumbprint: String?, certificateThumbprint: String?, subject: String?, grantId: String?
     ) throws {}
     func validateAccessToken(token: String) throws -> TokenValidationResult { .invalid(reason: "refused") }
     func introspectAccessToken(token: String) throws -> IntrospectionResult { .inactive }
     func revokeAccessToken(token: String) throws {}
     func revokeAllTokensForClient(clientId: String) throws {}
     func revokeAllTokens(forSubject subject: String) throws -> Int { 0 }
-    func saveRefreshToken(token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?) throws {}
+    func saveRefreshToken(
+        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?, grantId: String?
+    ) throws {}
     func getRefreshTokenInfo(token: String) throws -> RefreshTokenInfo? { nil }
+    func revokeRefreshToken(token: String, clientId: String) throws -> Int { 0 }
+    func revokeGrant(grantId: String) throws -> Int { 0 }
     func saveDeviceCode(
         deviceCode: String, userCode: String, clientId: String, scope: String?, expiresAt: Date,
         interval: TimeInterval, now: Date

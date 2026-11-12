@@ -59,6 +59,7 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         var keyThumbprint: String?
         var certificateThumbprint: String?
         var subject: String?
+        var grantId: String?
     }
 
     private struct RefreshRecord {
@@ -67,6 +68,7 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         var expiresAt: Date
         var revoked: Bool
         var subject: String?
+        var grantId: String?
     }
 
     private struct DeviceRecord {
@@ -229,12 +231,13 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         audience: URL? = nil,
         keyThumbprint: String? = nil,
         certificateThumbprint: String? = nil,
-        subject: String? = nil
+        subject: String? = nil,
+        grantId: String? = nil
     ) throws {
         accessTokens[OAuthStorage.sha256Hex(token)] = AccessRecord(
             clientId: clientId, scope: scope, expiresAt: expiresAt, createdAt: Date(),
             revoked: false, audience: audience, keyThumbprint: keyThumbprint,
-            certificateThumbprint: certificateThumbprint, subject: subject)
+            certificateThumbprint: certificateThumbprint, subject: subject, grantId: grantId)
     }
 
     /// Whether a token may be honoured, and what is known about it when it may.
@@ -319,10 +322,12 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         clientId: String,
         scope: String?,
         expiresAt: Date,
-        subject: String? = nil
+        subject: String? = nil,
+        grantId: String? = nil
     ) throws {
         refreshTokens[OAuthStorage.sha256Hex(token)] = RefreshRecord(
-            clientId: clientId, scope: scope, expiresAt: expiresAt, revoked: false, subject: subject)
+            clientId: clientId, scope: scope, expiresAt: expiresAt, revoked: false,
+            subject: subject, grantId: grantId)
     }
 
     /// A live refresh token's details, or `nil` if it is unknown, expired or revoked.
@@ -331,7 +336,38 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         if record.revoked || Date() >= record.expiresAt { return nil }
         return RefreshTokenInfo(
             clientId: record.clientId, scope: record.scope,
-            expiresAt: record.expiresAt, subject: record.subject)
+            expiresAt: record.expiresAt, subject: record.subject, grantId: record.grantId)
+    }
+
+    /// Revokes a refresh token on behalf of its client, with the rest of its grant.
+    /// See ``OAuthProviderStorage/revokeRefreshToken(token:clientId:)``.
+    @discardableResult
+    public func revokeRefreshToken(token: String, clientId: String) throws -> Int {
+        let key = OAuthStorage.sha256Hex(token)
+        guard let record = refreshTokens[key], record.clientId == clientId else { return 0 }
+        var changed = 0
+        if !record.revoked {
+            refreshTokens[key]?.revoked = true
+            changed += 1
+        }
+        guard let grantId = record.grantId else { return changed }
+        return changed + (try revokeGrant(grantId: grantId))
+    }
+
+    /// Revokes every access and refresh token issued under one grant.
+    /// See ``OAuthProviderStorage/revokeGrant(grantId:)``.
+    @discardableResult
+    public func revokeGrant(grantId: String) throws -> Int {
+        var changed = 0
+        for key in accessTokens.keys where accessTokens[key]?.grantId == grantId && accessTokens[key]?.revoked == false {
+            accessTokens[key]?.revoked = true
+            changed += 1
+        }
+        for key in refreshTokens.keys where refreshTokens[key]?.grantId == grantId && refreshTokens[key]?.revoked == false {
+            refreshTokens[key]?.revoked = true
+            changed += 1
+        }
+        return changed
     }
 
     /// Removes expired access tokens, refresh tokens and authorization codes, returning how many.

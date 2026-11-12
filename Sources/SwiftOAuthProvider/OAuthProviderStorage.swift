@@ -85,6 +85,10 @@ public protocol OAuthProviderStorage: Sendable {
     // MARK: Access tokens
 
     /// Saves an access token under its digest.
+    ///
+    /// - Parameter grantId: The grant this token was issued under, or `nil` for a token that
+    ///   belongs to none (a `client_credentials` or exchanged token, or a caller that does not
+    ///   track grants). See ``revokeGrant(grantId:)``.
     func saveAccessToken(
         token: String,
         clientId: String,
@@ -93,7 +97,8 @@ public protocol OAuthProviderStorage: Sendable {
         audience: URL?,
         keyThumbprint: String?,
         certificateThumbprint: String?,
-        subject: String?
+        subject: String?,
+        grantId: String?
     ) async throws
 
     /// Whether a token may be honoured, and what is known about it when it may.
@@ -133,13 +138,44 @@ public protocol OAuthProviderStorage: Sendable {
     // MARK: Refresh tokens
 
     /// Saves a refresh token under its digest.
+    ///
+    /// - Parameter grantId: The grant this token was issued under, or `nil`. See
+    ///   ``revokeGrant(grantId:)``.
     func saveRefreshToken(
-        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?
+        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?,
+        grantId: String?
     ) async throws
 
-    /// A live refresh token's client, scope, expiry and subject; `nil` if it is unknown,
+    /// A live refresh token's client, scope, expiry, subject and grant; `nil` if it is unknown,
     /// expired or revoked.
     func getRefreshTokenInfo(token: String) async throws -> RefreshTokenInfo?
+
+    /// Revokes a refresh token on behalf of the client it was issued to, and with it the rest of
+    /// its grant — RFC 7009 §2.1: "the authorization server SHOULD also invalidate all access
+    /// tokens based on the same authorization grant".
+    ///
+    /// Finds the row in whatever state it is in. An expired or already revoked token is still
+    /// the client's to revoke, and the grant's other tokens may still be live. A token issued
+    /// to another client is left exactly as it is and reads as not found: a client must not be
+    /// able to end another's grant, or to learn that a token exists.
+    ///
+    /// A token with no grant (every row from before schema 11) revokes only itself.
+    ///
+    /// - Returns: How many tokens changed from live to revoked, the refresh token included;
+    ///   0 for an unknown token, another client's, or one whose grant was already ended.
+    @discardableResult
+    func revokeRefreshToken(token: String, clientId: String) async throws -> Int
+
+    /// Revokes every access and refresh token issued under one grant.
+    ///
+    /// A grant is the authorization a user gave once: the label the server puts on the access
+    /// and refresh tokens that one code (or approved device code) produced, and on every token
+    /// refreshed from them. Tokens with no grant are never matched.
+    ///
+    /// - Returns: How many tokens changed from live to revoked. 0 for an unknown grant and for
+    ///   one already ended.
+    @discardableResult
+    func revokeGrant(grantId: String) async throws -> Int
 
     // MARK: Device codes (RFC 8628)
 
@@ -209,6 +245,39 @@ public protocol OAuthProviderStorage: Sendable {
     /// Returns what was pushed and spends it; `nil` if the reference is unknown, expired,
     /// spent, or another client's — one answer for all four.
     func consumePushedRequest(requestURI: String, clientId: String) async throws -> PushedAuthorizationRequest?
+}
+
+extension OAuthProviderStorage {
+
+    /// Saves an access token that belongs to no grant.
+    ///
+    /// The requirement takes a `grantId`; this is the call as it was before grants existed, for
+    /// a caller (a `client_credentials` token, a test) that has none.
+    public func saveAccessToken(
+        token: String,
+        clientId: String,
+        scope: String?,
+        expiresAt: Date,
+        audience: URL?,
+        keyThumbprint: String?,
+        certificateThumbprint: String?,
+        subject: String?
+    ) async throws {
+        try await saveAccessToken(
+            token: token, clientId: clientId, scope: scope, expiresAt: expiresAt,
+            audience: audience, keyThumbprint: keyThumbprint,
+            certificateThumbprint: certificateThumbprint, subject: subject, grantId: nil)
+    }
+
+    /// Saves a refresh token that belongs to no grant. See
+    /// ``saveAccessToken(token:clientId:scope:expiresAt:audience:keyThumbprint:certificateThumbprint:subject:)``.
+    public func saveRefreshToken(
+        token: String, clientId: String, scope: String?, expiresAt: Date, subject: String?
+    ) async throws {
+        try await saveRefreshToken(
+            token: token, clientId: clientId, scope: scope, expiresAt: expiresAt,
+            subject: subject, grantId: nil)
+    }
 }
 
 extension OAuthStorage: OAuthProviderStorage {}

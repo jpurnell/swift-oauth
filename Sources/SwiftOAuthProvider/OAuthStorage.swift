@@ -106,7 +106,7 @@ public actor OAuthStorage {
     /// say whose it is (RFC 7662 `sub`); version 10 hashed `device_codes.user_code` and added
     /// `device_codes.denied`, `last_polled_at` and `poll_interval` for RFC 8628 §3.5;
     /// version 11 indexed the `subject` columns, so revoking everything a user holds is a lookup
-    /// and not a table scan.
+    /// and not a table scan, and added `grant_id` to `access_tokens` and `refresh_tokens`.
     public static let currentSchemaVersion = 11
 
     /// Static helper to initialize database schema (runs before actor isolation)
@@ -416,7 +416,23 @@ public actor OAuthStorage {
         // which without an index reads every row of four tables. `IF NOT EXISTS`, so running it
         // twice is safe. A one-way migration: a build that expects schema 10 will not be told
         // to open a database at 11, and no downgrade is provided or tested.
+        //
+        // The same version adds `grant_id` to the two token tables: the authorization a token
+        // was issued under, so revoking one refresh token can end the access tokens made from it
+        // (RFC 7009 §2.1) and a refresh-token replay can end the whole line (RFC 9700 §4.14.2).
+        // Existing rows stay NULL: a grant is recorded when a token is issued, nothing was
+        // recorded for these, and linking them by guesswork (same client and subject) could end
+        // a session that is not the one that was compromised. A NULL-grant token revokes
+        // individually, as before.
         if version < 11 && targetVersion >= 11 {
+            for table in ["access_tokens", "refresh_tokens"] {
+                if try !columnExists(db: db, table: table, column: "grant_id") {
+                    try executeStatic(db: db, sql: "ALTER TABLE \(table) ADD COLUMN grant_id TEXT")
+                }
+                try executeStatic(
+                    db: db,
+                    sql: "CREATE INDEX IF NOT EXISTS idx_\(table)_grant ON \(table)(grant_id)")
+            }
             for table in ["access_tokens", "refresh_tokens", "authorization_codes", "device_codes"] {
                 try executeStatic(
                     db: db,
@@ -850,15 +866,16 @@ public actor OAuthStorage {
         audience: URL? = nil,
         keyThumbprint: String? = nil,
         certificateThumbprint: String? = nil,
-        subject: String? = nil
+        subject: String? = nil,
+        grantId: String? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO access_tokens
             (token_hash, client_id, scope, expires_at, created_at, revoked, audience,
-             key_thumbprint, certificate_thumbprint, subject)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+             key_thumbprint, certificate_thumbprint, subject, grant_id)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
         """, parameters: [
             tokenHash,
             clientId,
@@ -868,7 +885,8 @@ public actor OAuthStorage {
             audience?.absoluteString as Any,
             keyThumbprint as Any,
             certificateThumbprint as Any,
-            subject as Any
+            subject as Any,
+            grantId as Any
         ])
     }
 
@@ -1378,21 +1396,23 @@ public actor OAuthStorage {
         clientId: String,
         scope: String?,
         expiresAt: Date,
-        subject: String? = nil
+        subject: String? = nil,
+        grantId: String? = nil
     ) throws {
         let tokenHash = hashToken(token)
 
         try execute("""
             INSERT OR REPLACE INTO refresh_tokens
-            (token_hash, client_id, scope, expires_at, created_at, revoked, subject)
-            VALUES (?, ?, ?, ?, ?, 0, ?)
+            (token_hash, client_id, scope, expires_at, created_at, revoked, subject, grant_id)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?)
         """, parameters: [
             tokenHash,
             clientId,
             scope as Any,
             expiresAt.timeIntervalSince1970,
             Date().timeIntervalSince1970,
-            subject as Any
+            subject as Any,
+            grantId as Any
         ])
     }
 
@@ -1404,7 +1424,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         let sql = """
-            SELECT client_id, scope, expires_at, revoked, subject
+            SELECT client_id, scope, expires_at, revoked, subject, grant_id
             FROM refresh_tokens
             WHERE token_hash = ?
         """
@@ -1429,8 +1449,51 @@ public actor OAuthStorage {
         }
 
         let subject = sqlite3_column_text(stmt, 4).map { String(cString: $0) }
+        let grantId = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
         return RefreshTokenInfo(
-            clientId: clientId, scope: scope, expiresAt: expiresAt, subject: subject)
+            clientId: clientId, scope: scope, expiresAt: expiresAt, subject: subject, grantId: grantId)
+    }
+
+    /// Revokes a refresh token on behalf of its client, with the rest of its grant.
+    /// See ``OAuthProviderStorage/revokeRefreshToken(token:clientId:)``.
+    @discardableResult
+    public func revokeRefreshToken(token: String, clientId: String) throws -> Int {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(
+            db, "SELECT client_id, grant_id FROM refresh_tokens WHERE token_hash = ?",
+            -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        let tokenHash = hashToken(token)
+        sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let owner = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }),
+              owner == clientId else {
+            return 0
+        }
+        let grantId = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
+
+        try execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ? AND revoked = 0",
+            parameters: [tokenHash])
+        let changed = Int(sqlite3_changes(db))
+        guard let grantId else { return changed }
+        return changed + (try revokeGrant(grantId: grantId))
+    }
+
+    /// Revokes every access and refresh token issued under one grant.
+    /// See ``OAuthProviderStorage/revokeGrant(grantId:)``.
+    @discardableResult
+    public func revokeGrant(grantId: String) throws -> Int {
+        var changed = 0
+        for table in ["access_tokens", "refresh_tokens"] {
+            try execute(
+                "UPDATE \(table) SET revoked = 1 WHERE grant_id = ? AND revoked = 0",
+                parameters: [grantId])
+            changed += Int(sqlite3_changes(db))
+        }
+        return changed
     }
 
     /// Revokes a refresh token
@@ -1676,6 +1739,20 @@ public struct RefreshTokenInfo: Sendable {
     /// Who it was issued for — carried onto every access token it refreshes. `nil` when
     /// nobody was recorded.
     public let subject: String?
+    /// The grant it was issued under, which every token refreshed from it also carries. `nil`
+    /// for a token saved with none, and for every row from before schema 11.
+    public let grantId: String?
+
+    /// Creates the description of a refresh token, for a store to return.
+    public init(
+        clientId: String, scope: String?, expiresAt: Date, subject: String?, grantId: String? = nil
+    ) {
+        self.clientId = clientId
+        self.scope = scope
+        self.expiresAt = expiresAt
+        self.subject = subject
+        self.grantId = grantId
+    }
 }
 
 // MARK: - OAuthStorageError

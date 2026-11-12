@@ -65,6 +65,11 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case devicePollPacing = "polling too soon is slow_down and widens the interval by five seconds"
         // Pushed authorization requests
         case pushedRequestIsSingleUse = "a pushed request is consumed once, by its own client, before it expires"
+        // Grants (RFC 7009 §2.1)
+        case grantRevocation =
+            "revoking a grant ends exactly the access and refresh tokens carrying it, and counts them"
+        case refreshRevocationByOwner =
+            "revoking a refresh token takes its grant, for its own client only, and finds expired rows"
         // Revocation by subject
         case revokeAllTokensForSubject =
             "revoking a subject ends its tokens, unspent codes and approved device codes, and counts them"
@@ -273,6 +278,8 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case .deviceRedemptionIsOnce: try await deviceRedemptionIsOnce(store, &o)
         case .devicePollPacing: try await devicePollPacing(store, &o)
         case .pushedRequestIsSingleUse: try await pushedRequest(store, &o)
+        case .grantRevocation: try await grantRevocation(store, &o)
+        case .refreshRevocationByOwner: try await refreshRevocationByOwner(store, &o)
         case .revokeAllTokensForSubject: try await revokeAllForSubject(store, &o)
         }
     }
@@ -540,6 +547,105 @@ public struct ProviderStorageConformanceSuite: Sendable {
                  "revoking one client's tokens revoked another client's access token")
         o.expect(try await store.getRefreshTokenInfo(token: "rt-c2-alice") != nil,
                  "revoking one client's tokens revoked another client's refresh token")
+    }
+
+    /// RFC 7009 §2.1: a revoked refresh token SHOULD take the access tokens "based on the same
+    /// authorization grant" with it. A grant is a label the server puts on every token it issues
+    /// from one authorization; the store keeps it and can end everything carrying it.
+    private static func grantRevocation(_ store: any OAuthProviderStorage, _ o: inout Observation) async throws {
+        for name in ["a", "b"] {
+            try await store.saveAccessToken(
+                token: "at-g1-\(name)", clientId: "c1", scope: nil, expiresAt: future, audience: nil,
+                keyThumbprint: nil, certificateThumbprint: nil, subject: "alice", grantId: "g1")
+        }
+        try await store.saveRefreshToken(
+            token: "rt-g1", clientId: "c1", scope: nil, expiresAt: future, subject: "alice", grantId: "g1")
+        try await store.saveAccessToken(
+            token: "at-g2", clientId: "c1", scope: nil, expiresAt: future, audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: "alice", grantId: "g2")
+        try await store.saveAccessToken(
+            token: "at-none", clientId: "c1", scope: nil, expiresAt: future, audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: "alice", grantId: nil)
+        try await store.saveRefreshToken(
+            token: "rt-none", clientId: "c1", scope: nil, expiresAt: future, subject: "alice", grantId: nil)
+        let info = try await store.getRefreshTokenInfo(token: "rt-g1")
+        o.expect(info?.grantId == "g1", "the grant a refresh token was saved with was not returned")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-none")?.grantId == nil,
+                 "a refresh token saved with no grant gained one")
+        o.control(isValid(try await store.validateAccessToken(token: "at-g1-a")), "the tokens were not stored")
+
+        let changed = try await store.revokeGrant(grantId: "g1")
+        o.expect(changed == 3, "expected 2 access + 1 refresh = 3, got \(changed)")
+        for name in ["a", "b"] {
+            o.expect(isValid(try await store.validateAccessToken(token: "at-g1-\(name)")) == false,
+                     "an access token of the grant survived")
+        }
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-g1") == nil, "the refresh token of the grant survived")
+        o.expect(isValid(try await store.validateAccessToken(token: "at-g2")), "another grant's token was revoked")
+        o.expect(isValid(try await store.validateAccessToken(token: "at-none")), "a token with no grant was revoked")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-none") != nil, "a refresh token with no grant was revoked")
+        o.expect(try await store.revokeGrant(grantId: "g1") == 0, "a second revocation changed rows")
+        o.expect(try await store.revokeGrant(grantId: "never-issued") == 0, "an unknown grant changed rows")
+    }
+
+    /// Revoking a refresh token by its owner. The store must find the row whatever state it is
+    /// in (an expired or already revoked token is still the client's to revoke) and must not
+    /// touch it for any other client, or a client could end another's grant by guessing.
+    private static func refreshRevocationByOwner(
+        _ store: any OAuthProviderStorage, _ o: inout Observation
+    ) async throws {
+        try await store.saveRefreshToken(
+            token: "rt1", clientId: "c1", scope: nil, expiresAt: future, subject: nil, grantId: "g1")
+        for name in ["a", "b"] {
+            try await store.saveAccessToken(
+                token: "at1-\(name)", clientId: "c1", scope: nil, expiresAt: future, audience: nil,
+                keyThumbprint: nil, certificateThumbprint: nil, subject: nil, grantId: "g1")
+        }
+        try await store.saveRefreshToken(
+            token: "rt-other", clientId: "c2", scope: nil, expiresAt: future, subject: nil, grantId: "g2")
+        try await store.saveAccessToken(
+            token: "at-other", clientId: "c2", scope: nil, expiresAt: future, audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: nil, grantId: "g2")
+        o.control(try await store.getRefreshTokenInfo(token: "rt1") != nil, "the refresh token was not stored")
+
+        o.expect(try await store.revokeRefreshToken(token: "rt1", clientId: "c2") == 0,
+                 "another client revoked a refresh token")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt1") != nil, "another client's attempt ended the token")
+        o.expect(isValid(try await store.validateAccessToken(token: "at1-a")), "another client's attempt ended the grant")
+
+        o.expect(try await store.revokeRefreshToken(token: "rt1", clientId: "c1") == 3,
+                 "expected the refresh token and its 2 access tokens = 3")
+        o.expect(try await store.getRefreshTokenInfo(token: "rt1") == nil, "the refresh token survived")
+        for name in ["a", "b"] {
+            o.expect(isValid(try await store.validateAccessToken(token: "at1-\(name)")) == false,
+                     "an access token of the revoked refresh token's grant survived")
+        }
+        o.expect(try await store.getRefreshTokenInfo(token: "rt-other") != nil, "another grant's refresh token was revoked")
+        o.expect(isValid(try await store.validateAccessToken(token: "at-other")), "another grant's access token was revoked")
+        o.expect(try await store.revokeRefreshToken(token: "rt1", clientId: "c1") == 0, "revoking twice changed rows")
+        o.expect(try await store.revokeRefreshToken(token: "never-issued", clientId: "c1") == 0, "an unknown token changed rows")
+
+        // No grant recorded (a row from before schema 11): only itself.
+        try await store.saveRefreshToken(
+            token: "rt-legacy", clientId: "c1", scope: nil, expiresAt: future, subject: nil, grantId: nil)
+        try await store.saveAccessToken(
+            token: "at-legacy", clientId: "c1", scope: nil, expiresAt: future, audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: nil, grantId: nil)
+        o.expect(try await store.revokeRefreshToken(token: "rt-legacy", clientId: "c1") == 1,
+                 "a refresh token with no grant should revoke only itself")
+        o.expect(isValid(try await store.validateAccessToken(token: "at-legacy")),
+                 "a token with no grant was revoked along with a refresh token")
+
+        // Expired but not revoked: still found, and its grant still ended.
+        try await store.saveRefreshToken(
+            token: "rt-expired", clientId: "c1", scope: nil, expiresAt: past, subject: nil, grantId: "g3")
+        try await store.saveAccessToken(
+            token: "at-g3", clientId: "c1", scope: nil, expiresAt: future, audience: nil,
+            keyThumbprint: nil, certificateThumbprint: nil, subject: nil, grantId: "g3")
+        o.expect(try await store.revokeRefreshToken(token: "rt-expired", clientId: "c1") == 2,
+                 "an expired refresh token was not found, or its grant was not ended")
+        o.expect(isValid(try await store.validateAccessToken(token: "at-g3")) == false,
+                 "a live access token outlived its expired refresh token's revocation")
     }
 
     /// Gap D of the spec-gaps proposal: ending everything one user holds, across clients.
