@@ -80,7 +80,7 @@ public enum TokenGenerator {
     /// - Parameter byteLength: Number of random bytes (default 32 = 256 bits)
     /// - Returns: URL-safe base64 encoded random string
     public static func generateToken(byteLength: Int = 32) -> String {
-        var rng = SystemRandomNumberGenerator() // stochastic:exempt convenience wrapper; injectable overload above
+        var rng = SystemRandomNumberGenerator()
         return generateToken(byteLength: byteLength, using: &rng)
     }
 

@@ -109,9 +109,9 @@ public enum DPoPProof {
         let jwk = Self.jwk(for: key.publicKey)
         let header = Data(#"{"typ":"dpop+jwt","alg":"ES256","jwk":\#(jwk)}"#.utf8)
 
-        // 16 bytes from the system CSPRNG. A guessable `jti` is a replay window, since a
-        // server refusing repeats can only refuse the ones it can predict being reused.
-        var generator = SystemRandomNumberGenerator() // stochastic:exempt convenience wrapper; `create(…using:)` takes a generator
+        // 16 bytes from the supplied generator — the system CSPRNG, when the caller used the
+        // overload without one. A guessable `jti` is a replay window, since a server refusing
+        // repeats can only refuse the ones it can predict being reused.
         // base64url rather than hex: the encoding is irrelevant to a `jti` — uniqueness and
         // unpredictability are the whole requirement — and it avoids `String(format:)`, which
         // bridges to the C printf ABI and fails at runtime rather than at compile time.

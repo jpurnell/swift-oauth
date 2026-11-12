@@ -97,7 +97,7 @@ public enum PKCE {
     ///
     /// - Returns: A URL-safe random string suitable for use as a code verifier
     public static func generateCodeVerifier() -> String {
-        var rng = SystemRandomNumberGenerator() // stochastic:exempt convenience wrapper; injectable overload above
+        var rng = SystemRandomNumberGenerator()
         return generateCodeVerifier(using: &rng)
     }
 

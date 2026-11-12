@@ -41,7 +41,6 @@ public struct DPoPSession: Sendable {
 
     /// Creates a session with a fresh key.
     public init() {
-        // stochastic:exempt a signing key must be unpredictable; there is no seeded path here
         let key = P256.Signing.PrivateKey()
         self.keyBytes = key.rawRepresentation
         self.keyThumbprint = DPoPProof.thumbprint(of: key.publicKey)
