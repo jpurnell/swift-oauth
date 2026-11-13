@@ -19,7 +19,10 @@ import SwiftOAuthProvider
 /// is reported ``Verdict/inconclusive``, not ``Verdict/passed``.
 ///
 /// ```swift
-/// let suite = ProviderStorageConformanceSuite { try InMemoryOAuthStorage() }
+/// import SwiftOAuthProvider
+/// import SwiftOAuthProviderConformance
+///
+/// let suite = ProviderStorageConformanceSuite { InMemoryOAuthStorage() }
 /// let report = await suite.run()
 /// precondition(report.isConformant, report.summary)
 /// ```

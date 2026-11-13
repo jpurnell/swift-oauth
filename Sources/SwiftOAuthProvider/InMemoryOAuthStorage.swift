@@ -18,10 +18,12 @@ import SwiftOAuthCore
 /// what the SQLite store gets from its own actor.
 ///
 /// ```swift
+/// import SwiftOAuthProvider
+///
 /// let server = OAuthServer(
 ///     storage: InMemoryOAuthStorage(),
 ///     issuer: "https://auth.example.com",
-///     scopesSupported: ["read"], served: .none, resourceIdentity: identity)
+///     scopesSupported: ["read"], served: .core, resourceIdentity: .colocated)
 /// ```
 ///
 /// Nothing is ever evicted on its own. ``cleanupExpiredTokens()`` and
