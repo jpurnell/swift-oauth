@@ -58,7 +58,7 @@ problem, which is what stops each caller reinventing them slightly differently.
 ## Installation
 
 ```swift
-.package(url: "https://github.com/jpurnell/swift-oauth.git", exact: "1.0.0-beta.9")
+.package(url: "https://github.com/jpurnell/swift-oauth.git", exact: "1.0.0-beta.11")
 ```
 
 Pinned exactly, because SwiftPM's version ranges do not select prereleases: a `from:` range
@@ -76,7 +76,7 @@ Linux (CI runs `swift:6.2`).
 
 ## Status
 
-**1.0.0-beta.9.** The full OAuth 2.1 surface: authorization code with mandatory PKCE, refresh
+**1.0.0-beta.11.** The full OAuth 2.1 surface: authorization code with mandatory PKCE, refresh
 with rotation, client credentials, the device grant (RFC 8628), token exchange (RFC 8693),
 introspection (RFC 7662), revocation (RFC 7009), dynamic registration (RFC 7591), PAR (RFC
 9126), JAR (RFC 9101), DPoP (RFC 9449), mTLS-bound tokens (RFC 8705), resource indicators (RFC
@@ -134,7 +134,7 @@ let who = await authenticator.authentication(for: [OAuthAccessToken(tokens.acces
 It fails closed, tells the caller nothing about why, and passes SwiftIdentity's conformance
 suite unchanged.
 
-688 tests (a parameterised test counts once); the quality gate runs with no errors and no warnings. Linux CI was green at 1.0.0-beta.9 (not yet re-run at beta.10), `SwiftOAuthIdentity` included. 1.0.0-beta.8 did not build on Linux, because `swift-identity` 0.7.0 did not; beta.9 requires 0.7.1.
+786 tests (a parameterised test counts once); the quality gate runs with no errors and no warnings. Linux CI was green on the commit before beta.11 (the run for `193bc09`), `SwiftOAuthIdentity` included; it runs again on the release push. 1.0.0-beta.8 did not build on Linux, because `swift-identity` 0.7.0 did not; beta.9 requires 0.7.1.
 
 Three adoptions exercised it rather than a test suite alone: LedgeOS on the client half,
 SwiftMCPServer and SwiftMCPClient on the provider half. Eight defects in this package were found by a

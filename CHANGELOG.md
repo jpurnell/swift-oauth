@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.11] — 2026-11-13
+
+**Behaviour changes for every consumer: refresh tokens rotate by default, and the schema moves to 11 (one way).** Read *Changed*
+below before bumping; a client that reuses its first refresh token is refused from its second refresh.
+
 The README has said since the first release that provider storage is a protocol with an in-memory
 implementation and a conformance suite. It was not: `OAuthServer` took the concrete SQLite
 `OAuthStorage`. It is now what the README says. The schema moves from 10 to **11**, one way (no
@@ -118,8 +123,9 @@ downgrade is provided or tested; a build expecting 10 will not be told to open a
   **Migration:** a client must store the refresh token each response returns and use it next time (this package's own
   `OAuthConnection` already does). To keep the old behaviour, pass `rotationPolicy: .reusable`. **A grace window for a client that loses
   the response to a refresh is not built**: it is not in RFC 9700, and until it exists such a client loses its grant and must sign in again.
-  The consumers (FleetWatch, VaultMCP, SwiftPushHub, SwiftMCPServer) have **not** been run against a rotating build, and a real client
-  (Claude Code) should be tried against one before this ships.
+  The four servers built on this package (FleetWatch, VaultMCP, SwiftPushHub, SwiftMCPServer) were built and their full test suites
+  run against a rotating build before this release, and all pass; none of those suites asserted rotation, so SwiftMCPServer gains
+  tests for it alongside its bump to this version. A real client (Claude Code) has **not** been tried against a rotating build.
 - **A replayed authorization code now revokes the tokens its first redemption issued** (RFC 9700 §4.2.4, SHOULD), under either policy.
   The grant is named by the code, so no extra storage is needed.
 - **`OAuthProviderStorage.saveAccessToken` and `saveRefreshToken` gain a `grantId: String?` parameter.** A store written elsewhere must
@@ -1922,7 +1928,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.11...HEAD
+[1.0.0-beta.11]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...v1.0.0-beta.11
 [1.0.0-beta.10]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...v1.0.0-beta.9
 [1.0.0-beta.8]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.7...v1.0.0-beta.8
