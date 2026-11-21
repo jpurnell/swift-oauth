@@ -80,6 +80,10 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case refreshClaimIsOnce =
             "a refresh token is claimed once, then reads as replayed with its grant; dead and foreign ones are unusable"
         case refreshClaimIsAtomic = "concurrent claims of one refresh token succeed exactly once"
+        case rotationStoresSuccessor =
+            "rotating a refresh token spends it and stores its successor, with the same client, scope, subject, grant and expiry"
+        case rotationGraceWindow =
+            "a spent token is regranted only inside the window, for its client, while its successor is unpresented; the successor it supersedes is spent"
         // Revocation by subject
         case revokeAllTokensForSubject =
             "revoking a subject ends its tokens, unspent codes and approved device codes, and counts them"
@@ -294,6 +298,8 @@ public struct ProviderStorageConformanceSuite: Sendable {
         case .refreshRevocationByOwner: try await refreshRevocationByOwner(store, &o)
         case .refreshClaimIsOnce: try await refreshClaimIsOnce(store, &o)
         case .refreshClaimIsAtomic: try await refreshClaimIsAtomic(store, &o)
+        case .rotationStoresSuccessor: try await rotationStoresSuccessor(store, &o)
+        case .rotationGraceWindow: try await rotationGraceWindow(store, &o)
         case .revokeAllTokensForSubject: try await revokeAllForSubject(store, &o)
         }
     }
@@ -726,6 +732,118 @@ public struct ProviderStorageConformanceSuite: Sendable {
             token: "rt-legacy", clientId: "c1", defaultGrantId: "another", now: Date())
         o.expect(legacyReplay == .replayed(grantId: "fresh-grant"),
                  "the replay of a token that had no grant read as \(legacyReplay)")
+    }
+
+    /// Rotation stores the successor in the same step that spends the token.
+    private static func rotationStoresSuccessor(
+        _ store: any OAuthProviderStorage, _ o: inout Observation
+    ) async throws {
+        let expiry = future
+        try await store.saveRefreshToken(
+            token: "rot-a", clientId: "c1", scope: "read", expiresAt: expiry, subject: "alice", grantId: "g1")
+        o.control(try await store.getRefreshTokenInfo(token: "rot-a") != nil, "the refresh token was not stored")
+
+        let claim = try await store.rotateRefreshToken(
+            token: "rot-a", clientId: "c1", defaultGrantId: "unused", successor: "rot-b",
+            gracePeriod: 0, now: Date())
+        guard case .claimed(let info) = claim else {
+            o.fail("a live refresh token was not rotated: \(claim)")
+            return
+        }
+        o.expect(info.grantId == "g1", "the rotated token's grant changed")
+        o.expect(try await store.getRefreshTokenInfo(token: "rot-a") == nil, "the spent token is still live")
+        let stored = try await store.getRefreshTokenInfo(token: "rot-b")
+        o.expect(stored != nil, "the successor was not stored")
+        o.expect(stored?.clientId == "c1" && stored?.scope == "read" && stored?.subject == "alice"
+                 && stored?.grantId == "g1", "the successor's client, scope, subject or grant differs")
+        o.expect(stored.map { abs($0.expiresAt.timeIntervalSince(expiry)) < 0.001 } == true,
+                 "the successor's expiry differs: rotation must not extend it")
+        // With no grace period, a second presentation is a replay, exactly as before.
+        let replay = try await store.rotateRefreshToken(
+            token: "rot-a", clientId: "c1", defaultGrantId: "unused", successor: "rot-c",
+            gracePeriod: 0, now: Date())
+        o.expect(replay == .replayed(grantId: "g1"), "a replay with no grace period read as \(replay)")
+        o.expect(try await store.getRefreshTokenInfo(token: "rot-c") == nil, "a replay stored a successor")
+        // Refused tokens store nothing.
+        let foreign = try await store.rotateRefreshToken(
+            token: "rot-b", clientId: "c2", defaultGrantId: "unused", successor: "rot-d",
+            gracePeriod: 30, now: Date())
+        o.expect(foreign == .unusable, "another client's rotation read as \(foreign)")
+        o.expect(try await store.getRefreshTokenInfo(token: "rot-d") == nil, "a refused rotation stored a successor")
+        o.expect(try await store.getRefreshTokenInfo(token: "rot-b") != nil, "another client's attempt spent the token")
+    }
+
+    /// The grace window: `project/plans/proposals/2026-11-20_RefreshGraceWindow.md`.
+    private static func rotationGraceWindow(
+        _ store: any OAuthProviderStorage, _ o: inout Observation
+    ) async throws {
+        let t0 = Date()
+        func rotate(_ token: String, _ successor: String, client: String = "c1", at offset: TimeInterval)
+            async throws -> RefreshTokenClaim {
+            try await store.rotateRefreshToken(
+                token: token, clientId: client, defaultGrantId: "unused", successor: successor,
+                gracePeriod: 30, now: t0.addingTimeInterval(offset))
+        }
+
+        // A lost response: spent at t0, its successor S1 never presented.
+        try await store.saveRefreshToken(
+            token: "g-a", clientId: "c1", scope: "read", expiresAt: future, subject: "alice", grantId: "g1")
+        let first = try await rotate("g-a", "g-s1", at: 0)
+        o.control({ if case .claimed = first { return true } else { return false } }(),
+                  "the first rotation did not claim: \(first)")
+        o.control(try await store.getRefreshTokenInfo(token: "g-s1") != nil, "the successor was not stored")
+
+        // Another client inside the window: unusable, and nothing changes.
+        let foreign = try await rotate("g-a", "g-x", client: "c2", at: 5)
+        o.expect(foreign == .unusable, "another client was answered \(foreign)")
+        o.expect(try await store.getRefreshTokenInfo(token: "g-s1") != nil, "another client's retry spent the successor")
+
+        // Inside the window: regranted, a new successor is live, the superseded one is spent.
+        let retry = try await rotate("g-a", "g-s2", at: 10)
+        guard case .regranted(let info) = retry else {
+            o.fail("a retry inside the window read as \(retry), not regranted")
+            return
+        }
+        o.expect(info.grantId == "g1" && info.subject == "alice", "the regrant's grant or subject differs")
+        o.expect(try await store.getRefreshTokenInfo(token: "g-s2") != nil, "the regrant stored no successor")
+        o.expect(try await store.getRefreshTokenInfo(token: "g-s1") == nil, "the superseded successor is still live")
+        // The superseded successor is a spent token: presenting it is a replay, and cannot itself
+        // be regranted even though it was spent a moment ago.
+        let superseded = try await rotate("g-s1", "g-y", at: 11)
+        o.expect(superseded == .replayed(grantId: "g1"), "the superseded successor read as \(superseded)")
+
+        // The window does not slide: 31 s after the FIRST spend is outside it, whatever came since.
+        let late = try await rotate("g-a", "g-s3", at: 31)
+        o.expect(late == .replayed(grantId: "g1"), "a retry after the window read as \(late)")
+        o.expect(try await store.getRefreshTokenInfo(token: "g-s3") == nil, "a refused retry stored a successor")
+
+        // The successor was presented: no lost response, so no window.
+        try await store.saveRefreshToken(
+            token: "u-a", clientId: "c1", scope: nil, expiresAt: future, subject: nil, grantId: "g2")
+        _ = try await rotate("u-a", "u-s1", at: 0)
+        let used = try await rotate("u-s1", "u-s2", at: 2)
+        o.control({ if case .claimed = used { return true } else { return false } }(),
+                  "the successor was not rotated: \(used)")
+        let afterUse = try await rotate("u-a", "u-s3", at: 5)
+        o.expect(afterUse == .replayed(grantId: "g2"), "a retry after its successor was used read as \(afterUse)")
+
+        // A revoked grant: its successor is revoked, so there is nothing left to regrant.
+        try await store.saveRefreshToken(
+            token: "r-a", clientId: "c1", scope: nil, expiresAt: future, subject: nil, grantId: "g3")
+        _ = try await rotate("r-a", "r-s1", at: 0)
+        try await store.revokeGrant(grantId: "g3")
+        let revoked = try await rotate("r-a", "r-s2", at: 5)
+        o.expect(revoked == .replayed(grantId: "g3"), "a retry on a revoked grant read as \(revoked)")
+        o.expect(try await store.getRefreshTokenInfo(token: "r-s2") == nil, "a revoked grant gained a token")
+
+        // A period of 0 is off.
+        try await store.saveRefreshToken(
+            token: "z-a", clientId: "c1", scope: nil, expiresAt: future, subject: nil, grantId: "g4")
+        _ = try await rotate("z-a", "z-s1", at: 0)
+        let off = try await store.rotateRefreshToken(
+            token: "z-a", clientId: "c1", defaultGrantId: "unused", successor: "z-s2",
+            gracePeriod: 0, now: t0.addingTimeInterval(1))
+        o.expect(off == .replayed(grantId: "g4"), "a retry with a period of 0 read as \(off)")
     }
 
     private static func refreshClaimIsAtomic(_ store: any OAuthProviderStorage, _ o: inout Observation) async throws {

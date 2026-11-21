@@ -107,8 +107,9 @@ public actor OAuthStorage {
     /// `device_codes.denied`, `last_polled_at` and `poll_interval` for RFC 8628 §3.5;
     /// version 11 indexed the `subject` columns, so revoking everything a user holds is a lookup
     /// and not a table scan, and added `grant_id` to `access_tokens` and `refresh_tokens` and `rotated_at` to
-    /// `refresh_tokens`.
-    public static let currentSchemaVersion = 11
+    /// `refresh_tokens`; version 12 added `refresh_tokens.replaced_by`, the successor a spent
+    /// token was exchanged for, which the refresh grace window reads.
+    public static let currentSchemaVersion = 12
 
     /// Static helper to initialize database schema (runs before actor isolation)
     ///
@@ -445,6 +446,19 @@ public actor OAuthStorage {
                 try executeStatic(
                     db: db,
                     sql: "CREATE INDEX IF NOT EXISTS idx_\(table)_subject ON \(table)(subject)")
+            }
+        }
+
+        // Version 12: the refresh grace window (`2026-11-20_RefreshGraceWindow.md`). The digest of
+        // the token a refresh token was exchanged for, so a retry after a lost response can find
+        // the successor nobody received and see whether it was ever presented. NULL is "no
+        // successor recorded", which is every row from before this version: such a token is
+        // never regranted, so an upgraded database behaves as schema 11 did until its tokens
+        // rotate again. Additive and nullable, so unlike 8 to 11 a build that expects schema 11
+        // reads this database unharmed and a rollback is a binary swap.
+        if version < 12 && targetVersion >= 12 {
+            if try !columnExists(db: db, table: "refresh_tokens", column: "replaced_by") {
+                try executeStatic(db: db, sql: "ALTER TABLE refresh_tokens ADD COLUMN replaced_by TEXT")
             }
         }
 
@@ -1522,6 +1536,128 @@ public actor OAuthStorage {
         return .replayed(grantId: grantId)
     }
 
+    /// Rotates a refresh token and answers a retry inside the grace period. See
+    /// ``OAuthProviderStorage/rotateRefreshToken(token:clientId:defaultGrantId:successor:gracePeriod:now:)``.
+    ///
+    /// One transaction: reading the spent token, spending the successor it supersedes, and
+    /// saving the new one succeed or fail together. The actor already keeps two callers from
+    /// interleaving; the transaction is for a crash part-way.
+    public func rotateRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, successor: String,
+        gracePeriod: TimeInterval, now: Date
+    ) throws -> RefreshTokenClaim {
+        let tokenHash = hashToken(token)
+        let successorHash = hashToken(successor)
+        let at = now.timeIntervalSince1970
+
+        try execute("BEGIN IMMEDIATE")
+        do {
+            let claim = try rotateInTransaction(
+                tokenHash: tokenHash, clientId: clientId, defaultGrantId: defaultGrantId,
+                successor: successor, successorHash: successorHash, gracePeriod: gracePeriod, at: at)
+            try execute("COMMIT")
+            return claim
+        } catch let failure {
+            do {
+                try execute("ROLLBACK")
+            } catch {
+                throw OAuthStorageError.databaseError(
+                    "Rotating a refresh token failed (\(failure)) and the rollback failed too (\(error)).")
+            }
+            throw failure
+        }
+    }
+
+    private struct RefreshRow {
+        var clientId: String
+        var scope: String?
+        var expiresAt: Double
+        var revoked: Bool
+        var subject: String?
+        var grantId: String?
+        var rotatedAt: Double?
+        var replacedBy: String?
+
+        var info: RefreshTokenInfo {
+            RefreshTokenInfo(
+                clientId: clientId, scope: scope, expiresAt: Date(timeIntervalSince1970: expiresAt),
+                subject: subject, grantId: grantId)
+        }
+    }
+
+    private func refreshRow(hash: String) throws -> RefreshRow? {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = """
+            SELECT client_id, scope, expires_at, revoked, subject, grant_id, rotated_at, replaced_by
+            FROM refresh_tokens WHERE token_hash = ?
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw OAuthStorageError.databaseError("Failed to prepare statement")
+        }
+        sqlite3_bind_text(stmt, 1, hash, -1, SQLITE_TRANSIENT)
+        guard sqlite3_step(stmt) == SQLITE_ROW,
+              let owner = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }) else { return nil }
+        return RefreshRow(
+            clientId: owner,
+            scope: sqlite3_column_text(stmt, 1).map { String(cString: $0) },
+            expiresAt: sqlite3_column_double(stmt, 2),
+            revoked: sqlite3_column_int(stmt, 3) != 0,
+            subject: sqlite3_column_text(stmt, 4).map { String(cString: $0) },
+            grantId: sqlite3_column_text(stmt, 5).map { String(cString: $0) },
+            rotatedAt: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 6),
+            replacedBy: sqlite3_column_text(stmt, 7).map { String(cString: $0) })
+    }
+
+    private func rotateInTransaction(
+        tokenHash: String, clientId: String, defaultGrantId: String, successor: String,
+        successorHash: String, gracePeriod: TimeInterval, at: Double
+    ) throws -> RefreshTokenClaim {
+        guard let row = try refreshRow(hash: tokenHash), row.clientId == clientId else {
+            return .unusable
+        }
+
+        if let spentAt = row.rotatedAt {
+            // Spent already. Claiming always leaves a grant, so there is one.
+            guard let grantId = row.grantId else { return .unusable }
+            guard gracePeriod > 0, !row.revoked, at < row.expiresAt, at - spentAt <= gracePeriod,
+                  let previousHash = row.replacedBy,
+                  let previous = try refreshRow(hash: previousHash),
+                  !previous.revoked, previous.rotatedAt == nil else {
+                return .replayed(grantId: grantId)
+            }
+            // The successor nobody received is spent, and cannot itself be regranted: its own
+            // `replaced_by` is cleared, so presenting it reads as a plain replay.
+            try execute(
+                "UPDATE refresh_tokens SET rotated_at = ?, replaced_by = NULL WHERE token_hash = ?",
+                parameters: [at, previousHash])
+            try execute(
+                "UPDATE refresh_tokens SET replaced_by = ? WHERE token_hash = ?",
+                parameters: [successorHash, tokenHash])
+            try saveRefreshToken(
+                token: successor, clientId: row.clientId, scope: row.scope,
+                expiresAt: Date(timeIntervalSince1970: row.expiresAt), subject: row.subject,
+                grantId: grantId)
+            return .regranted(row.info)
+        }
+
+        guard !row.revoked, at < row.expiresAt else { return .unusable }
+        let grantId = row.grantId ?? defaultGrantId
+        try execute("""
+            UPDATE refresh_tokens SET rotated_at = ?, grant_id = ?, replaced_by = ?
+            WHERE token_hash = ?
+        """, parameters: [at, grantId, successorHash, tokenHash])
+        try saveRefreshToken(
+            token: successor, clientId: row.clientId, scope: row.scope,
+            expiresAt: Date(timeIntervalSince1970: row.expiresAt), subject: row.subject,
+            grantId: grantId)
+        var claimed = row.info
+        claimed = RefreshTokenInfo(
+            clientId: claimed.clientId, scope: claimed.scope, expiresAt: claimed.expiresAt,
+            subject: claimed.subject, grantId: grantId)
+        return .claimed(claimed)
+    }
+
     /// Revokes a refresh token on behalf of its client, with the rest of its grant.
     /// See ``OAuthProviderStorage/revokeRefreshToken(token:clientId:)``.
     @discardableResult
@@ -1836,6 +1972,11 @@ public enum RefreshTokenClaim: Sendable, Equatable {
     /// The token was live and unspent, and is now spent. Exactly one caller of any number
     /// presenting it together receives this.
     case claimed(RefreshTokenInfo)
+    /// The token was spent already, but inside its grace period and with its successor never
+    /// presented: a client retrying after a lost response, not a replay. A fresh successor has
+    /// been stored and the superseded one spent. See
+    /// ``OAuthProviderStorage/rotateRefreshToken(token:clientId:defaultGrantId:successor:gracePeriod:now:)``.
+    case regranted(RefreshTokenInfo)
     /// The token was spent already: it was exchanged for a successor, and someone is
     /// presenting it again. Carries the grant, so everything issued under it can be revoked.
     case replayed(grantId: String)

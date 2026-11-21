@@ -98,6 +98,9 @@ public actor OAuthServer {
 
     /// What the refresh grant does with the refresh token it is given.
     private let rotationPolicy: RefreshTokenRotationPolicy
+    /// Seconds after a refresh token is first spent in which a retry is answered rather than
+    /// read as a replay. Already clamped to 0...``maximumRotationGracePeriod``.
+    private let rotationGracePeriod: TimeInterval
 
     /// The clock the device grant is judged by: issue, expiry, polling pace, and throttling.
     private let clock: @Sendable () -> Date
@@ -181,10 +184,20 @@ public actor OAuthServer {
     ///     that stores the first refresh token and never updates it breaks at its second refresh.
     ///     A client that loses the response to a refresh and retries presents a spent token, and
     ///     its grant is revoked (RFC 9700 §4.14.2 accepts that: the server cannot tell it from an
-    ///     attacker). **There is no grace window**; one is a known mitigation but is not in the
-    ///     RFC text and is not built here.
+    ///     attacker), unless `rotationGracePeriod` is set.
+    ///   - rotationGracePeriod: Seconds after a refresh token is **first** spent in which a retry
+    ///     is answered with a fresh pair instead of being read as a replay, for a client that lost
+    ///     the response. Defaults to 0, off, which is the behaviour above. It applies only to a
+    ///     token whose successor was never presented, only to the client it was issued to, and
+    ///     does not slide; the successor it supersedes is spent, so presenting that one ends the
+    ///     grant. Negative or NaN is 0, and anything above ``maximumRotationGracePeriod`` (300) is
+    ///     held to it. **Not in RFC 9700**: it trades a bounded window in which a stolen spent token
+    ///     can be used for fewer users signed out by a lost response. Ignored under
+    ///     ``RefreshTokenRotationPolicy/reusable``. See
+    ///     `project/plans/proposals/2026-11-20_RefreshGraceWindow.md`.
     ///   - now: The clock the device grant is judged by — when its codes expire, whether a poll
-    ///     came too soon, and how long a user who typed wrong codes waits. Defaults to the
+    ///     came too soon, and how long a user who typed wrong codes waits, and now also when a
+    ///     refresh token was spent and whether a retry is inside its grace period. Defaults to the
     ///     system clock; injectable so that pacing and expiry are testable without waiting.
     public init(
         storage: any OAuthProviderStorage,
@@ -203,10 +216,14 @@ public actor OAuthServer {
         resourcePolicy: ResourceIndicatorPolicy? = nil,
         requireSubject: Bool = false,
         rotationPolicy: RefreshTokenRotationPolicy = .rotating,
+        rotationGracePeriod: TimeInterval = 0,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.requireSubject = requireSubject
         self.rotationPolicy = rotationPolicy
+        // NaN compares false to everything, so it must not reach `min`/`max`: it would be kept.
+        self.rotationGracePeriod = rotationGracePeriod.isNaN
+            ? 0 : min(max(rotationGracePeriod, 0), Self.maximumRotationGracePeriod)
         self.clock = now
         self.storage = storage
         self.issuer = issuer
@@ -1547,11 +1564,15 @@ public actor OAuthServer {
     ) async throws -> TokenResponse {
         let audience = try resourcePolicy.audience(for: request.resource)
 
+        // Generated before the claim and handed to the store, which saves it in the same step as
+        // it spends the presented token: a token spent with no successor stored cannot be
+        // regranted, and cannot be refreshed either.
+        let successor = TokenGenerator.generateRefreshToken()
         let info: RefreshTokenInfo
-        switch try await storage.claimRefreshToken(
-            token: refreshToken, clientId: request.clientId,
-            defaultGrantId: UUID().uuidString, now: Date()) {
-        case .claimed(let claimed):
+        switch try await storage.rotateRefreshToken(
+            token: refreshToken, clientId: request.clientId, defaultGrantId: UUID().uuidString,
+            successor: successor, gracePeriod: rotationGracePeriod, now: clock()) {
+        case .claimed(let claimed), .regranted(let claimed):
             info = claimed
         case .replayed(let grantId):
             try await storage.revokeGrant(grantId: grantId)
@@ -1559,13 +1580,6 @@ public actor OAuthServer {
         case .unusable:
             throw OAuthError.invalidGrant(nil)
         }
-
-        // The successor has what the original had, including its expiry: rotation replaces a
-        // credential, it does not extend the period a user agreed to.
-        let successor = TokenGenerator.generateRefreshToken()
-        try await storage.saveRefreshToken(
-            token: successor, clientId: info.clientId, scope: info.scope,
-            expiresAt: info.expiresAt, subject: info.subject, grantId: info.grantId)
 
         let newAccessToken = try await issueRefreshedAccessToken(request, info: info, audience: audience)
 
@@ -1577,6 +1591,10 @@ public actor OAuthServer {
             scope: info.scope
         )
     }
+
+    /// The longest grace period honoured, in seconds. A window of minutes is no longer a lost
+    /// response's second chance; it is a long one for a stolen token.
+    public static let maximumRotationGracePeriod: TimeInterval = 300
 
     /// Stores and returns the access token a refresh issues, under the refresh token's grant.
     private func issueRefreshedAccessToken(

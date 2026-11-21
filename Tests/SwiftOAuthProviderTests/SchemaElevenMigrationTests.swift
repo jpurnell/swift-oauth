@@ -72,7 +72,9 @@ struct SchemaElevenMigrationTests {
             #expect(try Self.column(path, "SELECT name FROM pragma_table_info('\(table)') WHERE name = 'grant_id'").isEmpty)
         }
 
-        _ = try OAuthStorage(path: path)
+        // Pinned to 11: this suite is about what the 10-to-11 step does. Where the default
+        // version has moved on, `SchemaTwelveMigrationTests` covers the step after it.
+        _ = try OAuthStorage(path: path, schemaVersion: 11)
 
         #expect(try Self.column(path, "PRAGMA user_version") == ["11"])
         for table in ["access_tokens", "refresh_tokens"] {

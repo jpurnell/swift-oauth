@@ -73,6 +73,9 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         var grantId: String?
         /// When it was exchanged for a successor; `nil` while unspent.
         var rotatedAt: Date?
+        /// The digest of the token it was exchanged for; `nil` until spent, and for a token that
+        /// was superseded by a regrant, which must not itself be regranted.
+        var replacedBy: String?
     }
 
     private struct DeviceRecord {
@@ -364,6 +367,57 @@ public actor InMemoryOAuthStorage: OAuthProviderStorage {
         return .claimed(RefreshTokenInfo(
             clientId: record.clientId, scope: record.scope, expiresAt: record.expiresAt,
             subject: record.subject, grantId: record.grantId))
+    }
+
+    /// Rotates a refresh token and answers a retry inside the grace period. See
+    /// ``OAuthProviderStorage/rotateRefreshToken(token:clientId:defaultGrantId:successor:gracePeriod:now:)``.
+    public func rotateRefreshToken(
+        token: String, clientId: String, defaultGrantId: String, successor: String,
+        gracePeriod: TimeInterval, now: Date
+    ) throws -> RefreshTokenClaim {
+        let key = OAuthStorage.sha256Hex(token)
+        let successorKey = OAuthStorage.sha256Hex(successor)
+        guard var record = refreshTokens[key], record.clientId == clientId else { return .unusable }
+
+        func info(_ record: RefreshRecord) -> RefreshTokenInfo {
+            RefreshTokenInfo(
+                clientId: record.clientId, scope: record.scope, expiresAt: record.expiresAt,
+                subject: record.subject, grantId: record.grantId)
+        }
+
+        if let spentAt = record.rotatedAt {
+            // Spent already. Claiming always leaves a grant, so there is one.
+            guard let grantId = record.grantId else { return .unusable }
+            guard gracePeriod > 0, !record.revoked, now < record.expiresAt,
+                  now.timeIntervalSince(spentAt) <= gracePeriod,
+                  let previousKey = record.replacedBy,
+                  var previous = refreshTokens[previousKey],
+                  !previous.revoked, previous.rotatedAt == nil else {
+                return .replayed(grantId: grantId)
+            }
+            // The successor nobody received is spent, and cannot itself be regranted.
+            previous.rotatedAt = now
+            previous.replacedBy = nil
+            refreshTokens[previousKey] = previous
+            record.replacedBy = successorKey
+            refreshTokens[key] = record
+            refreshTokens[successorKey] = RefreshRecord(
+                clientId: record.clientId, scope: record.scope, expiresAt: record.expiresAt,
+                revoked: false, subject: record.subject, grantId: grantId, rotatedAt: nil,
+                replacedBy: nil)
+            return .regranted(info(record))
+        }
+
+        guard !record.revoked, now < record.expiresAt else { return .unusable }
+        record.rotatedAt = now
+        record.grantId = record.grantId ?? defaultGrantId
+        record.replacedBy = successorKey
+        refreshTokens[key] = record
+        refreshTokens[successorKey] = RefreshRecord(
+            clientId: record.clientId, scope: record.scope, expiresAt: record.expiresAt,
+            revoked: false, subject: record.subject, grantId: record.grantId, rotatedAt: nil,
+            replacedBy: nil)
+        return .claimed(info(record))
     }
 
     /// Revokes a refresh token on behalf of its client, with the rest of its grant.

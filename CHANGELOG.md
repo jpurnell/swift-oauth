@@ -7,6 +7,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+**Schema moves to 12 (additive); a refresh grace window, off by default.** Nothing changes for a deployment that sets nothing.
+
+### Added
+- **`OAuthServer(rotationGracePeriod:)`: a retry after a lost refresh response is answered, not revoked.** Under `.rotating` a refresh spends
+  the presented token, and a client that never received the response and retries presents a spent token, which revokes its whole grant
+  (RFC 9700 §4.14.2). With a period above 0, a spent token is answered with a fresh pair when **all** of: it was spent no more than the
+  period ago (measured from the *first* spend; the window does not slide), by the client it was issued to, and its successor has never been
+  presented (so the client demonstrably did not receive the first response). The successor it supersedes is **spent**, so presenting that
+  one later is a replay and ends the grant; a thief who wins the race therefore cannot keep the grant quietly. Exactly one refresh token
+  of a grant is live after any number of retries. Default `0` is off and is exactly beta.11 behaviour; negative and NaN are 0; above
+  `OAuthServer.maximumRotationGracePeriod` (300 s) is held to it; ignored under `.reusable`. **Not in RFC 9700**: it trades a bounded
+  window in which a stolen spent token can be used for fewer users signed out by a lost response. The period to recommend is not chosen
+  yet; see `project/plans/proposals/2026-11-20_RefreshGraceWindow.md` §4, where it is to be measured against real clients.
+- **`OAuthProviderStorage.rotateRefreshToken(token:clientId:defaultGrantId:successor:gracePeriod:now:)`** and
+  `RefreshTokenClaim.regranted(_:)`. The store spends the token **and saves the successor in one step**, which also closes a gap beta.11
+  had: a crash between spending and saving left a token spent with no successor. A protocol-extension default ignores the period and does
+  claim-then-save, so a store written before this keeps beta.11 behaviour; the conformance suite, however, now requires the grace rules
+  (`rotationStoresSuccessor`, `rotationGraceWindow`), so a store that has not implemented them reports as non-conformant.
+
+### Changed
+- **Schema 11 to 12**: `refresh_tokens.replaced_by`, nullable. Unlike 8 to 11 it is additive: a build that expects 11 opens a 12 database
+  and reads its rows, so rolling back is a binary swap. Every existing row is NULL, and **a token spent before this version is never
+  regranted**, even inside the window, because nothing recorded which token replaced it.
+- `OAuthServer` now judges refresh rotation by its injected clock (`now:`), as the device grant already did, so the window is testable.
+- `SchemaElevenMigrationTests` is pinned to `schemaVersion: 11`; its assertion that a reopened database reads `user_version == 11` was
+  about the 10-to-11 step, and the default has moved on. `SchemaTwelveMigrationTests` covers the step after it.
+
 ## [1.0.0-beta.11] — 2026-11-13
 
 **Behaviour changes for every consumer: refresh tokens rotate by default, and the schema moves to 11 (one way).** Read *Changed*
