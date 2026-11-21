@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.12] — 2026-11-21
+
+**A fix for fresh Claude Code sign-ins against beta.11, and an opt-in refresh grace window. Schema moves to 12 (additive). Nothing changes for a deployment that sets nothing, except that a native client may now register `http://localhost`.**
+
+### Fixed
+- **A native client could not register `http://localhost:<port>/callback`, which is what Claude Code registers.** `1.0.0-beta.11` refused it
+  with `400 invalid_client_metadata` ("a native client may use http only with a loopback IP literal ... not localhost"). The rule was written from
+  RFC 8252 §7.3 and §8.3, but §8.3 says `localhost` is NOT RECOMMENDED, not forbidden, and refusing it locked out real clients. **Found
+  2026-11-21 when clearing authentication in Claude Code forced a fresh registration against a server on beta.11 and got `400`**: a client that
+  already held a registered client id kept working (it refreshes tokens without registering), so the defect stayed hidden until someone started over.
+  A native client may now register `http://localhost...` (exactly `localhost`, any case; `localhost.example.com` and `notlocalhost` stay refused).
+  **Matching is unchanged**: `localhost` is still an exact match, port included, and is not port-flexible like `127.0.0.1` and `[::1]`.
+  `RedirectURIMatcherTests` pinned the old behaviour (`localhost` in `nativeRefused`); that expectation moved to `nativeAcceptable` on purpose.
+  Affects every server built on beta.11 for **fresh** registrations; existing clients are unaffected.
+
 **Schema moves to 12 (additive); a refresh grace window, off by default.** Nothing changes for a deployment that sets nothing.
 
 ### Added
@@ -1955,7 +1970,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.11...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.12...HEAD
+[1.0.0-beta.12]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.11...v1.0.0-beta.12
 [1.0.0-beta.11]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...v1.0.0-beta.11
 [1.0.0-beta.10]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...v1.0.0-beta.10
 [1.0.0-beta.9]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.8...v1.0.0-beta.9
