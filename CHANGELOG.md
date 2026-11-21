@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.13] — 2026-11-21
+
+**The consent page can ask the approver to sign in on the page itself. Additive; nothing changes for a deployment that does not use it.**
+
+### Added
+- **`ConsentSignIn` and `OAuthHTTPHandler.handleAuthorizationRequest(queryParams:signIn:)`: a labelled secret field on the consent page.** A
+  deployment that has to know who approved can now ask on the page, with a label, a one-line hint and, after a wrong attempt, an error. The host
+  reads the answer from the consent form under `ConsentSignIn.fieldName` (`owner_secret`) and checks it itself; **this library never sees,
+  stores or validates it**. Everything in the type is plain text and is escaped; a host passes words, never markup. The Deny button carries
+  `formnovalidate`, so declining never needs the secret. **Why:** SwiftMCPServer 5.7.x gated consent behind an HTTP Basic challenge, which a
+  browser shows as a bare credential dialog that says nothing about what is being approved. `signIn` defaults to `nil` and `ConsentPage.init`
+  gains the same defaulted parameter, so existing callers compile and render exactly as before.
+- 7 tests (`ConsentSignInTests`), including a mutation check that the deny test fails without `formnovalidate`. 819 tests.
+
 ## [1.0.0-beta.12] — 2026-11-21
 
 **A fix for fresh Claude Code sign-ins against beta.11, and an opt-in refresh grace window. Schema moves to 12 (additive). Nothing changes for a deployment that sets nothing, except that a native client may now register `http://localhost`.**
@@ -1970,7 +1984,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.12...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.13...HEAD
+[1.0.0-beta.13]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.12...v1.0.0-beta.13
 [1.0.0-beta.12]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.11...v1.0.0-beta.12
 [1.0.0-beta.11]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...v1.0.0-beta.11
 [1.0.0-beta.10]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.9...v1.0.0-beta.10

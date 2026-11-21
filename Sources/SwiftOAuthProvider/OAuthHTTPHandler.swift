@@ -140,9 +140,15 @@ public struct OAuthHTTPHandler: Sendable {
     ///
     /// Shows a consent page for the user to approve or deny access.
     ///
-    /// - Parameter queryParams: Query parameters from the URL
+    /// - Parameters:
+    ///   - queryParams: Query parameters from the URL
+    ///   - signIn: A field asking the approver for a secret on the page, or `nil` (the default)
+    ///     for none. The host reads the answer from the consent form under
+    ///     ``ConsentSignIn/fieldName`` and checks it; this handler never sees it.
     /// - Returns: HTML consent page or error response
-    public func handleAuthorizationRequest(queryParams: [String: String]) async -> OAuthHTTPResponse {
+    public func handleAuthorizationRequest(
+        queryParams: [String: String], signIn: ConsentSignIn? = nil
+    ) async -> OAuthHTTPResponse {
         guard let responseType = queryParams["response_type"],
               let clientId = queryParams["client_id"],
               let redirectUri = queryParams["redirect_uri"] else {
@@ -180,7 +186,8 @@ public struct OAuthHTTPHandler: Sendable {
                 csrfToken: csrfToken,
                 codeChallenge: request.codeChallenge,
                 codeChallengeMethod: request.codeChallengeMethod,
-                resource: request.resource
+                resource: request.resource,
+                signIn: signIn
             )
 
             return OAuthHTTPResponse(

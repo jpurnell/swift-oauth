@@ -1,6 +1,42 @@
 import Foundation
 import SwiftOAuthCore
 
+/// A field on the consent page where the approver proves who they are.
+///
+/// A deployment that has to know *who* approved asks for it on the page itself, which is what a
+/// person expects, rather than leaving it to a browser's own credential dialog, which says nothing
+/// about what is being approved or why. The host decides what the secret is and checks it; this
+/// type only describes the field.
+///
+/// Everything here is plain text and is escaped when rendered. A host passes words, never markup.
+public struct ConsentSignIn: Sendable, Equatable {
+
+    /// The form field's name: the host reads the secret from the submitted form under this name.
+    /// Distinct from every field the consent form already carries.
+    public static let fieldName = "owner_secret"
+
+    /// The field's visible label, e.g. `Owner secret`.
+    public let label: String
+
+    /// One line telling the person where to find what to type.
+    public let hint: String
+
+    /// Why the last attempt failed, shown above the field; `nil` on a first visit.
+    public let errorMessage: String?
+
+    /// Creates a sign-in field.
+    ///
+    /// - Parameters:
+    ///   - label: The visible label.
+    ///   - hint: Where to find the secret.
+    ///   - errorMessage: Why the previous attempt failed, if it did.
+    public init(label: String, hint: String, errorMessage: String? = nil) {
+        self.label = label
+        self.hint = hint
+        self.errorMessage = errorMessage
+    }
+}
+
 /// OAuth consent page HTML generator
 ///
 /// Renders an HTML page for user consent during OAuth authorization flow.
@@ -61,6 +97,9 @@ public struct ConsentPage: Sendable {
     /// token endpoint — or worse, succeeds with no audience under a permissive policy.
     public let resource: String?
 
+    /// A field for the approver to sign in on this page, or `nil` for none (the default).
+    public let signIn: ConsentSignIn?
+
     /// Creates a new consent page
     ///
     /// - Parameters:
@@ -73,6 +112,7 @@ public struct ConsentPage: Sendable {
     ///   - codeChallenge: PKCE challenge
     ///   - codeChallengeMethod: PKCE method
     ///   - resource: The resource indicator to carry through the form — RFC 8707
+    ///   - signIn: A field asking the approver for a secret, or `nil` for none
     public init(
         clientName: String,
         clientId: String,
@@ -82,7 +122,8 @@ public struct ConsentPage: Sendable {
         csrfToken: String,
         codeChallenge: String?,
         codeChallengeMethod: String?,
-        resource: String? = nil
+        resource: String? = nil,
+        signIn: ConsentSignIn? = nil
     ) {
         self.clientName = clientName
         self.clientId = clientId
@@ -93,6 +134,7 @@ public struct ConsentPage: Sendable {
         self.codeChallenge = codeChallenge
         self.codeChallengeMethod = codeChallengeMethod
         self.resource = resource
+        self.signIn = signIn
     }
 
     /// Renders the consent page as HTML
@@ -113,6 +155,23 @@ public struct ConsentPage: Sendable {
             .split(separator: " ")
             .map { "<li>\(escapeHTML(String($0)))</li>" }
             .joined(separator: "\n                    ")
+
+        var signInHTML = ""
+        if let signIn {
+            let error = signIn.errorMessage.map {
+                "<div class=\"error\" role=\"alert\">\(escapeHTML($0))</div>"
+            } ?? ""
+            let focus = signIn.errorMessage == nil ? "" : " autofocus"
+            signInHTML = """
+            <div class="signin">
+                \(error)
+                <label for="\(ConsentSignIn.fieldName)">\(escapeHTML(signIn.label))</label>
+                <input type="password" id="\(ConsentSignIn.fieldName)" name="\(ConsentSignIn.fieldName)" \
+            autocomplete="current-password" required\(focus)>
+                <div class="hint">\(escapeHTML(signIn.hint))</div>
+            </div>
+            """
+        }
 
         return """
         <!DOCTYPE html>
@@ -209,6 +268,34 @@ public struct ConsentPage: Sendable {
                 .deny-btn:hover {
                     background-color: #dc2626;
                 }
+                .signin {
+                    margin-top: 24px;
+                }
+                .signin label {
+                    display: block;
+                    font-weight: 600;
+                    margin-bottom: 6px;
+                }
+                .signin input[type=password] {
+                    width: 100%;
+                    padding: 10px 12px;
+                    font-size: 16px;
+                    border: 1px solid #d1d5db;
+                    border-radius: 8px;
+                }
+                .signin .hint {
+                    font-size: 13px;
+                    color: #666;
+                    margin-top: 6px;
+                }
+                .signin .error {
+                    background: #fef2f2;
+                    color: #b91c1c;
+                    border-radius: 8px;
+                    padding: 10px 12px;
+                    margin-bottom: 12px;
+                    font-size: 14px;
+                }
                 .warning {
                     font-size: 12px;
                     color: #666;
@@ -244,8 +331,10 @@ public struct ConsentPage: Sendable {
                     \(escapedCodeChallengeMethod.map { "<input type=\"hidden\" name=\"code_challenge_method\" value=\"\($0)\">" } ?? "")
                     \(escapedResource.map { "<input type=\"hidden\" name=\"resource\" value=\"\($0)\">" } ?? "")
 
+                    \(signInHTML)
+
                     <div class="buttons">
-                        <button type="submit" name="action" value="deny" class="deny-btn">
+                        <button type="submit" name="action" value="deny" class="deny-btn" formnovalidate>
                             Deny
                         </button>
                         <button type="submit" name="action" value="approve" class="approve-btn">
