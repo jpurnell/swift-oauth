@@ -869,8 +869,8 @@ public actor OAuthServer {
     /// - Returns: Registered client with generated credentials
     /// - Throws: `OAuthError.invalidRequest(nil)` if request is invalid, and
     ///   `OAuthError.invalidClientMetadata(_:)` for a request naming `client_credentials`, or for
-    ///   a `.native` application whose redirect URI is not `https`, a loopback IP literal over
-    ///   `http`, or a reverse-DNS private-use scheme (RFC 8252 §7, §8.4).
+    ///   a `.native` application whose redirect URI is not `https`, a loopback IP literal or
+    ///   `localhost` over `http`, or a reverse-DNS private-use scheme (RFC 8252 §7, §8.4).
     ///   Anyone who can reach this endpoint can register, so a client able to obtain tokens
     ///   with no user present is created by an operator instead (`createServiceClient`).
     public func registerClient(_ request: ClientRegistrationRequest) async throws -> ClientRegistrationResponse {

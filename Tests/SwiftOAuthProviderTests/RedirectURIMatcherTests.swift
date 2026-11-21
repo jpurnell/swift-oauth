@@ -101,14 +101,22 @@ struct RedirectURIMatcherTests {
     @Test("A native registration must be https, loopback http, or a reverse-DNS scheme", arguments: [
         uri("https", "app.example.com"), uri("http", "127.0.0.1"), uri("http", "127.0.0.1", port: 8080),
         uri("http", "::1"), "com.example.app:/cb", "biz.keepitfun.fleetwatch://oauth",
+        // `localhost` is accepted at registration. RFC 8252 §8.3 recommends against it but does not
+        // forbid it, and refusing it locked out the clients that use it, notably Claude Code, which
+        // registers `http://localhost:<port>/callback` (found 2026-11-21 when a fresh sign-in got a 400).
+        uri("http", "localhost"), uri("http", "localhost", port: 53682, path: "/callback"),
+        uri("http", "LOCALHOST", port: 53682, path: "/callback"),
     ])
     func nativeAcceptable(uri: String) {
         #expect(RedirectURIMatcher.nativeRegistrationProblem(uri) == nil)
     }
 
     @Test("A native registration with another shape is refused", arguments: [
-        "myapp:/cb", "myapp://callback", uri("http", "localhost"), uri("http", "app.example.com"),
+        "myapp:/cb", "myapp://callback", uri("http", "app.example.com"),
         uri("http", "192.0.2.1"), "not a uri", "", "/relative/path",
+        // Names that merely contain or end in `localhost` are not `localhost`.
+        uri("http", "localhost.evil.example"), uri("http", "evil-localhost"), uri("http", "notlocalhost"),
+        uri("http", "localhost.localdomain"),
     ])
     func nativeRefused(uri: String) {
         #expect(RedirectURIMatcher.nativeRegistrationProblem(uri)?.isEmpty == false)
@@ -169,6 +177,61 @@ struct NativeClientServerTests {
         let id = try await Self.register(
             server, uris: ["biz.keepitfun.fleetwatch://oauth"], type: .native)
         #expect(!id.isEmpty)
+    }
+
+    @Test("A native client registers http://localhost, as Claude Code does", arguments: StoreKind.allCases)
+    func nativeLocalhostRegisters(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(kind)
+        let redirect = uri("http", "localhost", port: 53682, path: "/callback")
+        let id = try await Self.register(server, uris: [redirect], type: .native)
+        #expect(!id.isEmpty)
+        // And can then authorize at exactly that URI.
+        let response = try await Self.authorize(server, clientId: id, redirect: redirect)
+        #expect(!response.code.isEmpty)
+    }
+
+    @Test("Registering localhost does not make it port-flexible: matching stays exact",
+          arguments: StoreKind.allCases)
+    func localhostStaysExactAtAuthorize(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(kind)
+        let id = try await Self.register(
+            server, uris: [uri("http", "localhost", port: 53682, path: "/callback")], type: .native)
+        for presented in [
+            uri("http", "localhost", port: 53683, path: "/callback"),   // another port
+            uri("http", "localhost", port: 53682, path: "/other"),       // another path
+            uri("http", "127.0.0.1", port: 53682, path: "/callback"),    // the literal is not localhost
+        ] {
+            let code = await Self.refusalCode { _ = try await Self.authorize(server, clientId: id, redirect: presented) }
+            #expect(code == "invalid_request", "\(presented) was honoured against a registered localhost URI")
+        }
+    }
+
+    @Test("A native client with a look-alike host is still refused at registration",
+          arguments: StoreKind.allCases)
+    func lookAlikeHostRefused(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(kind)
+        for host in ["localhost.evil.example", "evil-localhost", "app.example.com"] {
+            let code = await Self.refusalCode {
+                _ = try await Self.register(server, uris: [uri("http", host, port: 53682)], type: .native)
+            }
+            #expect(code == "invalid_client_metadata", "http://\(host) was accepted for a native client")
+        }
+    }
+
+    @Test("Claude Code's registration body, over the HTTP handler, is accepted",
+          arguments: StoreKind.allCases)
+    func claudeCodeRegistrationOverHTTP(store kind: StoreKind) async throws {
+        let server = try Self.makeServer(kind)
+        let handler = OAuthHTTPHandler(server: server)
+        let body = """
+            {"client_name":"Claude Code (test)","application_type":"native",
+             "redirect_uris":["http://localhost:53682/callback"],
+             "grant_types":["authorization_code","refresh_token"],"response_types":["code"],
+             "token_endpoint_auth_method":"none"}
+            """
+        let response = await handler.handleRegistrationRequest(body: body)
+        #expect(response.statusCode == 201 || response.statusCode == 200, "\(response.statusCode) \(response.body)")
+        #expect(response.body.contains("client_id"))
     }
 
     @Test("A native client with a bare scheme is refused", arguments: StoreKind.allCases)

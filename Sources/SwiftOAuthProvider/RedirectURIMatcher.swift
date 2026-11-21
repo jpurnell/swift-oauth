@@ -10,9 +10,15 @@ import Foundation
 /// the request for loopback IP redirect URIs").
 ///
 /// The exception applies only to a registered `http` URI whose host is the IP literal
-/// `127.0.0.1` or `[::1]`. `localhost` is **not** a loopback literal here: §8.3 recommends
-/// against it (it can be remapped, and a name resolves to either family), so a client that
-/// registers it gets an exact match. The two literals do not match each other.
+/// `127.0.0.1` or `[::1]`. `localhost` is **not** a loopback literal for *matching*: §8.3
+/// recommends against it (it can be remapped, and a name resolves to either family), so a client
+/// that registers it gets an exact match, port included. The two literals do not match each other.
+///
+/// `localhost` **is** accepted at *registration* by a native client (see
+/// ``nativeRegistrationProblem(_:)``). §8.3 says NOT RECOMMENDED, which is not a prohibition, and
+/// refusing it locked out clients that depend on it, Claude Code among them: it registers
+/// `http://localhost:<port>/callback`, and 1.0.0-beta.11 answered that with `400
+/// invalid_client_metadata`.
 public enum RedirectURIMatcher {
 
     /// Whether `presented` is acceptable for a client that registered `registered`.
@@ -39,9 +45,14 @@ public enum RedirectURIMatcher {
     /// Why a native application may not register `uri`, or `nil` if it may — RFC 8252 §7 and §8.4.
     ///
     /// A native redirect is one of: an `https` URI (§7.2, a claimed URL); an `http` URI whose host
-    /// is a loopback IP literal (§7.3); or a private-use scheme whose name contains a period
-    /// (§7.1, reverse domain name). §8.4 says a scheme with no period SHOULD be rejected, and
-    /// this does.
+    /// is a loopback IP literal (§7.3) or `localhost` (§8.3 recommends against it but does not
+    /// forbid it, and real clients register it); or a private-use scheme whose name contains a
+    /// period (§7.1, reverse domain name). §8.4 says a scheme with no period SHOULD be rejected,
+    /// and this does. Only the exact name `localhost` is accepted, compared without regard to case:
+    /// `localhost.example.com` and `notlocalhost` are ordinary named hosts and stay refused.
+    ///
+    /// Accepting `localhost` here does **not** make it port-flexible; ``matches(registered:presented:)``
+    /// still requires an exact match for it.
     ///
     /// - Parameter uri: A redirect URI from a registration.
     /// - Returns: A reason fit for an error description, or `nil` when the URI is acceptable.
@@ -54,14 +65,19 @@ public enum RedirectURIMatcher {
         case "https":
             return nil
         case "http":
-            return loopbackLiteral(components.host) != nil ? nil
+            return (loopbackLiteral(components.host) != nil || isLocalhost(components.host)) ? nil
                 : "\(uri): a native client may use http only with a loopback IP literal "
-                    + "(127.0.0.1 or [::1]), not localhost or a named host (RFC 8252 §7.3, §8.3)."
+                    + "(127.0.0.1 or [::1]) or localhost, not another named host (RFC 8252 §7.3, §8.3)."
         default:
             return scheme.contains(".") ? nil
                 : "\(uri): a native client's private-use scheme must be a reverse domain name "
                     + "containing a period, such as com.example.app (RFC 8252 §7.1, §8.4)."
         }
+    }
+
+    /// Whether a host is exactly `localhost`, in any case.
+    private static func isLocalhost(_ host: String?) -> Bool {
+        host?.lowercased() == "localhost"
     }
 
     /// The loopback IP literal a host names, normalised, or `nil` for any other host.
