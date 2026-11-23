@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`ConsentSignIn.username`: a password manager can save and fill the owner secret.** A password manager keys a saved credential on a username
+  and a password in the same form; the consent page had only a password field, so none offered to save the secret or filled it later, and the
+  person had to fetch it from wherever it was kept. When a host passes a `username`, the page now renders it read-only (`autocomplete="username"`,
+  field name `ConsentSignIn.usernameFieldName` = `owner_username`) ahead of the secret field, inside the same form. It is not required, so Deny
+  still needs nothing typed, and it is escaped like every other host string. **Additive and source-compatible:** the new initializer parameter
+  defaults to `nil`, and with no username the page is byte-for-byte what it was. The form now carries `owner_username` when a host sets it; a host
+  must not read it (who is approving is the host's configuration, never a form field).
+
 ## [1.0.0-beta.13] — 2026-11-21
 
 **The consent page can ask the approver to sign in on the page itself. Additive; nothing changes for a deployment that does not use it.**

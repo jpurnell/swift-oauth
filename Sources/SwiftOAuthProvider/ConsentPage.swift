@@ -15,6 +15,11 @@ public struct ConsentSignIn: Sendable, Equatable {
     /// Distinct from every field the consent form already carries.
     public static let fieldName = "owner_secret"
 
+    /// The username field's name. The field is for a password manager's benefit: the form carries it, but nothing
+    /// reads it, because who is approving is the host's own configuration and never a form field. Distinct from
+    /// every field the consent form already carries.
+    public static let usernameFieldName = "owner_username"
+
     /// The field's visible label, e.g. `Owner secret`.
     public let label: String
 
@@ -24,16 +29,26 @@ public struct ConsentSignIn: Sendable, Equatable {
     /// Why the last attempt failed, shown above the field; `nil` on a first visit.
     public let errorMessage: String?
 
+    /// The account the secret belongs to, shown read-only ahead of the secret field, or `nil` for none.
+    ///
+    /// A password manager keys a saved credential on a username and a password in the same form; a lone password
+    /// field gives it nothing to key on, so it neither offers to save the secret nor fills it next time. This is
+    /// the account name the manager will record (for example `owner`). It is not typed, not required, and not
+    /// trusted: the approver ignores it.
+    public let username: String?
+
     /// Creates a sign-in field.
     ///
     /// - Parameters:
     ///   - label: The visible label.
     ///   - hint: Where to find the secret.
     ///   - errorMessage: Why the previous attempt failed, if it did.
-    public init(label: String, hint: String, errorMessage: String? = nil) {
+    ///   - username: The account name to show read-only so a password manager can save and fill the secret.
+    public init(label: String, hint: String, errorMessage: String? = nil, username: String? = nil) {
         self.label = label
         self.hint = hint
         self.errorMessage = errorMessage
+        self.username = username
     }
 }
 
@@ -162,9 +177,17 @@ public struct ConsentPage: Sendable {
                 "<div class=\"error\" role=\"alert\">\(escapeHTML($0))</div>"
             } ?? ""
             let focus = signIn.errorMessage == nil ? "" : " autofocus"
+            // Ahead of the password field and inside the same form, so a password manager sees the pair.
+            let usernameName = ConsentSignIn.usernameFieldName
+            let usernameHTML = signIn.username.map { account in
+                let input = "<input type=\"text\" id=\"\(usernameName)\" name=\"\(usernameName)\" "
+                    + "value=\"\(escapeHTML(account))\" autocomplete=\"username\" readonly>"
+                return "<label for=\"\(usernameName)\">Account</label>\n                " + input
+            } ?? ""
             signInHTML = """
             <div class="signin">
                 \(error)
+                \(usernameHTML)
                 <label for="\(ConsentSignIn.fieldName)">\(escapeHTML(signIn.label))</label>
                 <input type="password" id="\(ConsentSignIn.fieldName)" name="\(ConsentSignIn.fieldName)" \
             autocomplete="current-password" required\(focus)>

@@ -73,6 +73,58 @@ struct ConsentSignInTests {
         #expect(!hidden.contains(ConsentSignIn.fieldName))
     }
 
+    // MARK: Password-manager hints
+    //
+    // A password manager keys an entry on a username and a password in the same form. A lone password
+    // field gives it nothing to key on, so it neither offers to save the secret nor fills it later.
+    // The username is shown read-only: it is the account the secret belongs to, not something typed.
+
+    @Test("A named username is a read-only username field before the password field, inside the form")
+    func usernameFieldPrecedesPassword() throws {
+        let html = Self.page(signIn: ConsentSignIn(label: "Owner secret", hint: "h", username: "owner"))
+        let formStart = try #require(html.range(of: "<form method=\"POST\" action=\"/authorize/consent\">"))
+        let formEnd = try #require(html.range(of: "</form>"))
+        let user = try #require(html.range(of: "autocomplete=\"username\""))
+        let pass = try #require(html.range(of: "autocomplete=\"current-password\""))
+        #expect(formStart.upperBound <= user.lowerBound)
+        #expect(user.lowerBound < pass.lowerBound)
+        #expect(pass.upperBound <= formEnd.lowerBound)
+        #expect(html.contains("name=\"\(ConsentSignIn.usernameFieldName)\""))
+        #expect(html.contains("value=\"owner\""))
+        #expect(html.contains("readonly"))
+    }
+
+    @Test("Without a username the page is exactly what it was: no username field")
+    func noUsernameByDefault() {
+        let html = Self.page(signIn: ConsentSignIn(label: "Owner secret", hint: "h"))
+        #expect(!html.contains("autocomplete=\"username\""))
+        #expect(!html.contains(ConsentSignIn.usernameFieldName))
+    }
+
+    @Test("A username containing markup is escaped in the attribute, not rendered")
+    func usernameIsEscaped() {
+        let html = Self.page(signIn: ConsentSignIn(
+            label: "l", hint: "h", username: "\"><script>alert(1)</script>"))
+        #expect(!html.contains("<script>alert(1)"))
+        #expect(!html.contains("\"><script>"))
+    }
+
+    @Test("The username field name is not one the page already uses, and differs from the secret's")
+    func usernameFieldNameIsDistinct() {
+        let used = ["client_id", "redirect_uri", "csrf_token", "state", "scope", "code_challenge",
+                    "code_challenge_method", "resource", "action", ConsentSignIn.fieldName]
+        #expect(!used.contains(ConsentSignIn.usernameFieldName))
+    }
+
+    @Test("The username is not required, so Deny still needs nothing typed")
+    func usernameDoesNotBlockDeny() throws {
+        let html = Self.page(signIn: ConsentSignIn(label: "l", hint: "h", username: "owner"))
+        let tag = try #require(html.range(of: "autocomplete=\"username\""))
+        let open = try #require(html[..<tag.lowerBound].range(of: "<input", options: .backwards))
+        let close = try #require(html[tag.upperBound...].range(of: ">"))
+        #expect(!html[open.lowerBound..<close.upperBound].contains("required"))
+    }
+
     @Test("GET /authorize carries the sign-in through to the page it renders")
     func handlerRendersSignIn() async throws {
         let storage = try OAuthStorage(path: ":memory:")
