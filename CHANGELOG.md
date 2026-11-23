@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.14] — 2026-11-23
+
 ### Added
 - **`ConsentSignIn.username`: a password manager can save and fill the owner secret.** A password manager keys a saved credential on a username
   and a password in the same form; the consent page had only a password field, so none offered to save the secret or filled it later, and the
@@ -1993,7 +1995,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.13...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.14...HEAD
+[1.0.0-beta.14]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.13...v1.0.0-beta.14
 [1.0.0-beta.13]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.12...v1.0.0-beta.13
 [1.0.0-beta.12]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.11...v1.0.0-beta.12
 [1.0.0-beta.11]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.10...v1.0.0-beta.11
