@@ -58,11 +58,13 @@ problem, which is what stops each caller reinventing them slightly differently.
 ## Installation
 
 ```swift
-.package(url: "https://github.com/jpurnell/swift-oauth.git", exact: "1.0.0-beta.15")
+.package(url: "https://github.com/jpurnell/swift-oauth.git", from: "1.0.0-beta.15")
 ```
 
-Pinned exactly, because SwiftPM's version ranges do not select prereleases: a `from:` range
-resolves to the newest *stable* release, which for this package does not exist yet.
+A floor, not an exact pin: a `from:` range whose lower bound is itself a prerelease selects newer
+prereleases (checked 2026-11-24 with `from: "1.0.0-beta.13"`, which resolved to beta.15), so a consumer
+takes a fix without editing its manifest. This README used to say ranges skip prereleases and asked for an
+exact pin; that was wrong, and exact pins are what blocked resolution when a dependency moved.
 
 Then depend on the half you need — `SwiftOAuthProvider` to issue tokens, `SwiftOAuthClient` to
 consume someone else's, `SwiftOAuthMTLS` only for RFC 8705, `SwiftOAuthIdentity` only to resolve

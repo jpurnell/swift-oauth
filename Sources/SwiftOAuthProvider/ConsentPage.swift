@@ -37,6 +37,11 @@ public struct ConsentSignIn: Sendable, Equatable {
     /// trusted: the approver ignores it.
     public let username: String?
 
+    /// A passkey button to show beside the secret field, or `nil` for none (the default).
+    ///
+    /// The secret field stays: it is the fallback when a device has no passkey, and the recovery for a lost one.
+    public let passkey: PasskeyPrompt?
+
     /// Creates a sign-in field.
     ///
     /// - Parameters:
@@ -44,11 +49,13 @@ public struct ConsentSignIn: Sendable, Equatable {
     ///   - hint: Where to find the secret.
     ///   - errorMessage: Why the previous attempt failed, if it did.
     ///   - username: The account name to show read-only so a password manager can save and fill the secret.
-    public init(label: String, hint: String, errorMessage: String? = nil, username: String? = nil) {
+    ///   - passkey: Where the passkey ceremony is, to show a passkey button, or `nil` for none.
+    public init(label: String, hint: String, errorMessage: String? = nil, username: String? = nil, passkey: PasskeyPrompt? = nil) {
         self.label = label
         self.hint = hint
         self.errorMessage = errorMessage
         self.username = username
+        self.passkey = passkey
     }
 }
 
@@ -184,9 +191,20 @@ public struct ConsentPage: Sendable {
                     + "value=\"\(escapeHTML(account))\" autocomplete=\"username\" readonly>"
                 return "<label for=\"\(usernameName)\">Account</label>\n                " + input
             } ?? ""
+            let passkeyHTML = signIn.passkey.map { prompt in
+                let binding = ConsentPasskeyBinding.make(clientID: clientId, redirectURI: redirectUri, csrfToken: csrfToken)
+                return """
+                <div class="passkey" id="passkey" hidden data-base="\(escapeHTML(prompt.base))" data-binding="\(escapeHTML(binding))">
+                    <input type="hidden" id="\(PasskeyPrompt.fieldName)" name="\(PasskeyPrompt.fieldName)" value="">
+                    <button type="button" id="passkey-approve" class="approve-btn">Approve with a passkey</button>
+                    <div class="hint" id="passkey-status" role="status"></div>
+                </div>
+                """
+            } ?? ""
             signInHTML = """
             <div class="signin">
                 \(error)
+                \(passkeyHTML)
                 \(usernameHTML)
                 <label for="\(ConsentSignIn.fieldName)">\(escapeHTML(signIn.label))</label>
                 <input type="password" id="\(ConsentSignIn.fieldName)" name="\(ConsentSignIn.fieldName)" \
@@ -195,6 +213,12 @@ public struct ConsentPage: Sendable {
             </div>
             """
         }
+
+        // Only a page with a passkey button carries its rules, so a deployment without one renders exactly what it did.
+        let passkeyStyle = signIn?.passkey == nil ? "" : ".passkey { margin-bottom: 16px; } .passkey button { width: 100%; }"
+        let scriptTags = signIn?.passkey.map {
+            "<script src=\"\(escapeHTML($0.libraryPath))\"></script>\n    <script src=\"\(escapeHTML($0.wiringPath))\"></script>"
+        } ?? ""
 
         return """
         <!DOCTYPE html>
@@ -319,6 +343,7 @@ public struct ConsentPage: Sendable {
                     margin-bottom: 12px;
                     font-size: 14px;
                 }
+                \(passkeyStyle)
                 .warning {
                     font-size: 12px;
                     color: #666;
@@ -370,6 +395,7 @@ public struct ConsentPage: Sendable {
                     Only authorize applications you trust.
                 </p>
             </div>
+            \(scriptTags)
         </body>
         </html>
         """
