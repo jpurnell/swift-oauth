@@ -64,7 +64,7 @@ let package = Package(
         .library(name: "SwiftOAuthIdentity", targets: ["SwiftOAuthIdentity"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "5.1.2"),
         // For mTLS only — RFC 8705. `URLSession` cannot answer a client-certificate challenge
         // on Linux: corelibs-foundation's `URLCredential` has no identity-based initialiser,
         // and its source says outright that there is no SecIdentity support. NIOSSL's
@@ -98,7 +98,7 @@ let package = Package(
         // binary that uses the bridge. Accepted in SwiftCLIKit's sign-in design (§9) as the cost
         // of keeping the bridge a product of this package rather than a package of its own.
         // A version, not a branch: a branch gives a consumer no way to say what it built against.
-        .package(url: "https://github.com/jpurnell/swift-identity.git", from: "0.7.1")
+        .package(url: "https://github.com/jpurnell/swift-identity.git", from: "0.11.0")
     ],
     targets: [
         // Models, errors, grant types, PKCE. No behaviour beyond value types and

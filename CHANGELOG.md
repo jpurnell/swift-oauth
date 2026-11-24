@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.15] — 2026-11-23
+
+### Changed
+- **swift-crypto minimum is now 5.1.2** (`from: "5.1.2"`; was `from: "3.0.0"`, which allowed only 3.x), and **swift-identity's minimum is now 0.11.0** (was 0.7.1), the first release that allows swift-crypto 5. A crypto release is usually a security fix, so the owner's rule is to stay current. **A package that depends on swift-oauth 1.0.0-beta.15 must itself allow swift-crypto 5.1.2 or later.** No source or public API change; the tests pass on 5.1.2.
+
 ## [1.0.0-beta.14] — 2026-11-23
 
 ### Added
@@ -1995,7 +2000,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.14...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.15...HEAD
+[1.0.0-beta.15]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.14...v1.0.0-beta.15
 [1.0.0-beta.14]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.13...v1.0.0-beta.14
 [1.0.0-beta.13]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.12...v1.0.0-beta.13
 [1.0.0-beta.12]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.11...v1.0.0-beta.12
