@@ -58,7 +58,7 @@ problem, which is what stops each caller reinventing them slightly differently.
 ## Installation
 
 ```swift
-.package(url: "https://github.com/jpurnell/swift-oauth.git", from: "1.0.0-beta.15")
+.package(url: "https://github.com/jpurnell/swift-oauth.git", from: "1.0.0-beta.16")
 ```
 
 A floor, not an exact pin: a `from:` range whose lower bound is itself a prerelease selects newer
@@ -78,7 +78,7 @@ Linux (CI runs `swift:6.2`).
 
 ## Status
 
-**1.0.0-beta.15.** The full OAuth 2.1 surface: authorization code with mandatory PKCE, refresh
+**1.0.0-beta.16.** The full OAuth 2.1 surface: authorization code with mandatory PKCE, refresh
 with rotation, client credentials, the device grant (RFC 8628), token exchange (RFC 8693),
 introspection (RFC 7662), revocation (RFC 7009), dynamic registration (RFC 7591), PAR (RFC
 9126), JAR (RFC 9101), DPoP (RFC 9449), mTLS-bound tokens (RFC 8705), resource indicators (RFC

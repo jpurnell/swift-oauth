@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0-beta.16] — 2026-11-24
+
 ### Added
 - **`ConsentSignIn.passkey`: the consent page can offer a passkey beside the typed secret.** For `SwiftOAuthServer`'s owner sign-in (and any host with a passkey ceremony, such as `SwiftPasskeyServer`). A host passes a `PasskeyPrompt` (the path of its passkey routes, the path of its passkey library script, and the path it serves `ConsentPasskeyScript` at); the page then renders an *Approve with a passkey* button and a hidden `passkey_assertion` field inside the form, and loads those two scripts as files (no inline script, so a `script-src 'self'` policy is enough). The block is hidden until the page's script finds WebAuthn, so a browser without it shows only the secret field, which stays as the fallback and the recovery. Pressing the button runs the library's `SwiftPasskey.approve`, puts the assertion in the hidden field, adds `action=approve` and submits; a cancelled or refused ceremony is said on the page and leaves the form as it was.
 - **`ConsentPasskeyBinding.make(clientID:redirectURI:csrfToken:)`**: what an approval is bound to. The page puts it on the button and the script asks for a challenge bound to it; the host's approver computes it again from the submitted `client_id`, `redirect_uri` and `csrf_token`, and the ceremony accepts the assertion only if they are equal, so an assertion for one consent cannot approve another. Fixed length (`oauth-consent:v1:` and a SHA-256 over length-prefixed parts), so a long client URL cannot exceed the passkey routes' limit and no choice of parts runs into another's.
@@ -2006,7 +2008,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.15...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.16...HEAD
+[1.0.0-beta.16]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.15...v1.0.0-beta.16
 [1.0.0-beta.15]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.14...v1.0.0-beta.15
 [1.0.0-beta.14]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.13...v1.0.0-beta.14
 [1.0.0-beta.13]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.12...v1.0.0-beta.13
