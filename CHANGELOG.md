@@ -7,7 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Candidate for 1.0.0-beta.17. Not tagged.
+## [1.0.0-beta.17] — 2026-11-27
+
 
 ### Fixed
 - **Two processes sharing one `oauth.db` no longer fail when their writes meet.** `OAuthStorage` opened its connection with SQLite's defaults: no busy timeout, so a statement that met another connection's lock failed at once with `SQLITE_BUSY` ("database is locked"). Three symptoms followed, all silent (nothing was logged): `POST /register` answered `400 invalid_request` (the handler's catch-all), `GET /authorize` answered `500 server_error`, and a freshly registered client could be answered `401 invalid_client`, because every read did `guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }`, which read a busy step as "no such row". Every connection now sets `sqlite3_busy_timeout` (default 5 s) before it touches the file.
@@ -2035,7 +2036,8 @@ Nothing is implemented yet. The extraction from SwiftMCPServer is sequenced so t
 SwiftMCPServer's own quality gate acts as the control: if it cannot be made green against the
 extracted package, the extraction was wrong and is reverted rather than patched.
 
-[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.16...HEAD
+[Unreleased]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.17...HEAD
+[1.0.0-beta.17]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.16...v1.0.0-beta.17
 [1.0.0-beta.16]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.15...v1.0.0-beta.16
 [1.0.0-beta.15]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.14...v1.0.0-beta.15
 [1.0.0-beta.14]: https://github.com/jpurnell/swift-oauth/compare/v1.0.0-beta.13...v1.0.0-beta.14
