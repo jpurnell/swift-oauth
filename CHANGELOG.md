@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Candidate for 1.0.0-beta.17. Not tagged.
+
+### Fixed
+- **Two processes sharing one `oauth.db` no longer fail when their writes meet.** `OAuthStorage` opened its connection with SQLite's defaults: no busy timeout, so a statement that met another connection's lock failed at once with `SQLITE_BUSY` ("database is locked"). Three symptoms followed, all silent (nothing was logged): `POST /register` answered `400 invalid_request` (the handler's catch-all), `GET /authorize` answered `500 server_error`, and a freshly registered client could be answered `401 invalid_client`, because every read did `guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }`, which read a busy step as "no such row". Every connection now sets `sqlite3_busy_timeout` (default 5 s) before it touches the file.
+- **A lock still held after the timeout is `503 temporarily_unavailable`, with `Retry-After: 5`, and is logged** (`os.Logger`, category `OAuthStorage` and `OAuthHTTPHandler`, `error` level; Apple platforms only, like the rest of this package's logging). `storageFailure` maps `SQLITE_BUSY`/`SQLITE_LOCKED` to `OAuthError.temporarilyUnavailable`; every other SQLite failure stays `OAuthStorageError.databaseError`, now carrying SQLite's own message. A step that is neither a row nor done now throws instead of reading as an absent row. The consent POST's CSRF and client checks pass a busy database through as 503 instead of `invalid_request` / `server_error`.
+
+### Added
+- **`OAuthStorage.init(path:schemaVersion:busyTimeout:journalMode:)`**, `OAuthStorage.defaultBusyTimeout` (5 s), and `OAuthStorage.JournalMode` (`.unchanged`, `.wal`). **Additive and source-compatible:** both new parameters default, and an existing call compiles unchanged.
+- **`.wal` is opt-in. Existing deployments get the busy timeout and nothing else unless they pass `journalMode: .wal`.** WAL changes the database file persistently, adds `-wal`/`-shm` files, and needs every process on one host and a local filesystem; the default leaves the file's journal mode exactly as it is.
+- `Retry-After` on every `temporarily_unavailable` response from `OAuthHTTPHandler`.
+
+### Not covered
+- `OAuthHTTPHandler`'s resource-token validation helper still reports any storage failure as an invalid token, busy included. It returns a non-throwing result, so changing it is an API question, not a fix.
+- Tests hold the lock with a second connection in one process; a two-process run against a real deployment was not done.
+
 ## [1.0.0-beta.16] — 2026-11-24
 
 ### Added

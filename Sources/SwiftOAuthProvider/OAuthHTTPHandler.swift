@@ -270,6 +270,13 @@ public struct OAuthHTTPHandler: Sendable {
             guard csrfResult.isValid else {
                 return jsonErrorResponse("invalid_request", "Invalid or expired csrf token")
             }
+        } catch let error as OAuthError {
+            // A busy database is not a bad token: the caller is told to retry, not that it is wrong.
+            if case .temporarilyUnavailable = error { return errorResponse(error) }
+            #if canImport(os)
+            logger.debug("OAuth error: \(error.code, privacy: .public)")
+            #endif
+            return jsonErrorResponse("invalid_request", "CSRF validation failed")
         } catch {
             #if canImport(os)
             logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
@@ -280,9 +287,15 @@ public struct OAuthHTTPHandler: Sendable {
             guard let _ = try await server.getClient(clientId: clientId) else {
                 return jsonErrorResponse("invalid_client", "Client not found")
             }
+        } catch let error as OAuthError {
+            if case .temporarilyUnavailable = error { return errorResponse(error) }
+            #if canImport(os)
+            logger.debug("OAuth error: \(error.code, privacy: .public)")
+            #endif
+            return jsonErrorResponse("server_error", "Failed to verify client")
         } catch {
             #if canImport(os)
-            logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            logger.error("Client lookup failed: \(error.localizedDescription, privacy: .public)")
             #endif
             return jsonErrorResponse("server_error", "Failed to verify client")
         }
@@ -1008,12 +1021,25 @@ public struct OAuthHTTPHandler: Sendable {
             statusCode = 403
         }
 
+        // A busy database is the one transient failure the server reports, so it says when to
+        // come back, and it is logged: it used to leave no line at all.
+        var headers: [String: String] = [:]
+        if case .temporarilyUnavailable = error {
+            headers["Retry-After"] = Self.retryAfterSeconds
+            #if canImport(os)
+            logger.error("Answering 503 temporarily_unavailable: \(error.detail ?? "no detail", privacy: .public)")
+            #endif
+        }
         return OAuthHTTPResponse(
             statusCode: statusCode,
             contentType: "application/json",
             body: Self.errorBody(
-                code: error.code, description: error.detail ?? error.standardDescription))
+                code: error.code, description: error.detail ?? error.standardDescription),
+            headers: headers)
     }
+
+    /// The `Retry-After` value, in seconds, sent with `temporarily_unavailable`.
+    static let retryAfterSeconds = "5"
 }
 
 // MARK: - OAuth HTTP Response
