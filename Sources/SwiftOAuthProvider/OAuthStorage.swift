@@ -2,6 +2,9 @@ import Foundation
 import SwiftOAuthCore
 import CSQLite
 import Crypto
+#if canImport(os)
+import os
+#endif
 
 /// Thread-safe OAuth 2.0 storage using SQLite
 ///
@@ -57,8 +60,23 @@ public actor OAuthStorage {
     ///   - schemaVersion: The schema version to bring the database up to. Defaults to
     ///     ``currentSchemaVersion``. A lower value exists so a test can produce a database as
     ///     an earlier release left it, which is the only way to exercise a migration.
+    ///   - busyTimeout: How long, in seconds, a statement waits for another connection's lock
+    ///     before giving up. Defaults to ``defaultBusyTimeout``. Without a wait, two processes
+    ///     sharing one file fail whenever their writes meet; a wait that still expires is thrown
+    ///     as `OAuthError.temporarilyUnavailable` (HTTP 503), never as a missing row.
+    ///     Zero restores SQLite's fail-immediately behaviour. The wait is one budget shared by the
+    ///     calls queued on this actor, not a fresh wait per call: once a wait has expired, the
+    ///     calls behind it fail at once rather than each waiting again. The default is 2 s
+    ///     because a legitimate write window is milliseconds.
+    ///   - journalMode: ``JournalMode/unchanged`` (the default) leaves the file's journal mode
+    ///     alone; ``JournalMode/wal`` switches it, persistently. See ``JournalMode``.
     /// - Throws: `OAuthStorageError` if database cannot be opened
-    public init(path: String, schemaVersion: Int = OAuthStorage.currentSchemaVersion) throws {
+    public init(
+        path: String,
+        schemaVersion: Int = OAuthStorage.currentSchemaVersion,
+        busyTimeout: TimeInterval = OAuthStorage.defaultBusyTimeout,
+        journalMode: JournalMode = .unchanged
+    ) throws {
         self.path = path
 
         // Create parent directory if needed
@@ -86,10 +104,53 @@ public actor OAuthStorage {
             throw OAuthStorageError.databaseError("Database handle is nil")
         }
 
-        self.handle = DatabaseHandle(validDb)
+        // Before anything touches the file, so the schema statements below wait for a lock too.
+        guard busyTimeout.isFinite, busyTimeout >= 0, busyTimeout <= 86_400 else {
+            sqlite3_close(validDb)
+            throw OAuthStorageError.databaseError(
+                "busyTimeout must be between 0 and 86400 seconds, not \(busyTimeout).")
+        }
+        let budget = busyTimeout > 0 ? BusyBudget(timeout: busyTimeout) : nil
+        self.handle = DatabaseHandle(validDb, budget: budget)
+        if let budget {
+            // Not `sqlite3_busy_timeout`: that sleeps the full timeout for every statement, and
+            // this actor runs statements one at a time, so N callers queued behind one held lock
+            // waited N x timeout. The handler lets the waiting calls share one budget.
+            let installed = sqlite3_busy_handler(
+                validDb, busyHandlerCallback, Unmanaged.passUnretained(budget).toOpaque())
+            guard installed == SQLITE_OK else {
+                throw storageFailure(validDb, "Failed to set the busy handler")
+            }
+        }
+        if journalMode == .wal {
+            try Self.executeStatic(db: validDb, sql: "PRAGMA journal_mode = WAL")
+        }
 
         // Enable foreign keys and create tables
         try Self.initializeDatabase(db: validDb, targetVersion: schemaVersion)
+    }
+
+    /// How many statements have met a lock, and how many seconds they slept for it in all.
+    /// Internal: for tests of the shared wait budget.
+    func busyWaitStatistics() -> (statements: Int, seconds: TimeInterval) {
+        (handle.budget?.blockedStatements ?? 0, handle.budget?.secondsSlept ?? 0)
+    }
+
+    /// How long a statement waits for another connection's lock by default, in seconds.
+    public static let defaultBusyTimeout: TimeInterval = 2
+
+    /// The journal mode ``init(path:schemaVersion:busyTimeout:journalMode:)`` puts the file in.
+    ///
+    /// WAL is a property of the database file, not of the connection: once set it persists
+    /// until someone sets it back. That is why it is opt-in.
+    public enum JournalMode: Sendable, Equatable {
+        /// Leave the file as it is. An existing deployment keeps the rollback journal it has.
+        case unchanged
+        /// Write-ahead logging: readers no longer block the writer or the reverse. It adds
+        /// `-wal` and `-shm` files beside the database, requires every process sharing the file
+        /// to be on the same host and a local filesystem (the index is shared memory), and is
+        /// undone only by `PRAGMA journal_mode = DELETE` with no other connection open.
+        case wal
     }
 
     /// The schema this build expects.
@@ -209,10 +270,10 @@ public actor OAuthStorage {
     private static func migrate(db: OpaquePointer, to targetVersion: Int) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to read the schema version.")
+            throw storageFailure(db, "Failed to read the schema version")
         }
         var version = 0
-        if sqlite3_step(stmt) == SQLITE_ROW {
+        if try stepReturnsRow(stmt) {
             version = Int(sqlite3_column_int(stmt, 0))
         }
         sqlite3_finalize(stmt)
@@ -479,7 +540,7 @@ public actor OAuthStorage {
             throw OAuthStorageError.databaseError("Failed to read client secrets.")
         }
         var rows: [(clientId: String, hash: String)] = []
-        while sqlite3_step(select) == SQLITE_ROW {
+        while try stepReturnsRow(select) {
             guard let id = sqlite3_column_text(select, 0),
                   let secret = sqlite3_column_text(select, 1) else { continue }
             rows.append((String(cString: id), sha256Hex(String(cString: secret))))
@@ -498,7 +559,7 @@ public actor OAuthStorage {
             sqlite3_bind_text(update, 1, row.hash, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(update, 2, row.clientId, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(update) == SQLITE_DONE else {
-                throw OAuthStorageError.databaseError("Failed to hash a client secret.")
+                throw storageFailure(db, "Failed to hash a client secret.")
             }
         }
     }
@@ -514,7 +575,7 @@ public actor OAuthStorage {
             throw OAuthStorageError.databaseError("Failed to read user codes.")
         }
         var rows: [(key: String, hash: String)] = []
-        while sqlite3_step(select) == SQLITE_ROW {
+        while try stepReturnsRow(select) {
             guard let key = sqlite3_column_text(select, 0),
                   let code = sqlite3_column_text(select, 1) else { continue }
             rows.append((String(cString: key), userCodeDigest(String(cString: code))))
@@ -533,7 +594,7 @@ public actor OAuthStorage {
             sqlite3_bind_text(update, 1, row.hash, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(update, 2, row.key, -1, SQLITE_TRANSIENT)
             guard sqlite3_step(update) == SQLITE_DONE else {
-                throw OAuthStorageError.databaseError("Failed to hash a user code.")
+                throw storageFailure(db, "Failed to hash a user code.")
             }
         }
     }
@@ -554,7 +615,7 @@ public actor OAuthStorage {
         guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &stmt, nil) == SQLITE_OK else {
             throw OAuthStorageError.databaseError("Failed to inspect \(table).")
         }
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        while try stepReturnsRow(stmt) {
             if let name = sqlite3_column_text(stmt, 1), String(cString: name) == column {
                 return true
             }
@@ -568,14 +629,12 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            let error = String(cString: sqlite3_errmsg(db))
-            throw OAuthStorageError.databaseError("Failed to prepare: \(error)")
+            throw storageFailure(db, "Failed to prepare")
         }
 
         let result = sqlite3_step(stmt)
         if result != SQLITE_DONE && result != SQLITE_ROW {
-            let error = String(cString: sqlite3_errmsg(db))
-            throw OAuthStorageError.databaseError("Execution failed: \(error)")
+            throw storageFailure(db, "Execution failed")
         }
     }
 
@@ -589,7 +648,7 @@ public actor OAuthStorage {
         let sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
 
         if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
-            while sqlite3_step(stmt) == SQLITE_ROW {
+            while try stepReturnsRow(stmt) {
                 if let name = sqlite3_column_text(stmt, 0) {
                     tables.append(String(cString: name))
                 }
@@ -651,12 +710,12 @@ public actor OAuthStorage {
         let sql = "SELECT * FROM clients WHERE client_id = ?"
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         sqlite3_bind_text(stmt, 1, clientId, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return nil
         }
 
@@ -673,11 +732,11 @@ public actor OAuthStorage {
 
         let sql = "SELECT client_secret FROM clients WHERE client_id = ?"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, clientId, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW,
+        guard try stepReturnsRow(stmt),
               let stored = sqlite3_column_text(stmt, 0) else {
             return false
         }
@@ -723,12 +782,12 @@ public actor OAuthStorage {
         let sql = "SELECT * FROM authorization_codes WHERE code = ? AND consumed = 0"
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         sqlite3_bind_text(stmt, 1, code, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return nil
         }
 
@@ -806,12 +865,12 @@ public actor OAuthStorage {
         """
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         sqlite3_bind_text(stmt, 1, token, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return CSRFValidationResult(isValid: false, error: "Token not found")
         }
 
@@ -862,12 +921,12 @@ public actor OAuthStorage {
         // Count before deletion
         let countSql = "SELECT COUNT(*) FROM csrf_tokens WHERE expires_at < ?"
         guard sqlite3_prepare_v2(db, countSql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_double(stmt, 1, now)
 
         var count = 0
-        if sqlite3_step(stmt) == SQLITE_ROW {
+        if try stepReturnsRow(stmt) {
             count = Int(sqlite3_column_int(stmt, 0))
         }
 
@@ -927,12 +986,12 @@ public actor OAuthStorage {
         """
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return .invalid(reason: "Token not found")
         }
 
@@ -990,11 +1049,11 @@ public actor OAuthStorage {
         """
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return .inactive
         }
 
@@ -1126,11 +1185,11 @@ public actor OAuthStorage {
               AND expires_at > ?
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, Self.userCodeDigest(userCode), -1, SQLITE_TRANSIENT)
         sqlite3_bind_double(stmt, 2, now.timeIntervalSince1970)
-        guard sqlite3_step(stmt) == SQLITE_ROW,
+        guard try stepReturnsRow(stmt),
               let client = sqlite3_column_text(stmt, 0) else { return nil }
         return (String(cString: client), sqlite3_column_text(stmt, 1).map { String(cString: $0) })
     }
@@ -1152,11 +1211,11 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
         let sql = "SELECT last_polled_at, poll_interval FROM device_codes WHERE device_code_hash = ?"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         let key = hashToken(deviceCode)
         sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT)
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return false }
+        guard try stepReturnsRow(stmt) else { return false }
 
         let lastPolled: Date? = sqlite3_column_type(stmt, 0) == SQLITE_NULL
             ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 0))
@@ -1195,11 +1254,11 @@ public actor OAuthStorage {
             FROM device_codes WHERE device_code_hash = ?
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, hashToken(deviceCode), -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return .unknown }
+        guard try stepReturnsRow(stmt) else { return .unknown }
 
         let owner = String(cString: sqlite3_column_text(stmt, 0))
         let scope = sqlite3_column_text(stmt, 1).map { String(cString: $0) }
@@ -1280,13 +1339,13 @@ public actor OAuthStorage {
             WHERE request_uri_hash = ? AND client_id = ? AND consumed = 0 AND expires_at > ?
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, hash, -1, SQLITE_TRANSIENT)
         sqlite3_bind_text(stmt, 2, clientId, -1, SQLITE_TRANSIENT)
         sqlite3_bind_double(stmt, 3, Date().timeIntervalSince1970)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        guard try stepReturnsRow(stmt) else { return nil }
 
         let request = PushedAuthorizationRequest(
             redirectUri: String(cString: sqlite3_column_text(stmt, 0)),
@@ -1323,12 +1382,12 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
         let sql = "INSERT OR IGNORE INTO dpop_proofs (jti, expires_at) VALUES (?, ?)"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, identifier, -1, SQLITE_TRANSIENT)
         sqlite3_bind_double(stmt, 2, expiresAt.timeIntervalSince1970)
         guard sqlite3_step(stmt) == SQLITE_DONE else {
-            throw OAuthStorageError.databaseError("Failed to record the proof identifier")
+            throw storageFailure(db, "Failed to record the proof identifier")
         }
         return sqlite3_changes(db) > 0
     }
@@ -1406,13 +1465,13 @@ public actor OAuthStorage {
         let sql = "SELECT COUNT(*) FROM access_tokens WHERE token_hash = ?"
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         // Bind the raw token, not its hash
         sqlite3_bind_text(stmt, 1, token, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return false
         }
 
@@ -1461,12 +1520,12 @@ public actor OAuthStorage {
         """
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return nil
         }
 
@@ -1513,10 +1572,10 @@ public actor OAuthStorage {
             FROM refresh_tokens WHERE token_hash = ?
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
-        guard sqlite3_step(stmt) == SQLITE_ROW,
+        guard try stepReturnsRow(stmt),
               let owner = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }),
               owner == clientId else {
             return .unusable
@@ -1593,10 +1652,10 @@ public actor OAuthStorage {
             FROM refresh_tokens WHERE token_hash = ?
         """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         sqlite3_bind_text(stmt, 1, hash, -1, SQLITE_TRANSIENT)
-        guard sqlite3_step(stmt) == SQLITE_ROW,
+        guard try stepReturnsRow(stmt),
               let owner = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }) else { return nil }
         return RefreshRow(
             clientId: owner,
@@ -1667,11 +1726,11 @@ public actor OAuthStorage {
         guard sqlite3_prepare_v2(
             db, "SELECT client_id, grant_id FROM refresh_tokens WHERE token_hash = ?",
             -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
         let tokenHash = hashToken(token)
         sqlite3_bind_text(stmt, 1, tokenHash, -1, SQLITE_TRANSIENT)
-        guard sqlite3_step(stmt) == SQLITE_ROW,
+        guard try stepReturnsRow(stmt),
               let owner = sqlite3_column_text(stmt, 0).map({ String(cString: $0) }),
               owner == clientId else {
             return 0
@@ -1763,12 +1822,12 @@ public actor OAuthStorage {
         let sql = "SELECT COUNT(*) FROM \(table) WHERE \(expiresColumn) < ?"
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw OAuthStorageError.databaseError("Failed to prepare statement")
+            throw storageFailure(db, "Failed to prepare statement")
         }
 
         sqlite3_bind_double(stmt, 1, threshold)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepReturnsRow(stmt) else {
             return 0
         }
 
@@ -1782,8 +1841,7 @@ public actor OAuthStorage {
         defer { sqlite3_finalize(stmt) }
 
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            let error = String(cString: sqlite3_errmsg(db))
-            throw OAuthStorageError.databaseError("Failed to prepare: \(error)")
+            throw storageFailure(db, "Failed to prepare")
         }
 
         for (index, param) in parameters.enumerated() {
@@ -1812,8 +1870,7 @@ public actor OAuthStorage {
 
         let result = sqlite3_step(stmt)
         if result != SQLITE_DONE && result != SQLITE_ROW {
-            let error = String(cString: sqlite3_errmsg(db))
-            throw OAuthStorageError.databaseError("Execution failed: \(error)")
+            throw storageFailure(db, "Execution failed")
         }
     }
 
@@ -1998,6 +2055,98 @@ public enum OAuthStorageError: Error, Sendable {
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+/// The error for a failed SQLite call.
+///
+/// A lock another connection still held after the busy timeout is the one failure the caller
+/// should retry rather than report as broken, so it becomes `OAuthError.temporarilyUnavailable`
+/// (which the HTTP layer answers with 503 and `Retry-After`). Everything else stays a
+/// ``OAuthStorageError/databaseError(_:)`` carrying SQLite's message. Both are logged: this
+/// failure used to leave no trace at all.
+private func storageFailure(_ db: OpaquePointer?, _ what: String) -> Error {
+    let code = sqlite3_errcode(db)
+    let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "no connection"
+    let primary = code & 0xFF
+    #if canImport(os)
+    Logger(subsystem: "com.swiftoauth.provider", category: "OAuthStorage")
+        .error("\(what, privacy: .public): SQLite \(code, privacy: .public) \(message, privacy: .public)")
+    #endif
+    if primary == SQLITE_BUSY || primary == SQLITE_LOCKED {
+        return OAuthError.temporarilyUnavailable(
+            "The database is busy. Try again shortly.")
+    }
+    return OAuthStorageError.databaseError("\(what): \(message)")
+}
+
+/// Steps a statement: `true` for a row, `false` when it is finished, and a throw for anything
+/// else. Reading anything but a row as "no row" is how a locked database used to look like a
+/// client that was never registered.
+private func stepReturnsRow(_ stmt: OpaquePointer?) throws -> Bool {
+    switch sqlite3_step(stmt) {
+    case SQLITE_ROW: return true
+    case SQLITE_DONE: return false
+    default: throw storageFailure(sqlite3_db_handle(stmt), "Failed to read")
+    }
+}
+
+/// The wait budget the statements of one ``OAuthStorage`` share while another connection holds
+/// a lock.
+///
+/// The actor runs one statement at a time, so a plain per-statement timeout stacks: with the
+/// lock held longer than the timeout, the N-th concurrent caller waits N x timeout, which
+/// outlasts client and proxy timeouts. Here the first statement to meet the lock waits at most
+/// `timeout`; once that wait has expired the lock is known to be held, so the statements that
+/// were queued behind it, and any that meet the lock for `cooldown` after, give up at once
+/// instead of waiting again. The first statement to meet the lock after that starts a fresh
+/// wait. Statements that never meet a lock never reach this object.
+///
+/// Only ever touched from SQLite's busy callback, which runs on the actor's thread inside a
+/// statement, so it needs no lock of its own and is not `Sendable`.
+private final class BusyBudget {
+    let timeout: TimeInterval
+    /// How long after an expired wait a newly blocked statement still fails at once.
+    let cooldown: TimeInterval
+    /// When the current wait stops, or `nil` before the first one.
+    private var deadline: TimeInterval?
+    /// Statements that met a lock, and the seconds spent waiting for it. Read by tests, which
+    /// can then assert on how much waiting happened instead of on how long a clock says it took.
+    private(set) var blockedStatements = 0
+    private(set) var secondsSlept: TimeInterval = 0
+
+    init(timeout: TimeInterval) {
+        self.timeout = timeout
+        self.cooldown = min(timeout, 1)
+    }
+
+    /// Whether SQLite should retry the blocked statement. `attempt` is 0 the first time this
+    /// statement is blocked, and counts up with each retry.
+    func shouldRetry(attempt: Int32) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if attempt == 0 {
+            blockedStatements += 1
+            // A statement is not blocked for the first time inside a live wait: statements run
+            // serially, so one found here follows a wait that ended in success.
+            if let expired = deadline, now >= expired, now < expired + cooldown {
+                return false
+            }
+            deadline = now + timeout
+        }
+        guard let limit = deadline, now < limit else { return false }
+        let steps: [Double] = [0.001, 0.002, 0.005, 0.010, 0.015, 0.020, 0.025, 0.025, 0.025, 0.050, 0.050, 0.100]
+        let pause = min(steps[min(Int(attempt), steps.count - 1)], limit - now)
+        guard let micros = UInt32(exactly: (pause * 1_000_000).rounded()), micros > 0 else { return false }
+        usleep(micros)
+        secondsSlept += Double(micros) / 1_000_000
+        return true
+    }
+}
+
+/// SQLite's busy callback: 1 to retry the statement, 0 to give up with `SQLITE_BUSY`.
+private func busyHandlerCallback(_ context: UnsafeMutableRawPointer?, _ attempt: Int32) -> Int32 {
+    guard let context else { return 0 }
+    let budget = Unmanaged<BusyBudget>.fromOpaque(context).takeUnretainedValue()
+    return budget.shouldRetry(attempt: attempt) ? 1 : 0
+}
+
 /// An open SQLite connection, closed in its own `deinit`.
 ///
 /// Deliberately not `Sendable`: it is only ever held as isolated state of ``OAuthStorage``,
@@ -2005,8 +2154,13 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 private final class DatabaseHandle {
     let pointer: OpaquePointer
 
-    init(_ pointer: OpaquePointer) {
+    /// Kept here so it outlives the connection that holds an unretained pointer to it:
+    /// `deinit` closes the connection before stored properties are released.
+    let budget: BusyBudget?
+
+    init(_ pointer: OpaquePointer, budget: BusyBudget?) {
         self.pointer = pointer
+        self.budget = budget
     }
 
     deinit {

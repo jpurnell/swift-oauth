@@ -295,6 +295,17 @@ public enum TokenValidationResult: Sendable, Equatable {
     /// Token is invalid with reason
     case invalid(reason: String)
 
+    /// The token could not be checked right now, so nothing is known about it.
+    ///
+    /// Storage was locked by another connection for longer than the busy timeout. This is not
+    /// a verdict on the token: a valid token yields this too while the lock is held. A resource
+    /// server answers `503` with `Retry-After` (see
+    /// ``OAuthHTTPHandler/temporarilyUnavailableResponse(retryAfter:)``), never `401`: a client
+    /// that reads `401` re-authenticates, which cannot help and multiplies the load.
+    ///
+    /// - Parameter retryAfter: Seconds after which the same request is worth repeating.
+    case temporarilyUnavailable(retryAfter: Int)
+
     /// Everything a resource server needs to decide whether to honour a token.
     ///
     /// Grows by adding properties, which is source-compatible: a pattern match binds the whole

@@ -47,6 +47,33 @@ substitute to the same behaviour — including the parts that are easy to get su
 such as consuming a code exactly once under concurrent presentation — and both shipped stores
 pass it unchanged.
 
+### Sharing one database file between processes
+
+Two processes may open the same ``OAuthStorage`` file. SQLite admits one writer at a time, so
+every connection waits for a competing lock up to `busyTimeout` (``OAuthStorage/defaultBusyTimeout``,
+two seconds) before giving up; with the default rollback journal a writer also waits for readers
+to finish. A wait that expires throws `OAuthError.temporarilyUnavailable`, which
+``OAuthHTTPHandler`` answers `503` with `Retry-After: 5` and logs. It is never reported as a bad
+request, an unknown client, or a server fault, and a read that cannot proceed throws rather than
+answering "no such row".
+
+The wait is a budget shared by the calls of one ``OAuthStorage``, which runs them one at a time.
+The first call to meet the lock waits at most `busyTimeout`; the calls queued behind it, and any
+that meet the lock for `min(busyTimeout, 1 s)` after, then fail at once, because the lock was
+just shown to be held. Without this, N concurrent requests waited N times the timeout. The first
+call to meet the lock after that starts a fresh wait, and a call that meets no lock is untouched.
+
+A resource server must not read a held lock as a bad token.
+``OAuthHTTPHandler/validateBearerToken(authHeader:acceptingAudiences:)`` returns
+``TokenValidationResult/temporarilyUnavailable(retryAfter:)`` for it; answer it with
+``OAuthHTTPHandler/temporarilyUnavailableResponse(retryAfter:)`` (`503`, `Retry-After`), not `401`.
+
+`journalMode: .wal` (``OAuthStorage/JournalMode/wal``) lets readers and the writer proceed
+together. It is persistent in the file, adds `-wal` and `-shm` files beside it, needs all
+processes on one host and a local (not network) filesystem, and is reversed only by
+`PRAGMA journal_mode = DELETE` with no other connection open. It is off unless asked for;
+a deployment that does not pass it keeps the journal mode its file has.
+
 ### Revoking tokens
 
 RFC 7009 is served by ``OAuthHTTPHandler/handleRevocationRequest(body:authHeader:)``, which a
