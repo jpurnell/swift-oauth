@@ -611,6 +611,7 @@ public struct OAuthHTTPHandler: Sendable {
             #if canImport(os)
             logger.error("Device verification CSRF check failed: \(error.localizedDescription, privacy: .public)")
             #endif
+            if case OAuthError.temporarilyUnavailable = error { return errorResponse(.temporarilyUnavailable(nil)) }
             return errorResponse(.serverError(nil))
         }
 
@@ -633,6 +634,8 @@ public struct OAuthHTTPHandler: Sendable {
                     subject: subject, status: 400)
             }
         } catch let error as OAuthError {
+            // A busy store is not a wrong code: it must not read as one, nor spend an attempt.
+            if case .temporarilyUnavailable = error { return errorResponse(error) }
             // The code the user typed is not logged: it is short, and a log of failed codes is
             // a list of guesses to try elsewhere.
             #if canImport(os)
@@ -670,6 +673,7 @@ public struct OAuthHTTPHandler: Sendable {
             #if canImport(os)
             logger.error("Device verification CSRF token not stored: \(error.localizedDescription, privacy: .public)")
             #endif
+            if case OAuthError.temporarilyUnavailable = error { return errorResponse(.temporarilyUnavailable(nil)) }
             return errorResponse(.serverError(nil))
         }
         return OAuthHTTPResponse(
@@ -789,9 +793,18 @@ public struct OAuthHTTPHandler: Sendable {
                 }
             }
             return result
-        } catch {
+        } catch OAuthError.temporarilyUnavailable {
+            // A lock is not a verdict on the token. Reported as 401 it sends a client round the
+            // re-authentication loop for a token that is fine.
             #if canImport(os)
-            logger.debug("OAuth error: \(error.localizedDescription, privacy: .public)")
+            logger.error("Bearer validation hit a busy token store; the token's validity is unknown")
+            #endif
+            return .temporarilyUnavailable(retryAfter: Int(Self.retryAfterSeconds) ?? 5)
+        } catch {
+            // Any other storage failure stays "invalid": it was before, it fails closed, and
+            // unlike a lock it is not known to clear by retrying.
+            #if canImport(os)
+            logger.error("Bearer validation failed in storage: \(error.localizedDescription, privacy: .public)")
             #endif
             return .invalid(reason: "Token validation failed")
         }
@@ -1036,6 +1049,28 @@ public struct OAuthHTTPHandler: Sendable {
             body: Self.errorBody(
                 code: error.code, description: error.detail ?? error.standardDescription),
             headers: headers)
+    }
+
+    /// The 503 a resource server sends for ``TokenValidationResult/temporarilyUnavailable(retryAfter:)``.
+    ///
+    /// `Retry-After` and an RFC 6749 error body naming `temporarily_unavailable`, so a client
+    /// can tell "come back shortly" from "your token is bad". Logged at error level: a busy
+    /// store refusing bearer tokens is something an operator needs to see.
+    ///
+    /// - Parameter retryAfter: Seconds to put in `Retry-After`.
+    /// - Returns: The response to send.
+    public static func temporarilyUnavailableResponse(retryAfter: Int) -> OAuthHTTPResponse {
+        #if canImport(os)
+        Logger(subsystem: "com.swiftoauth.provider", category: "OAuthHTTPHandler")
+            .error("Answering 503 temporarily_unavailable: the token store is busy")
+        #endif
+        return OAuthHTTPResponse(
+            statusCode: 503,
+            contentType: "application/json",
+            body: errorBody(
+                code: OAuthError.temporarilyUnavailable(nil).code,
+                description: "The token store is busy. Try again shortly."),
+            headers: uncached.merging(["Retry-After": String(max(retryAfter, 1))]) { current, _ in current })
     }
 
     /// The `Retry-After` value, in seconds, sent with `temporarily_unavailable`.

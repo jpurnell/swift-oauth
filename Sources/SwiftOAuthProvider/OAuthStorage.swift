@@ -64,7 +64,10 @@ public actor OAuthStorage {
     ///     before giving up. Defaults to ``defaultBusyTimeout``. Without a wait, two processes
     ///     sharing one file fail whenever their writes meet; a wait that still expires is thrown
     ///     as `OAuthError.temporarilyUnavailable` (HTTP 503), never as a missing row.
-    ///     Zero restores SQLite's fail-immediately behaviour.
+    ///     Zero restores SQLite's fail-immediately behaviour. The wait is one budget shared by the
+    ///     calls queued on this actor, not a fresh wait per call: once a wait has expired, the
+    ///     calls behind it fail at once rather than each waiting again. The default is 2 s
+    ///     because a legitimate write window is milliseconds.
     ///   - journalMode: ``JournalMode/unchanged`` (the default) leaves the file's journal mode
     ///     alone; ``JournalMode/wal`` switches it, persistently. See ``JournalMode``.
     /// - Throws: `OAuthStorageError` if database cannot be opened
@@ -101,16 +104,23 @@ public actor OAuthStorage {
             throw OAuthStorageError.databaseError("Database handle is nil")
         }
 
-        self.handle = DatabaseHandle(validDb)
-
         // Before anything touches the file, so the schema statements below wait for a lock too.
         guard busyTimeout.isFinite, busyTimeout >= 0, busyTimeout <= 86_400 else {
+            sqlite3_close(validDb)
             throw OAuthStorageError.databaseError(
                 "busyTimeout must be between 0 and 86400 seconds, not \(busyTimeout).")
         }
-        let milliseconds = Int32((busyTimeout * 1000).rounded())
-        guard sqlite3_busy_timeout(validDb, milliseconds) == SQLITE_OK else {
-            throw storageFailure(validDb, "Failed to set the busy timeout")
+        let budget = busyTimeout > 0 ? BusyBudget(timeout: busyTimeout) : nil
+        self.handle = DatabaseHandle(validDb, budget: budget)
+        if let budget {
+            // Not `sqlite3_busy_timeout`: that sleeps the full timeout for every statement, and
+            // this actor runs statements one at a time, so N callers queued behind one held lock
+            // waited N x timeout. The handler lets the waiting calls share one budget.
+            let installed = sqlite3_busy_handler(
+                validDb, busyHandlerCallback, Unmanaged.passUnretained(budget).toOpaque())
+            guard installed == SQLITE_OK else {
+                throw storageFailure(validDb, "Failed to set the busy handler")
+            }
         }
         if journalMode == .wal {
             try Self.executeStatic(db: validDb, sql: "PRAGMA journal_mode = WAL")
@@ -120,8 +130,14 @@ public actor OAuthStorage {
         try Self.initializeDatabase(db: validDb, targetVersion: schemaVersion)
     }
 
+    /// How many statements have met a lock, and how many seconds they slept for it in all.
+    /// Internal: for tests of the shared wait budget.
+    func busyWaitStatistics() -> (statements: Int, seconds: TimeInterval) {
+        (handle.budget?.blockedStatements ?? 0, handle.budget?.secondsSlept ?? 0)
+    }
+
     /// How long a statement waits for another connection's lock by default, in seconds.
-    public static let defaultBusyTimeout: TimeInterval = 5
+    public static let defaultBusyTimeout: TimeInterval = 2
 
     /// The journal mode ``init(path:schemaVersion:busyTimeout:journalMode:)`` puts the file in.
     ///
@@ -2072,6 +2088,65 @@ private func stepReturnsRow(_ stmt: OpaquePointer?) throws -> Bool {
     }
 }
 
+/// The wait budget the statements of one ``OAuthStorage`` share while another connection holds
+/// a lock.
+///
+/// The actor runs one statement at a time, so a plain per-statement timeout stacks: with the
+/// lock held longer than the timeout, the N-th concurrent caller waits N x timeout, which
+/// outlasts client and proxy timeouts. Here the first statement to meet the lock waits at most
+/// `timeout`; once that wait has expired the lock is known to be held, so the statements that
+/// were queued behind it, and any that meet the lock for `cooldown` after, give up at once
+/// instead of waiting again. The first statement to meet the lock after that starts a fresh
+/// wait. Statements that never meet a lock never reach this object.
+///
+/// Only ever touched from SQLite's busy callback, which runs on the actor's thread inside a
+/// statement, so it needs no lock of its own and is not `Sendable`.
+private final class BusyBudget {
+    let timeout: TimeInterval
+    /// How long after an expired wait a newly blocked statement still fails at once.
+    let cooldown: TimeInterval
+    /// When the current wait stops, or `nil` before the first one.
+    private var deadline: TimeInterval?
+    /// Statements that met a lock, and the seconds spent waiting for it. Read by tests, which
+    /// can then assert on how much waiting happened instead of on how long a clock says it took.
+    private(set) var blockedStatements = 0
+    private(set) var secondsSlept: TimeInterval = 0
+
+    init(timeout: TimeInterval) {
+        self.timeout = timeout
+        self.cooldown = min(timeout, 1)
+    }
+
+    /// Whether SQLite should retry the blocked statement. `attempt` is 0 the first time this
+    /// statement is blocked, and counts up with each retry.
+    func shouldRetry(attempt: Int32) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if attempt == 0 {
+            blockedStatements += 1
+            // A statement is not blocked for the first time inside a live wait: statements run
+            // serially, so one found here follows a wait that ended in success.
+            if let expired = deadline, now >= expired, now < expired + cooldown {
+                return false
+            }
+            deadline = now + timeout
+        }
+        guard let limit = deadline, now < limit else { return false }
+        let steps: [Double] = [0.001, 0.002, 0.005, 0.010, 0.015, 0.020, 0.025, 0.025, 0.025, 0.050, 0.050, 0.100]
+        let pause = min(steps[min(Int(attempt), steps.count - 1)], limit - now)
+        guard let micros = UInt32(exactly: (pause * 1_000_000).rounded()), micros > 0 else { return false }
+        usleep(micros)
+        secondsSlept += Double(micros) / 1_000_000
+        return true
+    }
+}
+
+/// SQLite's busy callback: 1 to retry the statement, 0 to give up with `SQLITE_BUSY`.
+private func busyHandlerCallback(_ context: UnsafeMutableRawPointer?, _ attempt: Int32) -> Int32 {
+    guard let context else { return 0 }
+    let budget = Unmanaged<BusyBudget>.fromOpaque(context).takeUnretainedValue()
+    return budget.shouldRetry(attempt: attempt) ? 1 : 0
+}
+
 /// An open SQLite connection, closed in its own `deinit`.
 ///
 /// Deliberately not `Sendable`: it is only ever held as isolated state of ``OAuthStorage``,
@@ -2079,8 +2154,13 @@ private func stepReturnsRow(_ stmt: OpaquePointer?) throws -> Bool {
 private final class DatabaseHandle {
     let pointer: OpaquePointer
 
-    init(_ pointer: OpaquePointer) {
+    /// Kept here so it outlives the connection that holds an unretained pointer to it:
+    /// `deinit` closes the connection before stored properties are released.
+    let budget: BusyBudget?
+
+    init(_ pointer: OpaquePointer, budget: BusyBudget?) {
         self.pointer = pointer
+        self.budget = budget
     }
 
     deinit {

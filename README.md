@@ -33,9 +33,9 @@ forgets every client, code and token. `OAuthServer` takes `any OAuthProviderStor
 your own, can sit behind it. Client storage ships in-memory and encrypted-file.
 
 **Two processes on one `oauth.db`.** `OAuthStorage` waits up to `OAuthStorage.defaultBusyTimeout`
-(5 s; the `busyTimeout:` parameter changes it) for another connection's lock, so two server
+(2 s; the `busyTimeout:` parameter changes it) for another connection's lock, so two server
 processes sharing a file no longer fail when their writes meet. A lock still held after the wait is
-answered `503 temporarily_unavailable` with `Retry-After`, and logged, never as a 400, 401 or 500.
+answered `503 temporarily_unavailable` with `Retry-After`, and logged, never as a 400, 401 or 500. Concurrent calls in one process share that one wait rather than each taking its own, and a valid bearer token met by a held lock is `TokenValidationResult.temporarilyUnavailable`, not `.invalid`.
 The file's journal mode is left alone; `journalMode: .wal` opts in to write-ahead logging, which
 needs every process on one host and a local filesystem (see the DocC article before enabling it).
 
